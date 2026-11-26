@@ -34,7 +34,7 @@ use openzt2_world_state::world_spawn::{
 };
 
 use super::{
-    photo_album_types::{PhotoCameraRoll, WorldPhotoCameraRoll, PHOTO_CAMERA_ROLL_CAPACITY},
+    photo_album_types::{PHOTO_CAMERA_ROLL_CAPACITY, PhotoCameraRoll, WorldPhotoCameraRoll},
     photo_capture_types::{
         CapturedPhotoEvidence, PendingPhotoCapture, PendingPhotoEvidence, PendingPhotoScore,
         PhotoCaptureFailed, PhotoFailure, PhotoSubjectsCollected, PhotoView,
@@ -61,10 +61,14 @@ pub(super) fn begin_requested_album_photo_captures(
     camera_sessions: Query<&ImmersiveCameraSessions>,
     presentations: Query<&PhotoModePresentation, With<PhotoControl>>,
     loaded_worlds: Query<
-        (Entity, &WorldPhotoCameraRoll),
+        (
+            Entity,
+            &WorldPhotoCameraRoll,
+            Option<&CurrentPhotoChallengeSet>,
+        ),
         (With<WorldRoot>, With<WorldLoadCompleted>),
     >,
-    selected_sets: Query<(&PhotoChallengeSet, &WorldMember), With<CurrentPhotoChallengeSet>>,
+    selected_sets: Query<(&PhotoChallengeSet, &WorldMember)>,
     mut commands: Commands,
     mut failed: MessageWriter<PhotoCaptureFailed>,
 ) {
@@ -108,16 +112,19 @@ pub(super) fn begin_requested_album_photo_captures(
         let destination = loaded_worlds
             .single()
             .ok()
-            .and_then(|(world, roll)| roll.iter().next().map(|roll| (world, roll)));
-        let Some((world, camera_roll)) = destination else {
+            .and_then(|(world, roll, selection)| {
+                roll.iter().next().map(|roll| (world, roll, selection))
+            });
+        let Some((world, camera_roll, selection)) = destination else {
             failed.write(PhotoCaptureFailed {
                 reason: PhotoFailure::Storage,
             });
             continue;
         };
-        let challenge_set = selected_sets
-            .iter()
-            .find_map(|(set, member)| (member.root == world).then_some(set.id));
+        let challenge_set = selection
+            .and_then(|selection| selection.0)
+            .and_then(|entity| selected_sets.get(entity).ok())
+            .and_then(|(set, member)| (member.root == world).then_some(set.id));
         let mut screenshot = commands.spawn((
             Screenshot(target.clone()),
             AlbumPhotoReadbackOf(request.camera),

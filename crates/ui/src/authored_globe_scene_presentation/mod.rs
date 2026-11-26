@@ -156,8 +156,6 @@ pub(crate) fn project_globe_prefabs(
         Option<&UiGlobeMarkerVisual>,
         Option<&UiDocumentOwner>,
     )>,
-    cameras: Query<(Entity, &UiGlobeSceneOwner), With<UiGlobeCamera>>,
-    scenes: Query<&UiGlobeRenderScene>,
 ) {
     for (entity, request, inherited, parent, marker, owner) in &requests {
         if !inherited.get() {
@@ -184,38 +182,6 @@ pub(crate) fn project_globe_prefabs(
                 commands
                     .entity(*renderable)
                     .insert(UiGlobePrimaryRenderable(globe_world));
-            }
-            if !renderables.is_empty() {
-                if let Some(light) = prefab
-                    .canonical_scene_prefab_document()
-                    .entities
-                    .iter()
-                    .flat_map(|entity| &entity.lights)
-                    .find(|light| {
-                        light.kind == openzt2_game_data::scene_prefab::PrefabLightKind::Ambient
-                    })
-                {
-                    for (camera_entity, owner) in &cameras {
-                        if !scenes
-                            .get(owner.0)
-                            .is_ok_and(|scene| scene.world() == globe_world)
-                        {
-                            continue;
-                        }
-                        commands.entity(camera_entity).insert(AmbientLight {
-                            color: Color::srgb(
-                                light.color_srgb[0],
-                                light.color_srgb[1],
-                                light.color_srgb[2],
-                            ),
-                            // Native materials use the D3D fixed-function
-                            // ambient colour directly, without PBR exposure
-                            // or a Lambertian illuminance conversion.
-                            brightness: light.intensity,
-                            affects_lightmapped_meshes: true,
-                        });
-                    }
-                }
             }
         }
         if let Some(marker) = marker.copied() {

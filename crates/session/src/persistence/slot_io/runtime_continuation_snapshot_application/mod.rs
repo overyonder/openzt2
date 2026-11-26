@@ -4,6 +4,10 @@ use bevy::{
     ecs::{query::QueryData, system::SystemParam},
     prelude::*,
 };
+use openzt2_animals::{
+    animal_behavior::BreedingCenterEndangeredBirths,
+    animal_lifecycle::egg_incubation_types::EggIncubationState,
+};
 use openzt2_game_assets::audio::audio_asset_types::AudioAsset;
 use openzt2_world_state::world_spawn::persistent_id_types::{PersistentId, PersistentIdAllocator};
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
@@ -11,9 +15,8 @@ use openzt2_world_state::{
     simulation_time::deterministic_random_stream::DeterministicRng,
     world_spawn::persistent_id_index::PersistentIdIndex,
 };
-use openzt2_zoo_state::animal_behavior::{
-    disease_exposure_state::{ActiveZooDisease, DiseaseExposureDeadline, DiseaseResearchFunding},
-    egg_incubation::EggIncubation,
+use openzt2_zoo_state::animal_behavior::disease_exposure_state::{
+    ActiveZooDisease, AssignedDiseaseTarget, DiseaseExposureDeadline, DiseaseResearchFunding,
 };
 use openzt2_zoo_state::guests::guest_favourite_animal_trend_types::GuestFavouriteAnimalTrend;
 use openzt2_zoo_state::shows::running_show_types::WorldTrickPopularity;
@@ -92,7 +95,22 @@ struct RuntimeRootComponents {
 pub(super) struct RuntimeContinuationApplication<'w, 's> {
     roots: Query<'w, 's, RuntimeRootComponents>,
     identities: Option<Res<'w, PersistentIdIndex>>,
-    eggs: Query<'w, 's, Option<&'static mut EggIncubation>, With<WorldMember>>,
+    eggs: Query<'w, 's, Option<&'static mut EggIncubationState>, With<WorldMember>>,
+    animal_targets: Query<'w, 's, (), With<openzt2_zoo_state::animal_lifecycle::types::Animal>>,
+    assigned: Query<'w, 's, (Entity, &'static AssignedDiseaseTarget)>,
+    filters: Query<
+        'w,
+        's,
+        (
+            &'static openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter,
+            Option<
+                &'static mut openzt2_aquatic::aquatic::water_filter_timing::FilterCleanupInterval,
+            >,
+        ),
+    >,
+    guests: super::guest_continuation_snapshot::GuestContinuationApplication<'w, 's>,
+    breeding_centers:
+        Query<'w, 's, Option<&'static mut BreedingCenterEndangeredBirths>, With<WorldMember>>,
 }
 
 impl RuntimeContinuationApplication<'_, '_> {
@@ -115,6 +133,14 @@ impl RuntimeContinuationApplication<'_, '_> {
             return Ok(());
         };
         let domain = record.domain_continuation.as_ref();
+        if let Some(domain) = domain.filter(|domain| !domain.guests.is_empty()) {
+            let identities = self
+                .identities
+                .as_deref()
+                .ok_or(Failure::BrokenPersistentEntityReference)?;
+            self.guests
+                .apply(commands, world_root, &domain.guests, identities)?;
+        }
         let eggs = domain.map_or(&[][..], |domain| domain.eggs.as_slice());
         let live_eggs = eggs
             .iter()
@@ -127,6 +153,38 @@ impl RuntimeContinuationApplication<'_, '_> {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        let resolve = |id| {
+            self.identities
+                .as_ref()
+                .and_then(|identities| identities.get(world_root, PersistentId(id)))
+                .ok_or(Failure::BrokenPersistentEntityReference)
+        };
+        let mut assignments = Vec::new();
+        let mut breeding_centers = Vec::new();
+        let mut filters = Vec::new();
+        if let Some(domain) = domain {
+            for &(id, disease) in &domain.disease.assignments {
+                let animal = resolve(id)?;
+                if !self.animal_targets.contains(animal) {
+                    return Err(Failure::BrokenPersistentEntityReference);
+                }
+                assignments.push((animal, disease));
+            }
+            for &(id, remaining_ns) in &domain.water_filter_cleanup {
+                let filter = resolve(id)?;
+                if !self.filters.contains(filter) {
+                    return Err(Failure::BrokenPersistentEntityReference);
+                }
+                filters.push((filter, remaining_ns));
+            }
+            for &(id, value) in &domain.breeding_center_births {
+                let center = resolve(id)?;
+                if !self.breeding_centers.contains(center) {
+                    return Err(Failure::BrokenPersistentEntityReference);
+                }
+                breeding_centers.push((center, value));
+            }
+        }
         let allocator = PersistentIdAllocator::from_snapshot(record.next_persistent_identifier)
             .map_err(|_| Failure::CorruptSnapshotSection)?;
         let live = self
@@ -174,24 +232,28 @@ impl RuntimeContinuationApplication<'_, '_> {
             record.guest_survey.map(|(_, survey)| survey),
             true,
         );
-        let disease = domain.map_or_else(Default::default, |domain| domain.disease);
+        let disease = domain.map(|domain| &domain.disease);
         restore_optional_component(
             &mut root,
             live.funding,
-            disease.funding.map(DiseaseResearchFunding),
+            disease
+                .and_then(|disease| disease.funding)
+                .map(DiseaseResearchFunding),
             true,
         );
         restore_optional_component(
             &mut root,
             live.exposure_deadline,
-            disease.exposure_deadline.map(DiseaseExposureDeadline),
+            disease
+                .and_then(|disease| disease.exposure_deadline)
+                .map(DiseaseExposureDeadline),
             true,
         );
         restore_optional_component(
             &mut root,
             live.disease,
             disease
-                .active
+                .and_then(|disease| disease.active)
                 .map(|(definition, cure_due_tick)| ActiveZooDisease {
                     definition,
                     cure_due_tick,
@@ -211,11 +273,44 @@ impl RuntimeContinuationApplication<'_, '_> {
             restore_optional_component(
                 &mut commands.entity(entity),
                 self.eggs.get_mut(entity).ok().flatten(),
-                Some(EggIncubation {
-                    amount: egg.amount,
-                    remaining_ns: egg.remaining_ns,
-                    random: DeterministicRng::from_raw(egg.random),
-                }),
+                Some(EggIncubationState::from_saved_remaining(
+                    egg.amount,
+                    egg.remaining_ns,
+                    DeterministicRng::from_raw(egg.random),
+                )),
+                false,
+            );
+        }
+        for (entity, assignment) in &self.assigned {
+            if assignment.root == world_root {
+                commands.entity(entity).despawn();
+            }
+        }
+        for (animal, disease) in assignments {
+            commands.spawn((
+                AssignedDiseaseTarget {
+                    root: world_root,
+                    disease,
+                },
+                ChildOf(animal),
+            ));
+        }
+        for (entity, remaining_ns) in filters {
+            let (filter, timer) = self
+                .filters
+                .get_mut(entity)
+                .map_err(|_| Failure::BrokenPersistentEntityReference)?;
+            let restored = openzt2_aquatic::aquatic::water_filter_timing::FilterCleanupInterval::from_saved_remaining(
+                filter.policy.cleanup_interval_seconds,
+                std::time::Duration::from_nanos(remaining_ns),
+            );
+            restore_optional_component(&mut commands.entity(entity), timer, Some(restored), false);
+        }
+        for (entity, value) in breeding_centers {
+            restore_optional_component(
+                &mut commands.entity(entity),
+                self.breeding_centers.get_mut(entity).ok().flatten(),
+                Some(BreedingCenterEndangeredBirths(value)),
                 false,
             );
         }
@@ -495,7 +590,7 @@ mod tests {
             openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory::default();
         general_history.enter_calendar_month(
             12,
-            openzt2_zoo_state::economy::money_types::Money(3_706_800),
+            openzt2_zoo_state::economy::money_types::Money::from_cents(3_706_800),
         );
         saved.general_economy = Some(
             openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger::from_saved(

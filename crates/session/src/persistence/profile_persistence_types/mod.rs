@@ -69,3 +69,15 @@ pub(super) enum ProfileFilesystemTaskCompletion {
         entries: Vec<ProfileRecord>,
     },
 }
+
+pub(super) fn photo_album_profile_options(
+    profile: &ProfileOptions,
+) -> openzt2_photos::PhotoAlbumProfileOptions {
+    openzt2_photos::PhotoAlbumProfileOptions {
+        default_spreads: profile
+            .attributes
+            .get("PhotoAlbumDefaultSpreads")
+            .and_then(|value| value.parse().ok())
+            .filter(|&spreads| spreads > 0),
+    }
+}

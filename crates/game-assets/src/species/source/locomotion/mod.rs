@@ -7,6 +7,14 @@ use crate::source_document::resolved_source_record_index::BindError;
 use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
 
+pub(super) fn lower_species_caffeine_factors(
+    record: &RecordView<'_, '_>,
+) -> Result<openzt2_game_data::CaffeineFactors, BindError> {
+    crate::source_document::authored_caffeine_factors::lower_caffeine_factors(record, |name| {
+        super::source_queries::find_effective_authored_animal_shared_attribute(record, name)
+    })
+}
+
 pub(super) fn lower_animal_ground_navigation_clip(record: &RecordView<'_, '_>) -> Option<String> {
     lower_animal_ground_navigation_clip_for_speed(record, "slow")
 }

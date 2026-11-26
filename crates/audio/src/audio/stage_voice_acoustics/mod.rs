@@ -1,12 +1,12 @@
 use std::{
     sync::{
         atomic::{AtomicU32, Ordering},
-        mpsc::{self, Receiver, Sender},
-        Arc, Mutex,
+        Arc,
     },
     time::Duration,
 };
 
+use bevy::audio::output_mix::{install_audio_output_mix, AudioMixInput};
 use bevy::{
     asset::AssetLoadFailedEvent,
     audio::{
@@ -19,6 +19,7 @@ use openzt2_game_data::{
     audio::{AudioStage, STAGE_INDOOR_OCCLUSION},
     AssetId,
 };
+use openzt2_interface_state::settings::audio_settings_types::AudioSettings;
 
 use super::{
     audio_stage_playback_projection::StageAmbienceCrossfade,
@@ -85,39 +86,99 @@ pub(super) struct PendingStageVoice(pub(super) Handle<AudioSource>);
 
 #[derive(Default)]
 struct VoiceControls {
-    room: AtomicU32,
-    dry: AtomicU32,
-    wet: AtomicU32,
+    gain: AtomicU32,
     cutoff: AtomicU32,
 }
 
-#[derive(Resource)]
-pub(super) struct StageVoiceCompletion {
-    sender: Sender<Entity>,
-    finished: Mutex<Receiver<Entity>>,
+#[derive(Resource, Default)]
+pub(super) struct RoomMixOutput(Arc<RoomMixControls>);
+
+#[derive(Default)]
+struct RoomMixControls {
+    room: AtomicU32,
+    effect: AtomicU32,
+    obstruction: AtomicU32,
+    exclusion: AtomicU32,
+    eight_bit: AtomicU32,
 }
 
-impl Default for StageVoiceCompletion {
-    fn default() -> Self {
-        let (sender, finished) = mpsc::channel();
-        Self {
-            sender,
-            finished: Mutex::new(finished),
+const DIRECT_MIX: usize = 0;
+const STAGE_FLAT_MIX: usize = 1;
+const STAGE_SPATIAL_MIX: usize = 2;
+const MIX_INPUTS: usize = 3;
+
+pub(super) fn install_room_mix(app: &mut App) {
+    app.init_resource::<RoomMixOutput>();
+    let controls = app.world().resource::<RoomMixOutput>().0.clone();
+    install_audio_output_mix::<MIX_INPUTS, _>(app, move |_, rate| {
+        let mut room = RoomReverb::new(rate.get() as f32);
+        let mut until_refresh = 0;
+        let (mut wet, mut obstruction, mut exclusion, mut quantization) = (0.0, 0.0, 0.0, 32768.0);
+        move |inputs: &[Box<[f32]>; MIX_INPUTS], output: &mut [f32]| {
+            if until_refresh == 0 {
+                let read = |value: &AtomicU32| f32::from_bits(value.load(Ordering::Relaxed));
+                let preset_gain = room.select_room(controls.room.load(Ordering::Relaxed) as usize);
+                wet = preset_gain * read(&controls.effect);
+                obstruction = read(&controls.obstruction);
+                exclusion = read(&controls.exclusion);
+                quantization = if controls.eight_bit.load(Ordering::Relaxed) == 0 {
+                    32768.0
+                } else {
+                    128.0
+                };
+                until_refresh = 128;
+            }
+            until_refresh -= 1;
+            let spatial = &inputs[STAGE_SPATIAL_MIX];
+            let flat = &inputs[STAGE_FLAT_MIX];
+            let mono = flat
+                .iter()
+                .zip(spatial.iter())
+                .map(|(&flat, &spatial)| flat + spatial * (1.0 - exclusion))
+                .sum::<f32>()
+                / output.len() as f32;
+            room.advance_frame(wet * mono);
+            for (channel, out) in output.iter_mut().enumerate() {
+                let reflection = room.output[channel % 2];
+                let sample = inputs[DIRECT_MIX][channel]
+                    + flat[channel]
+                    + spatial[channel] * (1.0 - obstruction)
+                    + reflection;
+                *out = (sample * quantization)
+                    .round()
+                    .clamp(-quantization, quantization - 1.0)
+                    / quantization;
+            }
         }
-    }
+    });
 }
 
-pub(super) fn release_finished_dry_voices(
-    mut commands: Commands,
-    mut lifecycle: ResMut<StageVoiceCompletion>,
+pub(super) fn publish_room_mix_output_controls(
+    output: Res<RoomMixOutput>,
+    settings: Res<AudioSettings>,
+    environment: Option<Single<Ref<ListenerAudioEnvironment>>>,
+    mut removed: RemovedComponents<ListenerAudioEnvironment>,
 ) {
-    let Ok(finished) = lifecycle.bypass_change_detection().finished.get_mut() else {
-        return;
-    };
-    for entity in finished.try_iter() {
-        commands
-            .entity(entity)
-            .try_remove::<super::audio_player_spawning::CueVoiceOf>();
+    if settings.is_changed() {
+        output
+            .0
+            .eight_bit
+            .store(u32::from(settings.eight_bit_sound), Ordering::Relaxed);
+    }
+    if (removed.read().count() != 0) | environment.as_ref().is_some_and(|stage| stage.is_changed())
+    {
+        let acoustics = environment.map_or(StageAcoustics::default(), |stage| stage.acoustics);
+        output
+            .0
+            .room
+            .store(u32::from(acoustics.room), Ordering::Relaxed);
+        for (target, value) in [
+            (&output.0.effect, acoustics.room_effect.max(0.0)),
+            (&output.0.obstruction, acoustics.obstruction.clamp(0.0, 1.0)),
+            (&output.0.exclusion, acoustics.exclusion.clamp(0.0, 1.0)),
+        ] {
+            target.store(value.to_bits(), Ordering::Relaxed);
+        }
     }
 }
 
@@ -173,38 +234,13 @@ pub(super) fn publish_stage_voice_controls(
         } else {
             1.0
         };
-        let obstruction = if spatial {
-            stage.obstruction.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let exclusion = if spatial {
-            stage.exclusion.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let dry = if allowed {
-            soften * (1.0 - obstruction)
-        } else {
-            0.0
-        };
-        let wet = if allowed {
-            soften * stage.room_effect.max(0.0) * (1.0 - exclusion)
-        } else {
-            0.0
-        };
+        let gain = if allowed { soften } else { 0.0_f32 };
         let cutoff = 1.0 - stage.occlusion.clamp(0.0, 1.0);
-        for (parameter, value) in [
-            (&voice.controls.dry, dry),
-            (&voice.controls.wet, wet),
-            (&voice.controls.cutoff, cutoff),
-        ] {
-            parameter.store(value.to_bits(), Ordering::Relaxed);
-        }
+        voice.controls.gain.store(gain.to_bits(), Ordering::Relaxed);
         voice
             .controls
-            .room
-            .store(u32::from(stage.room), Ordering::Relaxed);
+            .cutoff
+            .store(cutoff.to_bits(), Ordering::Relaxed);
     };
     if environment_changed {
         voices.iter().for_each(publish);
@@ -241,7 +277,6 @@ pub(super) fn prepare_stage_voice_players(
     mut failures: MessageReader<AssetLoadFailedEvent<AudioSource>>,
     asset_server: Res<AssetServer>,
     mut filtered_sources: ResMut<Assets<StageVoiceSource>>,
-    completion: Res<StageVoiceCompletion>,
 ) {
     let changed = source_events
         .read()
@@ -274,12 +309,17 @@ pub(super) fn prepare_stage_voice_players(
                 source: source.clone(),
                 controls: acoustics.controls.clone(),
                 looping,
-                owner: entity,
-                finished: completion.sender.clone(),
             });
             commands
                 .entity(entity)
-                .try_insert(AudioPlayer(filtered))
+                .try_insert((
+                    AudioPlayer(filtered),
+                    AudioMixInput(if playback.spatial {
+                        STAGE_SPATIAL_MIX
+                    } else {
+                        STAGE_FLAT_MIX
+                    }),
+                ))
                 .try_remove::<PendingStageVoice>();
         } else if matches!(
             asset_server.load_state(request.0.id()),
@@ -295,8 +335,6 @@ pub(super) struct StageVoiceSource {
     source: AudioSource,
     controls: Arc<VoiceControls>,
     looping: bool,
-    owner: Entity,
-    finished: Sender<Entity>,
 }
 
 impl Decodable for StageVoiceSource {
@@ -305,21 +343,15 @@ impl Decodable for StageVoiceSource {
     fn decoder(&self) -> Self::Decoder {
         let source = self.source.decoder();
         let channels = usize::from(source.channels().get());
-        let sample_rate = source.sample_rate().get() as f32;
         StageVoiceDecoder {
             source,
             loop_source: self.looping.then(|| self.source.clone()),
             controls: self.controls.clone(),
             filter: vec![FilterHistory::default(); channels],
-            reverb: RoomReverb::new(sample_rate),
             channel: 0,
             until_refresh: 0,
             coefficients: [1.0, 0.0, 0.0],
-            dry: 1.0,
-            wet: 0.0,
-            tail_samples: 0,
-            finished: Some((self.owner, self.finished.clone())),
-            source_ended: false,
+            gain: 1.0,
         }
     }
 }
@@ -382,17 +414,11 @@ impl DelayLine {
         self.cursor = (self.cursor + 1) % self.samples.len();
         old
     }
-
-    fn clear(&mut self) {
-        self.samples.fill(0.0);
-        self.cursor = 0;
-    }
 }
 
 struct RoomReverb {
     sample_rate: f32,
     room: Option<usize>,
-    input: f32,
     output: [f32; 2],
     pre_delay: DelayLine,
     pre_delay_samples: usize,
@@ -409,7 +435,6 @@ impl RoomReverb {
         Self {
             sample_rate,
             room: None,
-            input: 0.0,
             output: [0.0; 2],
             pre_delay: DelayLine::new(0.3, sample_rate),
             pre_delay_samples: 0,
@@ -441,7 +466,11 @@ impl RoomReverb {
         let delay = &mut self.pre_delay;
         let read =
             (delay.cursor + delay.samples.len() - self.pre_delay_samples) % delay.samples.len();
-        let delayed = delay.samples[read];
+        let delayed = if self.pre_delay_samples == 0 {
+            input
+        } else {
+            delay.samples[read]
+        };
         delay.replace(input, 0.0);
         let filtered = self.filter.low_pass(delayed, self.coefficients);
         let reflections: f32 = self
@@ -461,16 +490,6 @@ impl RoomReverb {
             second_delay - second_feedback * (diffused * 0.15 + second_feedback_sample),
         ];
     }
-
-    fn clear(&mut self) {
-        self.input = 0.0;
-        self.output = [0.0; 2];
-        self.filter = FilterHistory::default();
-        self.pre_delay.clear();
-        for line in self.combs.iter_mut().chain(&mut self.all_pass) {
-            line.clear();
-        }
-    }
 }
 
 pub(super) struct StageVoiceDecoder {
@@ -478,33 +497,10 @@ pub(super) struct StageVoiceDecoder {
     loop_source: Option<AudioSource>,
     controls: Arc<VoiceControls>,
     filter: Vec<FilterHistory>,
-    reverb: RoomReverb,
     channel: usize,
     until_refresh: usize,
     coefficients: [f32; 3],
-    dry: f32,
-    wet: f32,
-    tail_samples: usize,
-    finished: Option<(Entity, Sender<Entity>)>,
-    source_ended: bool,
-}
-
-impl StageVoiceDecoder {
-    fn refresh_controls(&mut self) {
-        let read = |value: &AtomicU32| f32::from_bits(value.load(Ordering::Relaxed));
-        self.dry = read(&self.controls.dry);
-        let room_gain = self
-            .reverb
-            .select_room(self.controls.room.load(Ordering::Relaxed) as usize);
-        self.wet = read(&self.controls.wet) * room_gain;
-        if !self.source_ended && self.wet > 0.0 {
-            let (_, _, decay, _, delay) = ROOMS[self.reverb.room.unwrap_or_default()];
-            self.tail_samples =
-                ((decay + delay) * self.reverb.sample_rate) as usize * self.filter.len();
-        }
-        self.coefficients =
-            low_pass_coefficients(std::f32::consts::FRAC_PI_2 * read(&self.controls.cutoff));
-    }
+    gain: f32,
 }
 
 impl Iterator for StageVoiceDecoder {
@@ -512,36 +508,23 @@ impl Iterator for StageVoiceDecoder {
 
     fn next(&mut self) -> Option<f32> {
         if self.until_refresh == 0 {
-            self.refresh_controls();
+            let read = |value: &AtomicU32| f32::from_bits(value.load(Ordering::Relaxed));
+            self.gain = read(&self.controls.gain);
+            self.coefficients =
+                low_pass_coefficients(std::f32::consts::FRAC_PI_2 * read(&self.controls.cutoff));
             self.until_refresh = 128 * self.filter.len();
         }
         self.until_refresh -= 1;
         let sample = match self.source.next() {
             Some(sample) => sample,
-            None if self.loop_source.is_some() => {
+            None => {
                 self.source = self.loop_source.as_ref()?.decoder();
                 self.source.next()?
             }
-            None => {
-                self.source_ended = true;
-                if let Some((owner, sender)) = self.finished.take() {
-                    let _ = sender.send(owner);
-                }
-                self.tail_samples = self.tail_samples.checked_sub(1)?;
-                0.0
-            }
         };
-        let direct = self.filter[self.channel].low_pass(sample, self.coefficients);
-        let reflected = self.reverb.output[self.channel % 2];
-        self.reverb.input += direct;
-        self.channel += 1;
-        if self.channel == self.filter.len() {
-            self.channel = 0;
-            let input = std::mem::take(&mut self.reverb.input);
-            self.reverb
-                .advance_frame(self.wet * input / self.filter.len() as f32);
-        }
-        Some(direct * self.dry + reflected)
+        let output = self.filter[self.channel].low_pass(sample, self.coefficients) * self.gain;
+        self.channel = (self.channel + 1) % self.filter.len();
+        Some(output)
     }
 }
 
@@ -565,10 +548,7 @@ impl Source for StageVoiceDecoder {
     fn try_seek(&mut self, position: Duration) -> Result<(), SeekError> {
         self.source.try_seek(position)?;
         self.filter.fill(FilterHistory::default());
-        self.reverb.clear();
         self.channel = 0;
-        self.tail_samples = 0;
-        self.source_ended = false;
         Ok(())
     }
 }

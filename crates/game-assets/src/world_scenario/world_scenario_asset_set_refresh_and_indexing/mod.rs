@@ -13,8 +13,8 @@ use bevy::{
 use openzt2_game_data::AssetId;
 
 use crate::asset_source::{
-    archive_entry_asset_path::archive_entry_asset_path, ArchiveCatalogue, ArchiveOverlayChanged,
-    AssetArchives,
+    ArchiveCatalogue, ArchiveOverlayChanged, AssetArchives,
+    archive_entry_asset_path::archive_entry_asset_path,
 };
 
 use super::{
@@ -114,32 +114,49 @@ pub struct ScenarioCatalogueSources(
     BTreeMap<ScenarioSourceOrder, Handle<WorldScenarioDocumentAsset>>,
 );
 
+pub(super) fn scenario_catalogue_sources_changed(
+    mut overlay_changes: MessageReader<ArchiveOverlayChanged>,
+) -> bool {
+    let scenario_changed = overlay_changes
+        .read()
+        .flat_map(|change| &change.changes)
+        .any(|change| scenario_catalogue_path(&change.normalized_asset_path));
+    overlay_changes.clear();
+    scenario_changed
+}
+
 pub(super) fn refresh_world_scenario_catalogue_sources(
     archives: Res<AssetArchives>,
     server: Res<AssetServer>,
     mut sources: ResMut<ScenarioCatalogueSources>,
     mut overlay_changes: MessageReader<ArchiveOverlayChanged>,
 ) {
-    let scenario_changed = overlay_changes
+    let changes = overlay_changes
         .read()
-        .flat_map(|change| &change.changes)
-        .any(|change| scenario_catalogue_path(&change.normalized_asset_path));
-    overlay_changes.clear();
-    if !archives.is_added() && !scenario_changed {
-        return;
-    }
-    sources.set_if_neq(ScenarioCatalogueSources(
+        .flat_map(|overlay| {
+            overlay
+                .changes
+                .iter()
+                .map(move |change| (&change.normalized_asset_path, overlay))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let next = ScenarioCatalogueSources(
         archives
             .catalogue_sources(ArchiveCatalogue::Scenarios)
             .iter()
             .map(|entry| {
-                (
-                    (entry.archive_priority_index, entry.zip_entry_ordinal),
-                    server.load(archive_entry_asset_path(entry)),
-                )
+                let order = (entry.archive_priority_index, entry.zip_entry_ordinal);
+                let handle = changes
+                    .get(&entry.normalized_asset_path)
+                    .and_then(|overlay| overlay.reload_entry_path(&entry.normalized_asset_path))
+                    .map(|path| server.load(path))
+                    .or_else(|| sources.0.get(&order).cloned())
+                    .unwrap_or_else(|| server.load(archive_entry_asset_path(entry)));
+                (order, handle)
             })
             .collect(),
-    ));
+    );
+    sources.set_if_neq(next);
 }
 
 pub fn index_loaded_world_scenario_assets_by_identifier(
@@ -396,11 +413,11 @@ mod tests {
     use super::*;
     use crate::world_scenario::world_scenario_document_asset_and_dependency_handles::DemandLoadedAssetHandle;
     use openzt2_game_data::{
+        AssetId,
         world_scenario::{
             ScenarioCampaignRecord, ScenarioDefinitionRecord, ScenarioRecordFlags,
             WorldScenarioDocument,
         },
-        AssetId,
     };
 
     #[test]
@@ -443,16 +460,20 @@ mod tests {
         let scenarios = app.world().resource::<WorldScenarios>();
         // The campaign label remains browsable while its independently loaded
         // scenario is pending. Full-catalogue consumers cannot publish yet.
-        assert!(scenarios
-            .get(assets)
-            .unwrap()
-            .campaign(campaign_id)
-            .is_some());
-        assert!(scenarios
-            .get(assets)
-            .unwrap()
-            .scenario(authored_key)
-            .is_none());
+        assert!(
+            scenarios
+                .get(assets)
+                .unwrap()
+                .campaign(campaign_id)
+                .is_some()
+        );
+        assert!(
+            scenarios
+                .get(assets)
+                .unwrap()
+                .scenario(authored_key)
+                .is_none()
+        );
         assert!(!scenarios.catalogue_documents_are_loaded(assets));
         app.world_mut()
             .resource_mut::<Assets<WorldScenarioDocumentAsset>>()

@@ -13,10 +13,10 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
+    AssetId,
     species::*,
     terrain::*,
     world_definitions::{document::WorldDefinitionDocument, simulation_time::*, world_objects::*},
-    AssetId,
 };
 use openzt2_world_state::{
     application_schedule::FixedGameSet,
@@ -24,7 +24,7 @@ use openzt2_world_state::{
         deterministic_random_stream::ZooSeed,
         simulation_clock_types::{ZooCalendar, ZooClock, ZooDay, ZooDayAdvanced, ZooMonth},
         simulation_control_queries::simulation_is_running,
-        simulation_control_types::SimulationControl,
+        simulation_control_types::{SimulationControl, SimulationPaused, SimulationSpeedTier},
     },
     world_spawn::{
         persistent_id_types::PersistentIdAllocator,
@@ -258,6 +258,8 @@ fn setup(cash: i64) -> (App, Entity) {
             WorldRoot { scenario: species },
             PersistentIdAllocator::default(),
             SimulationControl::new(true),
+            SimulationPaused(true),
+            SimulationSpeedTier::default(),
             ZooSeed(123),
             ZooClock {
                 tick: 99,

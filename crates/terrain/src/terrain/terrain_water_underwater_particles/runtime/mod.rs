@@ -2,13 +2,11 @@ use crate::terrain::water_regions::authored_membership::TerrainWaterMembershipCh
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::transform::helper::TransformHelper;
+use bevy_hanabi::{EffectParticleSizeScale, ParticleAliveCount, ParticleSpawnBatch};
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
     effect::{
-        explicit_particle_emission::{
-            AppendParticleEffectPoints, EffectParticleSizeScale, ParticleAliveCount,
-            ParticleEffectPointEmitter, ParticleSpawnBatch,
-        },
+        explicit_particle_emission::{AppendParticleEffectPoints, ParticleEffectPointEmitter},
         ParticleEffectDocumentAsset, SpawnParticleEffectEmitter,
     },
     graphics_settings_types::{FourLevelGraphicsDetail, GraphicsSettings},

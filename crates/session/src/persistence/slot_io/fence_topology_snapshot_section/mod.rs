@@ -14,7 +14,7 @@ use openzt2_zoo_state::{
     topology::{
         gate_operation_types::{Gate, GateAutoClose, GateMechanism},
         topology_edit_types::{TopologyChanged, TopologySnapshot},
-        topology_graph_types::{EdgeKey, FenceEdge, TopologyGrid, TopologyNode},
+        topology_graph_types::{topology_cell_rectangle, EdgeKey, FenceEdge, PathTile, TileSurface, TopologyGrid, TopologyNode},
         topology_grid_geometry::{calculate_topology_edge_cell_bounds, calculate_topology_edge_world_transform, merge_topology_changed_cell_bounds},
     },
 };
@@ -24,10 +24,35 @@ use super::super::{
     snapshot_container_types::WorldSnapshotSectionDirectoryEntry,
 };
 
-const HEADER: [u8; 4] = [1, 0, 0, 0];
+const LEGACY_HEADER: [u8; 4] = [1, 0, 0, 0];
+const HEADER: [u8; 4] = [2, 0, 0, 0];
+
+pub(super) struct SavedTopology {
+    records: Vec<TopologySnapshot>,
+    pub(super) includes_paths: bool,
+}
+
+impl std::ops::Deref for SavedTopology {
+    type Target = [TopologySnapshot];
+
+    fn deref(&self) -> &Self::Target {
+        &self.records
+    }
+}
 
 #[derive(SystemParam)]
 pub(super) struct FenceTopologySnapshotEntities<'w, 's> {
+    paths: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static PersistentId,
+            &'static PathTile,
+            Option<&'static TileSurface>,
+            &'static WorldMember,
+        ),
+    >,
     nodes: Query<
         'w,
         's,
@@ -119,6 +144,23 @@ pub(super) fn capture_fence_topology_records(
             return Err(Failure::DuplicatePersistentEntityIdentifier);
         }
     }
+    for (_, id, path, surface, _) in &entities.paths {
+        let surface = surface.ok_or(Failure::BrokenPersistentEntityReference)?;
+        if records
+            .insert(
+                id.0,
+                TopologySnapshot::Path {
+                    id: *id,
+                    definition: path.definition,
+                    cell: path.cell,
+                    height_cm: surface.height_cm,
+                },
+            )
+            .is_some()
+        {
+            return Err(Failure::DuplicatePersistentEntityIdentifier);
+        }
+    }
     let records: Vec<_> = records.into_values().collect();
     validate_fence_topology_records(&records)?;
     Ok(records)
@@ -157,7 +199,23 @@ pub(super) fn encode_fence_topology_records(
                 bytes.push(u8::from(wall_top.is_some()));
                 bytes.extend_from_slice(&wall_top.map_or(0.0, |top| top.0).to_le_bytes());
             }
-            _ => return Err(Failure::CorruptSnapshotSection),
+            TopologySnapshot::Path {
+                id,
+                definition,
+                cell,
+                height_cm,
+            } => {
+                bytes.push(2);
+                bytes.extend_from_slice(&id.0.to_le_bytes());
+                bytes.extend_from_slice(&definition.0);
+                for coordinate in cell.to_array() {
+                    bytes.extend_from_slice(&coordinate.to_le_bytes());
+                }
+                for height in height_cm {
+                    bytes.extend_from_slice(&height.to_le_bytes());
+                }
+            }
+            TopologySnapshot::Portal { .. } => return Err(Failure::CorruptSnapshotSection),
         }
     }
     Ok(bytes)
@@ -167,12 +225,13 @@ pub(super) fn encode_fence_topology_records(
 pub(super) fn decode_fence_topology_records(
     container: &[u8],
     section: WorldSnapshotSectionDirectoryEntry,
-) -> Result<Option<Vec<TopologySnapshot>>, Failure> {
+) -> Result<Option<SavedTopology>, Failure> {
     let bytes = &container[section.payload_byte_range_within_container(container.len())?];
     if bytes.is_empty() && section.encoded_record_count == 0 {
         return Ok(None);
     }
-    if !bytes.starts_with(&HEADER)
+    let includes_paths = bytes.starts_with(&HEADER);
+    if !includes_paths && !bytes.starts_with(&LEGACY_HEADER)
         || section.encoded_record_count as usize > bytes.len().saturating_sub(4) / 21
     {
         return Err(Failure::CorruptSnapshotSection);
@@ -184,6 +243,7 @@ pub(super) fn decode_fence_topology_records(
         let size = match tag {
             0 => 21,
             1 => 47,
+            2 if includes_paths => 47,
             _ => return Err(Failure::CorruptSnapshotSection),
         };
         let end = cursor.checked_add(size).ok_or(Failure::CapacityExceeded)?;
@@ -206,17 +266,35 @@ pub(super) fn decode_fence_topology_records(
         {
             return Err(Failure::CorruptSnapshotSection);
         }
+        let coordinate = |offset| -> Result<i32, Failure> {
+            Ok(i32::from_le_bytes(
+                record[offset..offset + 4]
+                    .try_into()
+                    .map_err(|_| Failure::CorruptSnapshotSection)?,
+            ))
+        };
+        let definition = || -> Result<AssetId, Failure> {
+            Ok(AssetId(
+                record[9..25]
+                    .try_into()
+                    .map_err(|_| Failure::CorruptSnapshotSection)?,
+            ))
+        };
         let value = if tag == 0 {
-            let coordinate = |offset| -> Result<i32, Failure> {
-                Ok(i32::from_le_bytes(
-                    record[offset..offset + 4]
-                        .try_into()
-                        .map_err(|_| Failure::CorruptSnapshotSection)?,
-                ))
-            };
             TopologySnapshot::Node {
                 id,
                 cell: IVec3::new(coordinate(9)?, coordinate(13)?, coordinate(17)?),
+            }
+        } else if tag == 2 {
+            let mut height_cm = [0; 5];
+            for (sample, bytes) in height_cm.iter_mut().zip(record[37..47].chunks_exact(2)) {
+                *sample = i16::from_le_bytes([bytes[0], bytes[1]]);
+            }
+            TopologySnapshot::Path {
+                id,
+                definition: definition()?,
+                cell: IVec3::new(coordinate(25)?, coordinate(29)?, coordinate(33)?),
+                height_cm,
             }
         } else {
             let a = id_at(25)?;
@@ -237,11 +315,7 @@ pub(super) fn decode_fence_topology_records(
             }
             TopologySnapshot::Fence {
                 id,
-                definition: AssetId(
-                    record[9..25]
-                        .try_into()
-                        .map_err(|_| Failure::CorruptSnapshotSection)?,
-                ),
+                definition: definition()?,
                 a,
                 b,
                 gate: (flags & 1 != 0).then_some(Gate {
@@ -258,10 +332,14 @@ pub(super) fn decode_fence_topology_records(
         return Err(Failure::CorruptSnapshotSection);
     }
     validate_fence_topology_records(&records)?;
-    Ok(Some(records))
+    Ok(Some(SavedTopology {
+        records,
+        includes_paths,
+    }))
 }
 
 fn validate_fence_topology_records(records: &[TopologySnapshot]) -> Result<(), Failure> {
+    let mut path_cells = BTreeSet::new();
     for (index, record) in records.iter().enumerate() {
         if record.id().0 == 0
             || record.id().0 == u64::MAX
@@ -276,7 +354,14 @@ fn validate_fence_topology_records(records: &[TopologySnapshot]) -> Result<(), F
                 }
             }
             TopologySnapshot::Node { .. } => {}
-            _ => return Err(Failure::CorruptSnapshotSection),
+            TopologySnapshot::Path {
+                cell, definition, ..
+            } => {
+                if *definition == AssetId::default() || !path_cells.insert(cell.to_array()) {
+                    return Err(Failure::CorruptSnapshotSection);
+                }
+            }
+            TopologySnapshot::Portal { .. } => return Err(Failure::CorruptSnapshotSection),
         }
     }
     let nodes: BTreeMap<_, _> = records
@@ -325,10 +410,15 @@ fn validate_fence_topology_records(records: &[TopologySnapshot]) -> Result<(), F
 #[derive(SystemParam)]
 pub(super) struct FenceTopologySnapshotApplication<'w, 's> {
     entities: FenceTopologySnapshotEntities<'w, 's>,
+    grids: Query<'w, 's, &'static TopologyGrid>,
 }
 
 impl FenceTopologySnapshotApplication<'_, '_> {
-    pub(super) fn baseline_entities(&self, root: Entity) -> impl Iterator<Item = Entity> + '_ {
+    pub(super) fn baseline_entities(
+        &self,
+        root: Entity,
+        includes_paths: bool,
+    ) -> impl Iterator<Item = Entity> + '_ {
         self.entities
             .nodes
             .iter()
@@ -341,12 +431,20 @@ impl FenceTopologySnapshotApplication<'_, '_> {
                     .filter(move |(_, _, _, _, _, member)| member.root == root)
                     .map(|(entity, ..)| entity),
             )
+            .chain(
+                self.entities
+                    .paths
+                    .iter()
+                    .filter_map(move |(entity, _, _, _, member)| {
+                        (includes_paths && member.root == root).then_some(entity)
+                    }),
+            )
     }
 }
 
 pub(super) fn spawn_saved_topology_nodes(
     commands: &mut Commands,
-    records: &[TopologySnapshot],
+    records: &SavedTopology,
     application: &FenceTopologySnapshotApplication,
     definitions: WorldDefinitionsView<'_>,
     allocator: &mut PersistentIdAllocator,
@@ -383,21 +481,29 @@ pub(super) fn spawn_saved_topology_nodes(
             ))
         })
         .collect::<Result<Vec<_>, Failure>>()?;
-    for record in records {
+    for record in records.iter() {
         if let Some(entity) = existing(record.id()) {
-            let same_kind = match record {
-                TopologySnapshot::Node { .. } => application
-                    .entities
-                    .nodes
-                    .get(entity)
-                    .is_ok_and(|(_, _, _, member)| member.root == root),
-                TopologySnapshot::Fence { .. } => application
-                    .entities
-                    .fences
-                    .get(entity)
-                    .is_ok_and(|(_, _, _, _, _, member)| member.root == root),
-                _ => false,
-            };
+            let same_kind =
+                match record {
+                    TopologySnapshot::Node { .. } => application
+                        .entities
+                        .nodes
+                        .get(entity)
+                        .is_ok_and(|(_, _, _, member)| member.root == root),
+                    TopologySnapshot::Fence { .. } => application
+                        .entities
+                        .fences
+                        .get(entity)
+                        .is_ok_and(|(_, _, _, _, _, member)| member.root == root),
+                    TopologySnapshot::Path { .. } => application
+                        .entities
+                        .paths
+                        .get(entity)
+                        .is_ok_and(|(_, _, _, _, member)| {
+                            records.includes_paths && member.root == root
+                        }),
+                    TopologySnapshot::Portal { .. } => false,
+                };
             if !same_kind {
                 return Err(Failure::DuplicatePersistentEntityIdentifier);
             }
@@ -409,6 +515,11 @@ pub(super) fn spawn_saved_topology_nodes(
             if definitions.find_fence(*definition).is_none()
                 || gate.is_some() && definitions.find_gate_fence(*definition).is_none()
             {
+                return Err(Failure::UnknownAssetIdentifier);
+            }
+        }
+        if let TopologySnapshot::Path { definition, .. } = record {
+            if definitions.find_path(*definition).is_none() {
                 return Err(Failure::UnknownAssetIdentifier);
             }
         }
@@ -439,7 +550,7 @@ pub(super) fn spawn_saved_topology_nodes(
             }
         }
     }
-    for record in records {
+    for record in records.iter() {
         let TopologySnapshot::Node { id, cell } = record else {
             continue;
         };
@@ -447,6 +558,37 @@ pub(super) fn spawn_saved_topology_nodes(
         commands
             .entity(entity)
             .insert((*id, TopologyNode { cell: *cell }, WorldMember { root }));
+    }
+    if records.includes_paths {
+        let grid = application
+            .grids
+            .get(root)
+            .map_err(|_| Failure::BrokenPersistentEntityReference)?;
+        for (entity, _, tile, _, member) in &application.entities.paths {
+            if member.root == root {
+                commands.entity(entity).despawn();
+                bounds =
+                    merge_topology_changed_cell_bounds(bounds, topology_cell_rectangle(tile.cell));
+            }
+        }
+        for record in records.iter() {
+            if let TopologySnapshot::Path {
+                id,
+                definition,
+                cell,
+                height_cm,
+            } = *record
+            {
+                commands.spawn((
+                    id,
+                    PathTile { definition, cell },
+                    TileSurface { height_cm },
+                    WorldMember { root },
+                    Transform::from_translation(grid.cell_translation(cell)),
+                ));
+                bounds = merge_topology_changed_cell_bounds(bounds, topology_cell_rectangle(cell));
+            }
+        }
     }
     Ok(bounds)
 }
@@ -550,7 +692,7 @@ mod tests {
         let restored = decode_fence_topology_records(&payload, section)
             .unwrap()
             .unwrap();
-        assert_eq!(restored, records);
+        assert_eq!(&*restored, records.as_slice());
         assert_eq!(encode_fence_topology_records(&restored).unwrap(), payload);
     }
 }

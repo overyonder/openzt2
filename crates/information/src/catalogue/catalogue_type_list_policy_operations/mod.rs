@@ -1,7 +1,10 @@
-use bevy::prelude::Component;
+use bevy::{
+    ecs::{relationship::RelationshipTarget, system::SystemParam},
+    prelude::*,
+};
 use openzt2_game_data::{
-    world_definitions::catalogue_and_progression::catalogue_definition_types::CatalogueEntry,
     AssetId,
+    world_definitions::catalogue_and_progression::catalogue_definition_types::CatalogueEntry,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
@@ -12,7 +15,47 @@ use openzt2_zoo_state::progression::catalogue_entry_availability::catalogue_entr
 use openzt2_zoo_state::progression::unlock_types::UnlockedCatalogueDefinitionSet;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiTypeListPolicy;
 
-use openzt2_interface_state::information::catalogue_types::TypeListFilter;
+use openzt2_interface_state::information::catalogue_types::{
+    ScenarioCatalogueRestriction, ScenarioCatalogueRestrictions, TypeListFilter,
+};
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+
+#[derive(SystemParam)]
+pub(crate) struct CatalogueRestrictions<'w, 's> {
+    roots: Query<'w, 's, Ref<'static, ScenarioCatalogueRestrictions>, With<WorldRoot>>,
+    restrictions: Query<'w, 's, Ref<'static, ScenarioCatalogueRestriction>>,
+}
+
+impl CatalogueRestrictions<'_, '_> {
+    pub(super) fn changed(&self) -> bool {
+        self.roots.iter().any(|root| {
+            root.is_changed()
+                || self
+                    .restrictions
+                    .iter_many(root.iter())
+                    .flatten()
+                    .any(|restriction| restriction.is_changed())
+        })
+    }
+
+    pub(super) fn allows(&self, list: Option<AssetId>, definition: AssetId) -> bool {
+        let Ok(root) = self.roots.single() else {
+            return true;
+        };
+        let (mut global, mut scoped) = (None, None);
+        for restriction in self.restrictions.iter_many(root.iter()).flatten() {
+            if restriction.definition != definition {
+                continue;
+            }
+            match restriction.list {
+                None => global = Some(restriction.enabled),
+                Some(key) if list == Some(key) => scoped = Some(restriction.enabled),
+                _ => {}
+            }
+        }
+        scoped.or(global).unwrap_or(true)
+    }
+}
 
 // Availability checks need the list policy, world restrictions and unlock state.
 #[allow(clippy::too_many_arguments)]
@@ -137,11 +180,8 @@ pub(crate) fn choose_remembered_or_first_included_catalogue_entry<'a>(
     world_session_mode: Option<WorldSessionMode>,
     scenario_availability: Option<&ScenarioContentAvailability>,
     unlocked_catalogue_definitions: &UnlockedCatalogueDefinitionSet,
-    scenario_disabled: Option<&openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions>,
+    scenario_allows: impl Fn(&CatalogueEntry) -> bool,
 ) -> Option<(usize, &'a CatalogueEntry)> {
-    let scenario_allows = |entry: &CatalogueEntry| {
-        scenario_disabled.is_none_or(|disabled| !disabled.0.contains(&entry.definition))
-    };
     if let Some(remembered_definition) = remembered_definition {
         if let Some(selected) = world_definitions
             .catalogue_in_authored_purchase_order()

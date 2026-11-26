@@ -42,7 +42,10 @@ pub(super) fn execute_animal_termination_actions(
             &WorldMember,
         ),
         (
-            With<Animal>,
+            Or<(
+                With<Animal>,
+                With<super::behavior_set_start_request_types::AmbientBehaviorSubject>,
+            )>,
             Without<Dead>,
             Without<PendingBehaviorTaskFailure>,
         ),
@@ -80,11 +83,12 @@ pub(super) fn execute_animal_termination_actions(
         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         return;
     }
-    let ticks = policy
-        .fade_out_period
-        .as_nanos()
-        .saturating_mul(u128::from(definitions.timing().fixed_hz))
-        .div_ceil(1_000_000_000);
+    let ticks = policy.fade_out_period.as_nanos().div_ceil(
+        definitions
+            .simulation_timestep()
+            .expect("simulation timing is loaded")
+            .as_nanos(),
+    );
     let until = clock
         .tick
         .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX));
@@ -99,7 +103,9 @@ pub(super) fn execute_animal_termination_actions(
                 &mut commands,
                 animal,
                 clock.tick,
-                definitions.timing().fixed_hz,
+                definitions
+                    .simulation_timestep()
+                    .expect("simulation timing is loaded"),
                 policy.fade_out_period,
             );
             continue;

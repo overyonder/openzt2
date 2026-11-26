@@ -11,7 +11,7 @@ use bevy_hanabi::prelude::{
 };
 use bevy_hanabi::ToWgslString;
 use openzt2_game_data::particle::legacy_nif_particle_effect::{
-    LegacyNifParticleEffect, LegacyNifParticleModifier,
+    LegacyNifParticleEffect, LegacyNifParticleModifier, LegacyNifParticleSpawnPolicy,
 };
 
 use super::hanabi_custom_particle_modifiers::{
@@ -20,6 +20,8 @@ use super::hanabi_custom_particle_modifiers::{
 
 pub(super) fn prepare_legacy_nif_particle_effect_as_hanabi_effect_asset(
     legacy_nif_particle_effect: &LegacyNifParticleEffect,
+    inherits_parent: bool,
+    spawns_children: bool,
 ) -> HanabiEffectAsset {
     let expression_writer = ExprWriter::new();
     let randomized_initial_position =
@@ -75,6 +77,14 @@ pub(super) fn prepare_legacy_nif_particle_effect_as_hanabi_effect_asset(
         )),
     ];
     let mut update_modifiers: Vec<BoxedModifier> = Vec::new();
+    if inherits_parent {
+        initialization_modifiers.push(Box::new(LegacyGenerationModifier::Inherit(
+            legacy_nif_particle_effect.spawn_policy,
+        )));
+    }
+    if spawns_children {
+        update_modifiers.push(Box::new(LegacyGenerationModifier::BeginStep));
+    }
     let mut render_modifiers: Vec<Box<dyn RenderModifier>> = vec![Box::new(SetColorModifier::new(
         Vec4::from_array(legacy_nif_particle_effect.initial_color),
     ))];
@@ -172,6 +182,7 @@ pub(super) fn prepare_legacy_nif_particle_effect_as_hanabi_effect_asset(
             })),
             LegacyNifParticleModifier::PlanarCollision {
                 bounce,
+                spawn_on_collide,
                 die_on_collide,
                 plane_normal,
                 plane_constant,
@@ -191,9 +202,16 @@ pub(super) fn prepare_legacy_nif_particle_effect_as_hanabi_effect_asset(
                 half_height: *height * 0.5,
                 velocity_rebound: *bounce,
                 kill_after_contact: *die_on_collide,
+                request_spawn_after_contact: spawns_children && *spawn_on_collide,
             })),
             LegacyNifParticleModifier::MeshSelection { .. } => {}
         }
+    }
+
+    if spawns_children {
+        update_modifiers.push(Box::new(LegacyGenerationModifier::Spawn(
+            legacy_nif_particle_effect.spawn_policy,
+        )));
     }
 
     let expression_module = expression_writer.finish();
@@ -216,6 +234,78 @@ pub(super) fn prepare_legacy_nif_particle_effect_as_hanabi_effect_asset(
         hanabi_effect_asset = hanabi_effect_asset.add_render_modifier(modifier);
     }
     hanabi_effect_asset
+}
+
+#[derive(Clone, Debug, Reflect)]
+enum LegacyGenerationModifier {
+    Inherit(#[reflect(ignore)] LegacyNifParticleSpawnPolicy),
+    BeginStep,
+    Spawn(#[reflect(ignore)] LegacyNifParticleSpawnPolicy),
+}
+
+impl Modifier for LegacyGenerationModifier {
+    fn context(&self) -> ModifierContext {
+        match self {
+            Self::Inherit(_) => ModifierContext::Init,
+            _ => ModifierContext::Update,
+        }
+    }
+
+    fn attributes(&self) -> Cow<'_, [Attribute]> {
+        Cow::Borrowed(&[
+            Attribute::POSITION,
+            Attribute::VELOCITY,
+            Attribute::AGE,
+            Attribute::LIFETIME,
+        ])
+    }
+
+    fn boxed_clone(&self) -> BoxedModifier {
+        Box::new(self.clone())
+    }
+
+    fn apply(&self, _: &mut Module, context: &mut ShaderWriter) -> Result<(), ExprError> {
+        match self {
+            Self::BeginStep => context
+                .main_code
+                .push_str("var legacy_spawn_triggers = 0u;\n"),
+            Self::Inherit(policy) => {
+                let direction_chaos = policy.direction_chaos.to_wgsl_string();
+                let speed_chaos = policy.speed_chaos.to_wgsl_string();
+                context.main_code += &format!(
+                    r#"
+particle.position = parent_particle.position;
+let parent_speed = length(parent_particle.velocity);
+let heading = select(vec3<f32>(0.0, 1.0, 0.0), parent_particle.velocity / max(parent_speed, 0.000001), parent_speed > 0.0);
+let spread = (frand3() * 2.0 - vec3<f32>(1.0)) * {direction_chaos};
+let speed = parent_speed * max(0.0, 1.0 + (frand() * 2.0 - 1.0) * {speed_chaos});
+let scattered = heading + spread;
+particle.velocity = scattered * (speed / max(length(scattered), 0.000001));
+"#
+                );
+            }
+            Self::Spawn(policy) => {
+                let probability = policy.probability.to_wgsl_string();
+                let multiplier = policy.multiplier;
+                if policy.on_death {
+                    context
+                        .main_code
+                        .push_str("if was_alive && !is_alive { legacy_spawn_triggers += 1u; }\n");
+                }
+                context.main_code += &format!(
+                    r#"
+for (var trigger_index = 0u; trigger_index < legacy_spawn_triggers; trigger_index += 1u) {{
+    if frand() < {probability} {{
+        append_spawn_events_0((*effect_metadata).base_child_index, particle_index, {multiplier}u);
+    }}
+}}
+"#
+                );
+                context.set_emits_gpu_spawn_events(true)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Reflect)]

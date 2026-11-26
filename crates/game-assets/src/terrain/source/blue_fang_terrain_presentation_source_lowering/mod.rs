@@ -1,5 +1,9 @@
 use std::io;
 
+use bevy::platform::collections::HashMap;
+use openzt2_game_data::AssetId;
+use std::path::{Path, PathBuf};
+
 use openzt2_game_data::terrain::{
     TerrainBiome, TerrainBiomeWaterPresentation, TerrainPresentation,
     TerrainWaterGeometricWavePresentation, TerrainWaterReflectionPresentation,
@@ -615,6 +619,23 @@ pub(in crate::terrain) fn normalize_particle_source_document_name(source_name: &
         .chars()
         .filter(|character| character.is_ascii_alphanumeric())
         .flat_map(char::to_lowercase)
+        .collect()
+}
+
+pub(in crate::terrain) fn index_named_water_particle_sources(
+    paths: Vec<PathBuf>,
+) -> HashMap<AssetId, PathBuf> {
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            if path.parent() != Some(Path::new("particle"))
+                || !path.extension()?.eq_ignore_ascii_case("psys")
+            {
+                return None;
+            }
+            let id = AssetId::from_key(&path.file_stem()?.to_str()?.to_ascii_lowercase());
+            Some((id, path))
+        })
         .collect()
 }
 

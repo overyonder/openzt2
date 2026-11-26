@@ -7,11 +7,11 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
+    AssetId,
     animation::animation_text_key::{
         AuthoredAnimationSurfaceEffectKind, AuthoredAnimationTextAction,
     },
     behavior::action::token::BehaviorTokenRecipient,
-    AssetId,
 };
 use openzt2_world_state::{
     animation_graph::{
@@ -38,11 +38,11 @@ use openzt2_zoo_state::{
     aquatic::aquatic_simulation_types::TankGeometry,
     audio::audio_playback_message_types::PlayPositionedAudioCue,
     behavior_task_execution_types::{
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
         running_actions::{
             RestoredSplashAnimation, RunBehaviorSplashGuest, RunningBehaviorInstruction,
             SplashAnimation, SplashAnimationSeek, WhenBehaviorAction,
         },
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     guests::guest_simulation_types::Guest,
     habitat::habitat_types::HabitatMember,
@@ -98,17 +98,19 @@ pub(super) fn register(app: &mut App) {
 fn start_splash(
     activation: On<WhenBehaviorAction<RunBehaviorSplashGuest>>,
     clock: Single<&ZooClock>,
-    scenes: Query<(
+    mut scenes: Query<(
         &RunBehaviorSplashGuest,
         &RunningBehaviorInstruction,
         Option<&RestoredSplashAnimation>,
+        Option<&mut SplashAnimation>,
+        Option<&mut SplashAnimationSeek>,
     )>,
     mut playback: MessageWriter<AnimationClipPlaybackRequest>,
     mut effects: SplashEffects,
     mut commands: Commands,
 ) {
     let actor = activation.entity;
-    let Ok((action, step, restored)) = scenes.get(actor) else {
+    let Ok((action, step, restored, current, seek)) = scenes.get_mut(actor) else {
         return;
     };
     if let Some(animation) = &action.0.animation {
@@ -128,17 +130,27 @@ fn start_splash(
             })
             .id;
         let mut actor_commands = commands.entity(actor);
-        actor_commands.insert(SplashAnimation {
+        let next = SplashAnimation {
             step: step.id(),
             request,
             emitted: restored.is_some_and(|restored| restored.emitted),
-        });
+        };
+        if let Some(mut current) = current {
+            *current = next;
+        } else {
+            actor_commands.insert(next);
+        }
         if let Some(restored) = restored {
             if restored.seek_seconds.is_finite() && restored.seek_seconds > 0.0 {
-                actor_commands.insert(SplashAnimationSeek {
+                let next = SplashAnimationSeek {
                     request,
                     seconds: restored.seek_seconds,
-                });
+                };
+                if let Some(mut seek) = seek {
+                    *seek = next;
+                } else {
+                    actor_commands.insert(next);
+                }
             }
             actor_commands.remove::<RestoredSplashAnimation>();
         }
@@ -276,10 +288,11 @@ impl SplashEffects<'_, '_> {
                 .map(|(guest, _)| guest)
         });
         let at_tick = |duration: std::time::Duration| {
-            let ticks = duration
-                .as_nanos()
-                .saturating_mul(u128::from(view.timing().fixed_hz))
-                .div_ceil(1_000_000_000);
+            let ticks = duration.as_nanos().div_ceil(
+                view.simulation_timestep()
+                    .expect("simulation timing is loaded")
+                    .as_nanos(),
+            );
             tick.saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX))
         };
         for token in &action.tokens {

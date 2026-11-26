@@ -1,5 +1,5 @@
 use bevy::{
-    input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
+    input::mouse::{AccumulatedMouseMotion, MouseWheel},
     input_focus::InputFocus,
     prelude::*,
     text::EditableText,
@@ -36,12 +36,17 @@ pub(super) fn translate_keyboard_mouse_input(
     focus: Res<InputFocus>,
     text_edits: Query<(), With<EditableText>>,
     accumulated_mouse_motion: Res<AccumulatedMouseMotion>,
-    accumulated_mouse_scroll: Res<AccumulatedMouseScroll>,
+    mut wheel: MessageReader<MouseWheel>,
+    primary_window: Query<Entity, With<bevy::window::PrimaryWindow>>,
     bindings: Res<GameActionInputBindings>,
     cameras: Query<&CameraMode, With<ZooCamera>>,
     mut samples: Query<&mut KeyboardMouseControlSample>,
     mut actions: MessageWriter<KeyboardMouseAction>,
 ) {
+    let window = primary_window.single().ok();
+    let mouse_scrolled = wheel.read().fold(false, |scrolled, event| {
+        scrolled || (Some(event.window) == window && event.y != 0.0)
+    });
     let Ok(mut sample) = samples.single_mut() else {
         return;
     };
@@ -121,7 +126,7 @@ pub(super) fn translate_keyboard_mouse_input(
         },
         meaningful: pan_directions.iter().any(|value| *value > 0.0)
             || accumulated_mouse_motion.delta != Vec2::ZERO
-            || accumulated_mouse_scroll.delta.y != 0.0
+            || mouse_scrolled
             || mouse_buttons.just_pressed(MouseButton::Left)
             || zoom != 0.0
             || sent_action,

@@ -4,6 +4,10 @@ use super::world_definition_lowering_tables::WorldDefinitionLoweringTables;
 use super::world_definition_source_value_reading_and_conversion::{
     array, asset, asset_list, element_array, id,
 };
+use crate::source_document::biome_automatic_placement_ranges::{
+    automatic_placement_range_index, lower_automatic_placement_choices,
+    lower_automatic_placement_ranges,
+};
 use crate::source_document::ordered_source_document_types::{
     OrderedSourceDocument, OrderedSourceDocumentNode,
 };
@@ -11,12 +15,12 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
-use openzt2_game_data::world_definitions::biomes_locations_and_details::{
-    BiomeAutomaticPlacementChoice, BiomeAutomaticPlacementRange, BiomeAutomaticPlacementVariation,
-    BiomeAutomaticPlacementVariationKind, BiomeDefinition, BiomeDetailChoice, BiomeDetailLevel,
-    BiomeDetailPlacementPolicy, BiomeDetailPolicy, BiomeDetailSurface, BiomeOverviewMapColors,
-};
 use openzt2_game_data::AssetId;
+use openzt2_game_data::world_definitions::biomes_locations_and_details::{
+    BiomeAutomaticPlacementVariation, BiomeAutomaticPlacementVariationKind, BiomeDefinition,
+    BiomeDetailChoice, BiomeDetailLevel, BiomeDetailPlacementPolicy, BiomeDetailPolicy,
+    BiomeDetailSurface, BiomeOverviewMapColors,
+};
 
 pub(super) fn bind_biome_detail_placement(
     documents: &[OrderedSourceDocument],
@@ -175,107 +179,10 @@ fn bind_biome_automatic_placement_variations(
         .into_iter()
         .map(|(variation_name, ranges)| {
             let kind = biome_automatic_placement_variation_kind(record, variation_name)?;
-            let mut indexed_ranges = ranges
-                .element_children()
-                .map(|range| {
-                    let index = biome_automatic_placement_range_index(record, range.name.as_str())?;
-                    let maximum_mask_value = range
-                        .attribute_named_any(&["threshold"])
-                        .ok_or_else(|| {
-                            BindError::record(
-                                record,
-                                format!(
-                                    "biome automatic-placement {} has no threshold",
-                                    range.name.as_str()
-                                ),
-                            )
-                        })?
-                        .parse::<u8>()
-                        .map_err(|_| {
-                            BindError::record(
-                                record,
-                                format!(
-                                    "biome automatic-placement {} threshold is not a byte",
-                                    range.name.as_str()
-                                ),
-                            )
-                        })?;
-                    Ok((
-                        index,
-                        BiomeAutomaticPlacementRange {
-                            maximum_mask_value,
-                            choices: bind_biome_automatic_placement_choices(record, range)?,
-                        },
-                    ))
-                })
-                .collect::<Result<Vec<_>, BindError>>()?;
-            indexed_ranges.sort_unstable_by_key(|(index, _)| *index);
-            if indexed_ranges
-                .iter()
-                .enumerate()
-                .any(|(expected_index, (authored_index, _))| {
-                    usize::from(*authored_index) != expected_index
-                })
-            {
-                return Err(BindError::record(
-                    record,
-                    format!(
-                        "biome automatic-placement {} ranges are not contiguous from Range0",
-                        variation_name
-                    ),
-                ));
-            }
-            for window in indexed_ranges.windows(2) {
-                if window[0].1.maximum_mask_value >= window[1].1.maximum_mask_value {
-                    return Err(BindError::record(
-                        record,
-                        format!(
-                            "biome automatic-placement {} ranges are not uniquely ordered",
-                            variation_name
-                        ),
-                    ));
-                }
-            }
             Ok(BiomeAutomaticPlacementVariation {
                 kind,
-                ranges: indexed_ranges.into_iter().map(|(_, range)| range).collect(),
-            })
-        })
-        .collect()
-}
-
-fn bind_biome_automatic_placement_choices(
-    record: &RecordView<'_, '_>,
-    range: &'_ OrderedSourceDocumentNode,
-) -> Result<Vec<BiomeAutomaticPlacementChoice>, BindError> {
-    range
-        .element_children()
-        .map(|choice| {
-            let weight = choice
-                .attribute_named_any(&["weight"])
-                .ok_or_else(|| {
-                    BindError::record(record, "biome automatic-placement choice has no weight")
-                })?
-                .parse::<u32>()
-                .map_err(|_| {
-                    BindError::record(
-                        record,
-                        "biome automatic-placement choice weight is not a positive u32",
-                    )
-                })?;
-            if weight == 0 {
-                return Err(BindError::record(
-                    record,
-                    "biome automatic-placement choice weight is zero",
-                ));
-            }
-            Ok(BiomeAutomaticPlacementChoice {
-                object: (!source_document_names_are_semantically_equal(
-                    choice.name.as_str(),
-                    "nothing",
-                ))
-                .then(|| id(choice.name.as_str())),
-                weight,
+                ranges: lower_automatic_placement_ranges(ranges)
+                    .map_err(|message| BindError::record(record, message))?,
             })
         })
         .collect()
@@ -294,21 +201,6 @@ fn biome_automatic_placement_variation_kind(
             format!("unsupported biome automatic-placement variation {name}"),
         )),
     }
-}
-
-fn biome_automatic_placement_range_index(
-    record: &RecordView<'_, '_>,
-    name: &str,
-) -> Result<u16, BindError> {
-    name.strip_prefix("Range")
-        .or_else(|| name.strip_prefix("range"))
-        .and_then(|index| index.parse::<u16>().ok())
-        .ok_or_else(|| {
-            BindError::record(
-                record,
-                format!("invalid biome automatic-placement range name {name}"),
-            )
-        })
 }
 
 pub(super) fn apply_biome_automatic_placement_supplements(
@@ -371,11 +263,9 @@ pub(super) fn apply_biome_automatic_placement_supplements(
                     ),
                 })?;
             for range_node in auto_placement.element_children() {
-                let index = biome_automatic_placement_range_index_for_document(
-                    document,
-                    range_node.name.as_str(),
-                )?;
-                let Some(range) = variation.ranges.get_mut(usize::from(index)) else {
+                let index = automatic_placement_range_index(range_node.name.as_str())
+                    .map_err(|message| BindError::at(document, range_node, message))?;
+                let Some(range) = variation.ranges.get_mut(index) else {
                     return Err(BindError {
                         virtual_path: path.clone(),
                         span: range_node.span,
@@ -410,37 +300,10 @@ pub(super) fn apply_biome_automatic_placement_supplements(
                         });
                     }
                 }
-                for choice in range_node.element_children() {
-                    let weight = choice
-                        .attributes
-                        .iter()
-                        .find(|attribute| attribute.name.as_str().eq_ignore_ascii_case("weight"))
-                        .ok_or_else(|| BindError {
-                            virtual_path: path.clone(),
-                            span: choice.span,
-                            message: "BFGBiomeObjects choice has no weight".to_owned(),
-                        })?
-                        .value()
-                        .parse::<u32>()
-                        .map_err(|_| BindError {
-                            virtual_path: path.clone(),
-                            span: choice.span,
-                            message: "BFGBiomeObjects choice weight is not a positive u32"
-                                .to_owned(),
-                        })?;
-                    if weight == 0 {
-                        return Err(BindError {
-                            virtual_path: path.clone(),
-                            span: choice.span,
-                            message: "BFGBiomeObjects choice weight is zero".to_owned(),
-                        });
-                    }
-                    range.choices.push(BiomeAutomaticPlacementChoice {
-                        object: (!choice.name.eq_ignore_ascii_case("nothing"))
-                            .then(|| id(choice.name.as_str())),
-                        weight,
-                    });
-                }
+                range.choices.extend(
+                    lower_automatic_placement_choices(range_node)
+                        .map_err(|message| BindError::at(document, range_node, message))?,
+                );
             }
         }
     }
@@ -461,20 +324,6 @@ fn biome_automatic_placement_variation_kind_for_document(
             message: format!("unsupported BFGBiomeObjects variation {name}"),
         }),
     }
-}
-
-fn biome_automatic_placement_range_index_for_document(
-    document: &OrderedSourceDocument,
-    name: &str,
-) -> Result<u16, BindError> {
-    name.strip_prefix("Range")
-        .or_else(|| name.strip_prefix("range"))
-        .and_then(|index| index.parse::<u16>().ok())
-        .ok_or_else(|| BindError {
-            virtual_path: document.path.key(),
-            span: document.root.span,
-            message: format!("invalid BFGBiomeObjects range name {name}"),
-        })
 }
 
 pub(super) fn bind_biome_detail_objects(

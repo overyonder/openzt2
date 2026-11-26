@@ -213,23 +213,21 @@ fn entity_string_attribute(
         }
     }
     let key = authored_attribute_id(attribute);
-    queries
+    Ok(queries
         .world_definitions
         .and_then(|definitions| {
             for id in fact.variant.into_iter().chain([fact.definition]) {
                 let Some(definition) = definitions.find_object(id) else {
                     continue;
                 };
-                let values = &definition.authored_runtime.morph_targets;
+                let values = &definition.authored_runtime.string_behavior_properties;
                 if let Ok(index) = values.binary_search_by_key(&key, |(attribute, _)| *attribute) {
-                    if let Some(value) = definitions.object_record_key(values[index].1) {
-                        return Some(value.to_owned());
-                    }
+                    return Some(values[index].1.clone());
                 }
             }
             None
         })
-        .ok_or_else(|| missing_attribute(attribute))
+        .unwrap_or_default())
 }
 
 fn entity_float_attribute(
@@ -250,7 +248,15 @@ fn entity_float_attribute(
         }
     }
     let key = authored_attribute_id(attribute);
-    queries
+    if let Some(value) = queries
+        .authored_float_attributes
+        .get(fact.entity)
+        .ok()
+        .and_then(|values| values.get(key))
+    {
+        return Ok(f64::from(value));
+    }
+    Ok(queries
         .world_definitions
         .and_then(|definitions| {
             fact.variant
@@ -267,7 +273,7 @@ fn entity_float_attribute(
                     Some(f64::from(values[index].1))
                 })
         })
-        .ok_or_else(|| missing_attribute(attribute))
+        .unwrap_or_default())
 }
 
 fn entity_boolean_attribute(
@@ -287,25 +293,26 @@ fn entity_boolean_attribute(
             })),
         _ => {
             let key = authored_attribute_id(attribute);
-            let defined = attribute.starts_with("b_")
-                && queries.world_definitions.is_some_and(|definitions| {
-                    fact.variant.into_iter().chain([fact.definition]).any(|id| {
-                        definitions.find_object(id).is_some_and(|definition| {
-                            definition.behavior_type_identifiers.contains(&key)
+            Ok(queries
+                .world_definitions
+                .and_then(|definitions| {
+                    fact.variant
+                        .into_iter()
+                        .chain([fact.definition])
+                        .find_map(|id| {
+                            let values = &definitions
+                                .find_object(id)?
+                                .authored_runtime
+                                .boolean_behavior_properties;
+                            let index = values
+                                .binary_search_by_key(&key, |(attribute, _)| *attribute)
+                                .ok()?;
+                            Some(values[index].1)
                         })
-                    })
-                });
-            if defined {
-                Ok(true)
-            } else {
-                Err(missing_attribute(attribute))
-            }
+                })
+                .unwrap_or_default())
         }
     }
-}
-
-fn missing_attribute(key: &str) -> mlua::Error {
-    mlua::Error::runtime(format!("entity has no attribute {key}"))
 }
 
 fn same_entity(left: &Table, right: &Table) -> mlua::Result<bool> {
@@ -775,6 +782,10 @@ pub(super) fn create_world_manager<'scope, 'env: 'scope>(
             if entity_fact(queries, pending, entity).is_none() {
                 return Err(mlua::Error::runtime("cannot name an absent entity"));
             }
+            pending
+                .borrow_mut()
+                .commands
+                .push(super::scenario_lua_entity_commands::ScenarioEntityCommand::Name(entity));
             Ok(())
         })?,
     )?;

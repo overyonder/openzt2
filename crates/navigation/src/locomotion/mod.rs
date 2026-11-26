@@ -5,6 +5,7 @@ mod animal_navigation_policy;
 #[cfg(test)]
 mod animal_terrain_slope_tests;
 mod animal_water_contact;
+pub mod authored_tank_gate_exit;
 mod avian_navigation_agent_driving;
 mod behavior_evasion_steering;
 mod changed_destination_route_planning;
@@ -22,7 +23,7 @@ mod navigation_destination_request_execution;
 mod navigation_reachability_testing;
 mod path_surface_navigation_projection;
 mod pathfinding;
-mod person_walk_animation;
+pub mod person_walk_animation;
 mod sampled_animation_motion_projection;
 mod spatial_index_and_docking_operations;
 mod staff_tank_gate_navigation;
@@ -51,12 +52,28 @@ use openzt2_zoo_state::locomotion::NavigationRequestAcceptance;
 
 use fence_navigation_crossing_types::FenceNavigationCrossingIndex;
 
-const DEFAULT_LOCOMOTION_RATE_FACTORS:
-    openzt2_zoo_state::locomotion::locomotion_types::CaffeineFactors =
-    openzt2_zoo_state::locomotion::locomotion_types::CaffeineFactors {
-        caffeinated: 3.0,
-        decaffeinated: 3.0,
+fn authored_caffeine_factors(
+    object: Option<&openzt2_game_data::world_definitions::world_objects::WorldObjectDefinition>,
+) -> openzt2_zoo_state::locomotion::locomotion_types::CaffeineFactors {
+    use openzt2_game_data::AssetId;
+    let factor = |key| {
+        object
+            .and_then(|object| {
+                let key = AssetId::from_key(key);
+                object
+                    .authored_runtime
+                    .numeric_behavior_properties
+                    .iter()
+                    .find_map(|&(property, value)| (property == key).then_some(value))
+            })
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .unwrap_or(1.0)
     };
+    openzt2_zoo_state::locomotion::locomotion_types::CaffeineFactors {
+        caffeinated: factor("f_caffeinemodefactor"),
+        decaffeinated: factor("f_decaffeinemodefactor"),
+    }
+}
 
 fn fixed_interval_timer(seconds: f32) -> Timer {
     let duration = if seconds <= 0.0 {
@@ -85,6 +102,9 @@ impl Plugin for LocomotionPlugin {
             .add_message::<terrain_edit_navigation_refresh::NavigationTerrainGraphChanged>()
             .add_message::<path_surface_navigation_projection::NavigationPathGraphChanged>()
             .add_message::<tank_water_navigation_overlay::TankNavigationWaterChanged>()
+            .add_message::<openzt2_zoo_state::aquatic::aquatic_simulation_types::TankWaterCellsChanged>()
+            .add_message::<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterCellsChanged>()
+            .add_message::<openzt2_zoo_state::habitat::habitat_cell_ownership_changes::HabitatCellOwnershipChanged>()
             .add_message::<ReachabilityTested>()
             .add_message::<DockAt>()
             .add_message::<PursueEntity>()
@@ -94,6 +114,16 @@ impl Plugin for LocomotionPlugin {
             .add_message::<openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigationRestored>()
             .add_message::<openzt2_zoo_state::terrain::terrain_navigation_change_types::SnapshotTerrainNavigationPending>()
             .add_message::<openzt2_zoo_state::terrain::terrain_navigation_change_types::SnapshotTerrainNavigationReady>()
+            .add_observer(
+                openzt2_zoo_state::behavior_task_execution_types::running_actions::activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorExitTankGate>
+                    .pipe(authored_tank_gate_exit::start_authored_tank_gate_exit),
+            )
+            .add_systems(
+                FixedUpdate,
+                openzt2_zoo_state::behavior_task_execution_types::running_actions::update_waiting_behavior_actors
+                    .pipe(authored_tank_gate_exit::start_authored_tank_gate_exit)
+                    .in_set(openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet::Think),
+            )
             .add_systems(
                 Update,
                 terrain_edit_navigation_refresh::acknowledge_restored_terrain_navigation
@@ -144,7 +174,13 @@ impl Plugin for LocomotionPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                animal_water_contact::project_animal_water_contact.in_set(FixedGameSet::Clock),
+                (
+                    animal_water_contact::project_animal_water_contact.in_set(FixedGameSet::Clock),
+                    spatial_index_and_docking_operations::project_agent_spatial_membership,
+                    spatial_index_and_docking_operations::order_changed_spatial_cell_members
+                        .after(spatial_index_and_docking_operations::project_agent_spatial_membership)
+                        .before(FixedGameSet::Think),
+                ),
             )
             .add_systems(
                 FixedUpdate,
@@ -214,11 +250,13 @@ impl Plugin for LocomotionPlugin {
                     entity_pursuit_execution::steer_entity_pursuits_toward_live_targets,
                     animal_navigation_policy::invalidate_animal_routes_after_policy_changes
                         .after(entity_pursuit_execution::steer_entity_pursuits_toward_live_targets),
+                    authored_tank_gate_exit::settle_authored_tank_gate_exit,
                     staff_tank_gate_navigation::receive_staff_tank_gate_events,
                     staff_tank_gate_navigation::resume_completed_staff_tank_gate_journeys,
                     staff_tank_gate_navigation::begin_staff_tank_gate_journeys
                         .after(staff_tank_gate_navigation::resume_completed_staff_tank_gate_journeys),
                     changed_destination_route_planning::queue_changed_navigation_destinations
+                        .after(NavigationRequestAcceptance)
                         .after(animal_navigation_policy::invalidate_animal_routes_after_policy_changes)
                         .after(staff_tank_gate_navigation::begin_staff_tank_gate_journeys),
                     changed_destination_route_planning::admit_waiting_route_searches
@@ -242,10 +280,14 @@ impl Plugin for LocomotionPlugin {
                         .before(kinematic_navigation_agent_motion_integration::integrate_non_physics_planned_navigation_motion)
                         .before(direct_locomotion_execution::integrate_non_physics_direct_locomotion),
                     kinematic_navigation_agent_motion_integration::
-                        integrate_non_physics_planned_navigation_motion,
-                    crate::locomotion::direct_locomotion_execution::integrate_non_physics_direct_locomotion,
+                        integrate_non_physics_planned_navigation_motion
+                        .after_ignore_deferred(local_steering_calculation::calculate_route_following_and_separation_steering),
+                    direct_locomotion_execution::integrate_non_physics_direct_locomotion
+                        .after_ignore_deferred(direct_locomotion_execution::calculate_direct_locomotion_steering),
                     avian_navigation_agent_driving::
-                        drive_avian_navigation_agent_velocities_and_complete_routes,
+                        drive_avian_navigation_agent_velocities_and_complete_routes
+                        .after_ignore_deferred(local_steering_calculation::calculate_route_following_and_separation_steering)
+                        .after_ignore_deferred(direct_locomotion_execution::calculate_direct_locomotion_steering),
                 )
                     .after(openzt2_world_state::animation_playback::locomotion_root_motion::AnimationLocomotionMotionSampling)
                     .after(openzt2_zoo_state::topology::gate_operation_types::GateOperationSet)
@@ -256,9 +298,6 @@ impl Plugin for LocomotionPlugin {
                 (
                     topology_navigation_edge_invalidation::invalidate_routes_after_topology_changes,
 
-                    spatial_index_and_docking_operations::project_agent_spatial_membership,
-                    spatial_index_and_docking_operations::order_changed_spatial_cell_members
-                        .after(spatial_index_and_docking_operations::project_agent_spatial_membership),
                     spatial_index_and_docking_operations::detect_stuck_agents
                         .after_ignore_deferred(topology_navigation_edge_invalidation::invalidate_routes_after_topology_changes),
                     spatial_index_and_docking_operations::complete_docking

@@ -5,7 +5,9 @@
 
 pub mod animation_text_keys;
 pub mod authored_behavior_type_identifiers;
+pub(crate) mod authored_caffeine_factors;
 pub mod authored_species_purchase_family_queries;
+pub(crate) mod biome_automatic_placement_ranges;
 pub mod blue_fang_actor_manifest_model_and_scene_resolution_index;
 pub mod blue_fang_source_dependency_reference_discovery;
 pub mod blue_fang_source_document_format;

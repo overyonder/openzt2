@@ -6,7 +6,10 @@ use bevy::{
 use openzt2_game_data::ui_document::document::*;
 use openzt2_game_data::ui_document::gameplay_pointer_presentation::UiGameplayInteractionCursorDefinition;
 use openzt2_game_data::AssetId;
-use openzt2_interface_state::settings::display_settings_types::DisplaySettings;
+use openzt2_interface_state::{
+    persistence::save_slot_types::PersistenceBusy,
+    settings::display_settings_types::DisplaySettings,
+};
 use std::collections::VecDeque;
 
 use openzt2_game_assets::texture::interactive_texture_metadata_asset_and_borrowing_queries::InteractiveTextureMetadataAsset;
@@ -28,17 +31,6 @@ use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct UiCursorStyle(pub(super) AssetId);
-
-/// Requests the original main-mode busy cursor presentation.
-///
-/// The operation that is busy remains the producer's state. UI owns only the
-/// resulting window presentation and therefore does not retain an operation
-/// registry or a second application mode.
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SetWaitCursor(pub bool);
-
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct WaitCursor(bool);
 
 #[derive(Resource, Default, PartialEq)]
 pub(super) struct CursorWindowScale(Option<CursorCanvas>);
@@ -103,15 +95,6 @@ pub(super) struct CursorPresentation<'w, 's> {
         Query<'w, 's, (Option<&'static PlacementRotationRequest>,), With<RelocatingPlacedObject>>,
     previews: Query<'w, 's, &'static ConstructionPreview>,
     pending_documents: Query<'w, 's, (), With<PendingUiProjection>>,
-}
-
-pub(super) fn apply_wait_cursor_requests(
-    mut requests: MessageReader<SetWaitCursor>,
-    mut wait: ResMut<WaitCursor>,
-) {
-    if let Some(request) = requests.read().last() {
-        wait.set_if_neq(WaitCursor(request.0));
-    }
 }
 
 pub(super) fn project_cursor_window_scale(
@@ -203,7 +186,9 @@ impl ChangedCursorSources<'_, '_> {
 /// window. The image handle remains owned by the loaded UI document.
 pub(super) fn resolve_requested_window_cursor(
     phase: Res<State<openzt2_game_assets::application_lifecycle::GamePhase>>,
-    wait: Res<WaitCursor>,
+    busy: Query<(), With<PersistenceBusy>>,
+    added_busy: Query<(), Added<PersistenceBusy>>,
+    mut ended_busy: RemovedComponents<PersistenceBusy>,
     capture: Res<UiPointerCapture>,
     tool: Res<ConstructionTool>,
     sources: CursorPresentation,
@@ -211,10 +196,10 @@ pub(super) fn resolve_requested_window_cursor(
     mut requested: ResMut<ResolvedCursorRequest>,
     mut changed_sources: ChangedCursorSources,
 ) {
-    let changed = changed_sources.changed();
+    let changed =
+        changed_sources.changed() | (ended_busy.read().count() != 0) | !added_busy.is_empty();
     if !changed
         && !phase.is_changed()
-        && !wait.is_changed()
         && !capture.is_changed()
         && !tool.is_changed()
         && !canvas.is_changed()
@@ -228,7 +213,7 @@ pub(super) fn resolve_requested_window_cursor(
         return;
     };
     let scale_factor = window.atlas_scale;
-    let next = if wait.0
+    let next = if !busy.is_empty()
         || *phase.get() == openzt2_game_assets::application_lifecycle::GamePhase::Loading
         || !sources.pending_documents.is_empty()
     {
@@ -499,8 +484,7 @@ fn cursor_from_document(
 }
 
 pub(super) fn initialize(app: &mut App) {
-    app.init_resource::<WaitCursor>()
-        .init_resource::<CursorWindowScale>()
+    app.init_resource::<CursorWindowScale>()
         .init_resource::<ResolvedCursorRequest>()
         .init_resource::<ScaledCursorImages>()
         .add_message::<SynthesizeCursorImage>();

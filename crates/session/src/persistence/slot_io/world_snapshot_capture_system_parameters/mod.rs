@@ -32,6 +32,7 @@ pub(super) struct WorldMetadataCaptureQueries<'w, 's> {
     pub(super) world_documents: Query<'w,'s,(
         &'static openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles,
         &'static SelectedWorldIdentity,
+        Option<&'static openzt2_zoo_state::scenario::scenario_session_types::ScenarioDocument>,
     ),With<WorldRoot>>,
     pub(super) world_roots: Query<
         'w,
@@ -90,6 +91,7 @@ pub(super) struct TankCaptureQueries<'w, 's> {
 #[derive(SystemParam)]
 pub(super) struct TransportCaptureQueries<'w, 's> {
     pub(super) entities_with_persistent_identifiers: Query<'w, 's, &'static PersistentId>,
+    pub(super) sky_station_crossings: Query<'w, 's, &'static openzt2_transport::transport_tours::SkyStationCrossing>,
     pub(super) transport_entity_poses: Query<'w, 's, &'static Transform>,
     pub(super) transport_fares: Query<'w, 's, &'static openzt2_zoo_state::economy::facility_economy_types::Price>,
     pub(super) transport_track_routes: Query<'w, 's, (

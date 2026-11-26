@@ -62,13 +62,10 @@ pub(super) fn read_original_saved_economy(
         let expenses = money(row, "expenses")?;
         let opening_cash = match months.last().map(|row: &MonthlyFinance| row.closing_cash) {
             Some(previous) => previous,
-            None => Money(
-                closing_cash
-                    .0
-                    .checked_sub(income.0)
-                    .and_then(|cash| cash.checked_add(expenses.0))
-                    .ok_or_else(|| invalid("saved opening cash exceeds the money range"))?,
-            ),
+            None => closing_cash
+                .checked_sub(income)
+                .and_then(|cash| cash.checked_add(expenses))
+                .ok_or_else(|| invalid("saved opening cash exceeds the money range"))?,
         };
         let general_month = month_row(general, month)?;
         months.push(MonthlyFinance {
@@ -175,7 +172,7 @@ pub(super) fn money(node: &OrderedSourceDocumentNode, field: &str) -> io::Result
     let magnitude = authored_currency_to_money(amount.abs())
         .ok_or_else(|| invalid(format!("saved {field} exceeds the money range")))?;
     Ok(if amount.is_sign_negative() {
-        Money(-magnitude.0)
+        -magnitude
     } else {
         magnitude
     })
@@ -237,25 +234,25 @@ mod tests {
             },
             true,
         )?;
-        assert_eq!(economy.zoo_cash, Money(95_000));
-        assert_eq!(economy.admission_price, Money(2_000));
+        assert_eq!(economy.zoo_cash, Money::from_cents(95_000));
+        assert_eq!(economy.admission_price, Money::from_cents(2_000));
         assert!(!economy.admissions_open);
         assert_eq!(economy.unlimited_cash, Some(true));
         assert_eq!(economy.current_calendar_month, 13);
         assert_eq!(economy.lifetime_users, 5);
         assert_eq!(
             economy.monthly_finance_records[1].opening_cash,
-            Money(100_000)
+            Money::from_cents(100_000)
         );
         assert_eq!(economy.monthly_finance_records[1].active_users, 3);
         assert_eq!(economy.monthly_finance_records[1].total_users, 1);
         assert_eq!(
             economy.monthly_finance_records[1].admission_income,
-            Money(5_000)
+            Money::from_cents(5_000)
         );
         assert_eq!(
             economy.monthly_finance_records[1].construction,
-            Money(10_000)
+            Money::from_cents(10_000)
         );
         Ok(())
     }

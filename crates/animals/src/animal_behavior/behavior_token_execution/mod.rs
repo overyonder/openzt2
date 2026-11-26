@@ -6,8 +6,8 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::behavior::action::token::BehaviorTokenRecipient;
 use openzt2_game_data::AssetId;
+use openzt2_game_data::behavior::action::token::BehaviorTokenRecipient;
 use openzt2_world_state::{
     application_schedule::FixedGameSet, simulation_time::simulation_clock_types::ZooClock,
 };
@@ -20,8 +20,8 @@ use openzt2_zoo_state::{
     animal_health::types::Dead,
     animal_lifecycle::types::{Animal, SpeciesHandle},
     behavior_task_execution_types::{
-        abandon_behavior_task_for_reconsideration, BehaviorTaskExecutionState, BehaviorTaskFailed,
-        PendingBehaviorTaskFailure,
+        BehaviorTaskExecutionState, BehaviorTaskFailed, PendingBehaviorTaskFailure,
+        abandon_behavior_task_for_reconsideration,
     },
     guests::guest_simulation_types::GuestRng,
     staff::staff_job_types::CurrentJob,
@@ -264,10 +264,12 @@ fn execute_current_self_token_deliveries(
                 continue;
             }
             let at_tick = |duration: std::time::Duration| {
-                let ticks = duration
-                    .as_nanos()
-                    .saturating_mul(u128::from(definitions.timing().fixed_hz))
-                    .div_ceil(1_000_000_000);
+                let ticks = duration.as_nanos().div_ceil(
+                    definitions
+                        .simulation_timestep()
+                        .expect("simulation timing is loaded")
+                        .as_nanos(),
+                );
                 clock
                     .tick
                     .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX))

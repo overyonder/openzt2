@@ -24,6 +24,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::Steering;
 pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
     mut commands: Commands,
     animation_samples: LocomotionAnimationSamples,
+    clip_policy: super::animal_navigation_policy::ActiveLocomotionClipPolicy,
     time: Res<Time<Fixed>>,
     fences: FenceNavigationPolicy,
     mut avian_navigation_agents: Query<(
@@ -141,9 +142,8 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
             } else {
                 horizontal_velocity
             };
-            let desired_forward_direction = (Quat::from_rotation_y(direction.x.atan2(direction.y))
-                * sampled_rotation)
-                * Vec3::Z;
+            let desired = Quat::from_rotation_y(direction.x.atan2(direction.y)) * sampled_rotation;
+            let desired_forward_direction = desired * Vec3::Z;
             // Converted authored models face +Z, matching kinematic navigation
             // and docking. Bevy's `forward()` is the camera's -Z convention.
             let current_forward_direction = transform.rotation * Vec3::Z;
@@ -151,7 +151,24 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
                 .cross(desired_forward_direction)
                 .y
                 .atan2(current_forward_direction.dot(desired_forward_direction));
-            angular_velocity.y = yaw_error_radians / fixed_delta_seconds;
+            if let Some(policy) = clip_policy
+                .get(
+                    navigation_agent_entity,
+                    animation_source.map(|source| source.controller),
+                )
+                .filter(|policy| policy.angular_speed_by_axis.iter().any(Option::is_some))
+            {
+                let next = super::animal_navigation_policy::advance_clip_turn(
+                    transform.rotation,
+                    desired,
+                    policy.angular_speed_by_axis,
+                    fixed_delta_seconds,
+                );
+                angular_velocity.0 =
+                    (next * transform.rotation.inverse()).to_scaled_axis() / fixed_delta_seconds;
+            } else {
+                angular_velocity.y = yaw_error_radians / fixed_delta_seconds;
+            }
         } else {
             angular_velocity.y = 0.0;
         }

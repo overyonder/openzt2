@@ -38,10 +38,11 @@ pub(super) fn collect_root_effect_emitter_ids(
 
 pub(super) fn create_collision_spawn_initialization(
     effect_modifier: &EffectModifier,
-) -> Option<(AssetId, CollisionSpawnParticleInitialization)> {
+) -> Option<(AssetId, u32, CollisionSpawnParticleInitialization)> {
     match effect_modifier {
         EffectModifier::SpawnOnPlane {
             target_emitter,
+            max_count,
             radius,
             speed,
             velocity_out,
@@ -52,6 +53,7 @@ pub(super) fn create_collision_spawn_initialization(
             ..
         } => Some((
             *target_emitter,
+            *max_count,
             CollisionSpawnParticleInitialization {
                 spawn_radius: *radius,
                 initial_speed: *speed,

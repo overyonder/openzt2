@@ -3,11 +3,13 @@ use super::{
     animal_snapshot_section_encoding::validate_animal_snapshot_records,
     animal_snapshot_types::{
         AnimalPendingTokenSnapshotRecord, AnimalSnapshotDeath, AnimalSnapshotRecord,
-        AnimalWelfareSnapshotRecord,
+        AnimalWelfareSnapshotRecord, SavedAnimalTreatment, SavedTranquilization,
     },
 };
 use bevy::{ecs::resource::IsResource, prelude::*};
-use openzt2_animals::animal_welfare::need_timing_types::NeedAdjustmentCadence;
+use openzt2_animals::animal_welfare::{
+    need_latch_types::AnimalNeedLatches, need_timing_types::NeedAdjustmentCadence,
+};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_entity_crating::{AnimalCrate, ScriptedCrating};
 use openzt2_zoo_state::animal_behavior::animal_lineage::{
@@ -17,7 +19,10 @@ use openzt2_zoo_state::animal_behavior::behavior_token_types::{
     BehaviorSelfToken, ClaimedBehaviorSelfToken,
 };
 use openzt2_zoo_state::animal_health::types::Dead;
-use openzt2_zoo_state::animal_health::types::DeathCause;
+use openzt2_zoo_state::animal_health::types::{
+    DeathCause, RecoveringFromTranquilizer, Tranquilized, TranquilizerDoseTimer,
+    TranquilizerRecoveryTimer, Treatment, TreatmentClock,
+};
 use openzt2_zoo_state::animal_lifecycle::types::*;
 use openzt2_zoo_state::animal_welfare::types::*;
 use openzt2_zoo_state::locomotion::locomotion_types::CaffeineFlags;
@@ -38,6 +43,8 @@ pub(in crate::persistence) type PendingTokenSnapshotEntities<'w, 's> = Query<
 pub(super) fn capture_animal_snapshot_records(
     animals: &AnimalSnapshotEntities,
     tokens: &PendingTokenSnapshotEntities,
+    latches: &Query<AnimalNeedLatches>,
+    identities: &Query<&PersistentId>,
 ) -> Result<Vec<AnimalSnapshotRecord>, WorldSnapshotPersistenceFailure> {
     let persistent_reference = |entity| {
         animals
@@ -45,6 +52,10 @@ pub(super) fn capture_animal_snapshot_records(
             .ok()
             .and_then(|animal| animal.get::<PersistentId>().map(|id| id.0))
             .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)
+    };
+    let nanos = |duration: std::time::Duration| {
+        u64::try_from(duration.as_nanos())
+            .map_err(|_| WorldSnapshotPersistenceFailure::CapacityExceeded)
     };
     let mut records = Vec::with_capacity(animals.iter().len());
     for animal in animals {
@@ -68,7 +79,10 @@ pub(super) fn capture_animal_snapshot_records(
                     required_animal_component::<BathroomNeed>(animal)?.0,
                 ],
                 reproduction_need: animal.get::<ReproductionNeed>().map(|need| need.0),
-                triggers: required_animal_component::<NeedTriggerState>(animal)?.0,
+                triggers: latches
+                    .get(animal.id())
+                    .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?
+                    .saved_mask(),
                 cumulative_points: {
                     let points = required_animal_component::<CumulativeNeedPoints>(animal)?;
                     [points.good, points.bad]
@@ -86,6 +100,36 @@ pub(super) fn capture_animal_snapshot_records(
                     WelfareBand::Good => 3,
                     WelfareBand::Excellent => 4,
                 },
+            })
+        } else {
+            None
+        };
+        let tranquilization = if let Some(dose) = animal.get::<Tranquilized>() {
+            let clock = required_animal_component::<TranquilizerDoseTimer>(animal)?;
+            Some(SavedTranquilization::Dose {
+                remaining_ns: nanos(clock.0.remaining())?,
+                recovery_ns: nanos(dose.recovery_duration)?,
+            })
+        } else if animal.contains::<RecoveringFromTranquilizer>() {
+            let clock = required_animal_component::<TranquilizerRecoveryTimer>(animal)?;
+            Some(SavedTranquilization::Recovery {
+                remaining_ns: nanos(clock.0.remaining())?,
+            })
+        } else {
+            None
+        };
+        let treatment = if let Some(treatment) = animal.get::<Treatment>() {
+            let clock = required_animal_component::<TreatmentClock>(animal)?;
+            Some(SavedAnimalTreatment {
+                definition: treatment.definition,
+                provider: identities
+                    .get(treatment.provider)
+                    .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?
+                    .0,
+                execution_id: treatment
+                    .correlation
+                    .map(|correlation| correlation.execution_id),
+                remaining_ns: nanos(clock.timer.remaining())?,
             })
         } else {
             None
@@ -159,6 +203,8 @@ pub(super) fn capture_animal_snapshot_records(
                 },
             }),
             welfare,
+            tranquilization,
+            treatment,
         });
     }
     records.sort_unstable_by_key(|record| record.persistent_identifier);

@@ -2,7 +2,13 @@ use bevy::{
     ecs::{relationship::RelationshipTarget, system::SystemParam},
     prelude::*,
 };
+use openzt2_shows::shows::{
+    show_timing_operations::RunningShowPhaseTimer, ShowMixerTimeSlot, ShowMixerWait,
+};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
+use openzt2_zoo_state::shows::running_show_types::{
+    RunningShow, RunningShowFromRow, RunningShowOnStage, ShowPhase,
+};
 use openzt2_zoo_state::shows::show_schedule_types::{
     ScheduledShowBreakRow, ScheduledShowPerformancePlan, ScheduledShowRating, ScheduledShowRow,
     ScheduledShowTrickPerformance, ScheduledTrickPerformer, ShowScheduleRowOrder, ShowTrickSlots,
@@ -15,14 +21,25 @@ use openzt2_zoo_state::shows::show_stage_types::ShowStageOpenState;
 use super::super::persistence_failure_types::WorldSnapshotPersistenceFailure;
 use super::{
     show_snapshot_types::{
-        ScheduledShowBreakSnapshotRecord, ScheduledShowPerformanceSnapshotRecord,
-        ScheduledShowSnapshotRecord, ShowStageSnapshotRecord,
+        RunningShowSnapshot, ScheduledShowBreakSnapshotRecord,
+        ScheduledShowPerformanceSnapshotRecord, ScheduledShowSnapshotRecord,
+        ShowStageSnapshotRecord,
     },
     world_snapshot_capture_system_parameters::ShowStageCaptureQueries,
 };
 
 #[derive(SystemParam)]
 pub(in crate::persistence) struct ShowScheduleSnapshotQueries<'w, 's> {
+    running: Query<
+        'w,
+        's,
+        (
+            &'static RunningShow,
+            &'static RunningShowFromRow,
+            &'static RunningShowOnStage,
+            &'static RunningShowPhaseTimer,
+        ),
+    >,
     rows: Query<
         'w,
         's,
@@ -41,8 +58,10 @@ pub(in crate::persistence) struct ShowScheduleSnapshotQueries<'w, 's> {
         'w,
         's,
         (
-            &'static ScheduledShowTrickPerformance,
+            Option<&'static ScheduledShowTrickPerformance>,
             &'static ScheduledTrickPerformer,
+            Option<&'static ShowMixerTimeSlot>,
+            Option<&'static ShowMixerWait>,
         ),
     >,
 }
@@ -81,6 +100,38 @@ pub(super) fn capture_sorted_show_snapshot_records_from_live_world(
         return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
     }
 
+    let mut running = bevy::ecs::entity::EntityHashMap::new();
+    for (show, row, stage, clock) in &schedule.running {
+        let row = schedule
+            .rows
+            .get(row.0)
+            .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?
+            .0;
+        if !show.trick_score.is_finite() || !show.stars.is_finite() {
+            return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+        }
+        let remaining_ns = u64::try_from(clock.remaining().as_nanos())
+            .map_err(|_| WorldSnapshotPersistenceFailure::CapacityExceeded)?;
+        let snapshot = RunningShowSnapshot {
+            row_id: row.0,
+            current_slot: u32::try_from(show.current_slot)
+                .map_err(|_| WorldSnapshotPersistenceFailure::CapacityExceeded)?,
+            phase: match show.phase {
+                ShowPhase::Preshow => 0,
+                ShowPhase::Conducting => 1,
+                ShowPhase::Postshow => 2,
+                ShowPhase::BetweenShows => 3,
+            },
+            trick_score: show.trick_score,
+            stars: show.stars,
+            completed_tricks: show.completed_tricks,
+            failed_tricks: show.failed_tricks,
+            remaining_ns,
+        };
+        if running.insert(stage.0, snapshot).is_some() {
+            return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+        }
+    }
     let mut show_stage_snapshot_records = world_snapshot_capture_queries
         .show_stages_with_snapshot_state
         .iter()
@@ -92,6 +143,7 @@ pub(super) fn capture_sorted_show_snapshot_records_from_live_world(
                 optional_show_name,
             )| ShowStageSnapshotRecord {
                 persistent_identifier: *persistent_identifier,
+                running: running.remove(&show_stage_entity),
                 is_open: optional_open_state
                     .is_none_or(|open_state| *open_state == ShowStageOpenState::Open),
                 display_name: optional_show_name
@@ -115,6 +167,9 @@ pub(super) fn capture_sorted_show_snapshot_records_from_live_world(
             },
         )
         .collect::<Vec<_>>();
+    if !running.is_empty() {
+        return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+    }
     show_stage_snapshot_records.sort_unstable_by_key(|record| record.persistent_identifier.0);
 
     let entity_persistent_identifier = |entity| {
@@ -154,18 +209,26 @@ pub(super) fn capture_sorted_show_snapshot_records_from_live_world(
         }
         let mut performance_records = Vec::with_capacity(slot_count);
         for slot in slots.into_iter().flat_map(RelationshipTarget::iter) {
-            let (performance, performer) = schedule
+            let (performance, performer, time_slot, wait) = schedule
                 .slots
                 .get(slot)
                 .ok()
-                .filter(|(performance, _)| performance.duration_ticks > 0)
                 .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
             let performer_persistent_identifier = entity_persistent_identifier(performer.0)
                 .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+            let (trick_definition_identifier, duration_simulation_ticks) = match (performance, wait)
+            {
+                (Some(performance), None) if performance.duration_ticks > 0 => {
+                    (Some(performance.trick), performance.duration_ticks)
+                }
+                (None, Some(wait)) if wait.0 > 0 && time_slot.is_some() => (None, wait.0),
+                _ => return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection),
+            };
             performance_records.push(ScheduledShowPerformanceSnapshotRecord {
                 performer_persistent_identifier,
-                trick_definition_identifier: performance.trick,
-                duration_simulation_ticks: performance.duration_ticks,
+                trick_definition_identifier,
+                duration_simulation_ticks,
+                time_slot: time_slot.map(|slot| slot.0),
             });
         }
         let rating = rating.and_then(|rating| rating.0);

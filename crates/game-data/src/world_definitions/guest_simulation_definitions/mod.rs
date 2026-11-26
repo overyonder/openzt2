@@ -63,6 +63,8 @@ const fn default_view_meter_decay_per_second() -> f32 {
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct GuestDefinition {
     #[serde(default)]
+    pub caffeine_factors: crate::CaffeineFactors,
+    #[serde(default)]
     pub donation: Option<GuestDonationPolicy>,
     pub id: AssetId,
     pub object: AssetId,

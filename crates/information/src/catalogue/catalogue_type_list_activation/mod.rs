@@ -9,6 +9,7 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::BeginAnimalAdoptionPlacement;
 use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::AnimalCatalogueGender;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
+use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId;
 use openzt2_zoo_state::progression::adoption_and_content_availability_types::ScenarioContentAvailability;
 use openzt2_zoo_state::progression::catalogue_entry_availability::catalogue_entry_is_available;
 use openzt2_zoo_state::progression::catalogue_entry_availability::catalogue_entry_can_be_researched;
@@ -18,15 +19,14 @@ use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIden
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use crate::catalogue::catalogue_type_list_policy_operations::{
-    choose_remembered_or_first_included_catalogue_entry, CatalogueTypeListMemoryPolicy,
+    CatalogueRestrictions, CatalogueTypeListMemoryPolicy,
+    choose_remembered_or_first_included_catalogue_entry,
 };
 use crate::catalogue::catalogue_world_availability_context::resolve_catalogue_world_session_mode_and_scenario_availability;
+use openzt2_interface_state::information::catalogue_types::CatalogueRowEntry;
 use openzt2_interface_state::information::catalogue_types::PurchaseChoice;
 use openzt2_interface_state::information::catalogue_types::RememberedCatalogueEntry;
 use openzt2_interface_state::information::catalogue_types::TypeListFilter;
-use openzt2_interface_state::information::catalogue_types::{
-    CatalogueRowEntry, ScenarioDisabledCatalogueDefinitions,
-};
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiTypeListPolicy;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
@@ -45,6 +45,7 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
         (
             Option<&CatalogueTypeListMemoryPolicy>,
             Option<&mut RememberedCatalogueEntry>,
+            Option<&UiNodeId>,
         ),
         With<UiTypeListPolicy>,
     >,
@@ -67,11 +68,10 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
         ),
         With<WorldRoot>,
     >,
-    scenario_disabled: Option<Single<&ScenarioDisabledCatalogueDefinitions>>,
+    restrictions: CatalogueRestrictions,
     mut placements: CataloguePlacementMessages,
 ) {
     let unlocked_catalogue_definitions = unlocked_catalogue_definitions.into_inner();
-    let scenario_disabled = scenario_disabled.map(Single::into_inner);
     let world_definitions = active_world_definitions.get(&world_definition_assets);
     let (world_session_mode, scenario_availability) =
         resolve_catalogue_world_session_mode_and_scenario_availability(&selected_worlds);
@@ -103,25 +103,24 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
             scenario_availability,
             &unlocked_catalogue_definitions,
         );
+        let type_list = std::iter::successors(Some(activation.node), |entity| {
+            parent_entities.get(*entity).ok().map(ChildOf::parent)
+        })
+        .find(|entity| type_lists.contains(*entity));
+        let list = type_list.and_then(|list| type_lists.get(list).ok()?.2.map(|node| node.id));
         if (!available
             && !catalogue_entry_can_be_researched(
                 catalogue,
                 entry,
                 research_availability.available_for(entry.definition),
             ))
-            || scenario_disabled
-                .as_ref()
-                .is_some_and(|disabled| disabled.0.contains(&catalogue_row.definition))
+            || !restrictions.allows(list, catalogue_row.definition)
         {
             continue;
         }
 
-        if let Some(type_list) = std::iter::successors(Some(activation.node), |entity| {
-            parent_entities.get(*entity).ok().map(ChildOf::parent)
-        })
-        .find(|entity| type_lists.contains(*entity))
-        {
-            if let Ok((memory, saved)) = type_lists.get_mut(type_list) {
+        if let Some(type_list) = type_list {
+            if let Ok((memory, saved, _)) = type_lists.get_mut(type_list) {
                 if memory.is_none_or(|memory| memory.remembers(entry)) {
                     remember_entry(&mut commands, type_list, entry, saved);
                 }
@@ -253,10 +252,11 @@ mod tests {
             });
         }
         app.update();
-        assert!(app
-            .world()
-            .resource::<Messages<PurchaseChoice>>()
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<Messages<PurchaseChoice>>()
+                .is_empty()
+        );
 
         // Removing the second row makes an unread second row press unable to
         // suppress the stale On event; a delayed choice would expose either
@@ -265,10 +265,11 @@ mod tests {
             .entity_mut(row_two)
             .remove::<CatalogueRowEntry>();
         app.update();
-        assert!(app
-            .world()
-            .resource::<Messages<PurchaseChoice>>()
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<Messages<PurchaseChoice>>()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -356,6 +357,7 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
         Option<&TypeListFilter>,
         Option<&CatalogueTypeListMemoryPolicy>,
         Option<&mut RememberedCatalogueEntry>,
+        Option<&UiNodeId>,
     )>,
     catalogue_rows: Query<&CatalogueRowEntry>,
     parent_entities: Query<&ChildOf>,
@@ -370,13 +372,12 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
         With<WorldRoot>,
     >,
     visibilities: Query<&Visibility>,
-    scenario_disabled: Option<Single<&ScenarioDisabledCatalogueDefinitions>>,
+    restrictions: CatalogueRestrictions,
     document_owners: Query<&UiDocumentOwner>,
     selected_genders: Query<&AnimalCatalogueGender>,
     mut placements: CataloguePlacementMessages,
 ) {
     let unlocked_catalogue_definitions = unlocked_catalogue_definitions.into_inner();
-    let scenario_disabled = scenario_disabled.map(Single::into_inner);
     // Consume the row stream completely before making the precedence decision.
     // Otherwise a short-circuiting reader could leave a later row event behind.
     let mut explicit_catalogue_row_press = false;
@@ -408,7 +409,7 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
         if activation.trigger != UiTrigger::On {
             continue;
         }
-        let Ok((type_list_policy, type_list_filter, memory, remembered)) =
+        let Ok((type_list_policy, type_list_filter, memory, remembered, node)) =
             type_lists.get_mut(activation.node)
         else {
             continue;
@@ -431,7 +432,7 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
             world_session_mode,
             scenario_availability,
             &unlocked_catalogue_definitions,
-            scenario_disabled.as_deref(),
+            |entry| restrictions.allows(node.map(|node| node.id), entry.definition),
         ) else {
             continue;
         };

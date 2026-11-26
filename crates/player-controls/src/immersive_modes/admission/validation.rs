@@ -12,9 +12,9 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::extinct_animals::fossil_collection_and_assembly_types::{
-    FossilAssemblyTable, FossilCollections, FossilPlacementSurface,
+    FossilAssemblyTable, FossilPlacementSurface,
 };
-use openzt2_zoo_state::extinct_animals::fossil_recovery_types::FossilRecoverySite;
+use openzt2_zoo_state::extinct_animals::fossil_recovery_types::FossilSiteKind;
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
 use openzt2_zoo_state::shows::show_schedule_types::{ScheduledShowPerformancePlan, ShowStageRows};
 use openzt2_zoo_state::shows::show_stage_types::ShowStage;
@@ -108,48 +108,93 @@ pub(in crate::immersive_modes) fn validate_first_person(
 }
 
 pub(in crate::immersive_modes) fn validate_search(
-    requests: Query<(Entity, &PendingMode<FossilSearchControl>), With<ModeReservation>>,
-    sites: Query<(
-        &FossilRecoverySite,
-        &openzt2_world_state::world_spawn::world_membership_types::WorldMember,
-    )>,
-    fossils: FossilCollections,
+    requests: Query<
+        (
+            Entity,
+            &PendingMode<FossilSearchControl>,
+            Option<&PendingFossilSearchDock>,
+        ),
+        With<ModeReservation>,
+    >,
+    sites: Query<(Entity, &WorldMember, &GlobalTransform), With<FossilSiteKind>>,
     definitions: ModeDefinitions,
-    cameras: Query<Entity, With<ZooCamera>>,
-    output: ModeAdmission,
+    cameras: Query<(Entity, &WorldMember, &Transform), With<ZooCamera>>,
+    scenes: Res<Assets<ScenePrefabAsset>>,
+    server: Res<AssetServer>,
+    mut output: ModeAdmission,
 ) {
-    let Ok((session, request)) = requests.single() else {
+    let Ok((session, request, pending_dock)) = requests.single() else {
         return;
     };
     let result = (|| {
         let definitions = definitions.get()?;
-        let viable_site = |site: &FossilRecoverySite, world: &WorldMember| {
-            definitions
-                .find_fossil_set(site.fossil_set_definition_identifier)
-                .is_some_and(|set| {
-                    set.pieces
-                        .iter()
-                        .any(|piece| !fossils.contains(world.root, *piece))
+        let (camera, world, camera_pose) =
+            cameras.single().map_err(|_| ModeEntryFailure::RuleDenied)?;
+        let subject = if let Some(subject) = request.subject {
+            sites
+                .get(subject)
+                .ok()
+                .filter(|(_, site, _)| site.root == world.root)
+                .map(|(entity, _, _)| entity)
+        } else {
+            sites
+                .iter()
+                .filter(|(_, site, _)| site.root == world.root)
+                .min_by(|(left, _, left_pose), (right, _, right_pose)| {
+                    left_pose
+                        .translation()
+                        .distance_squared(camera_pose.translation)
+                        .total_cmp(
+                            &right_pose
+                                .translation()
+                                .distance_squared(camera_pose.translation),
+                        )
+                        .then_with(|| left.to_bits().cmp(&right.to_bits()))
                 })
-        };
-        let searchable = request.subject.map_or_else(
-            || sites.iter().any(|(site, world)| viable_site(site, world)),
-            |subject| {
-                sites
-                    .get(subject)
-                    .is_ok_and(|(site, world)| viable_site(site, world))
-            },
-        );
-        if !searchable {
-            return Err(ModeEntryFailure::WrongSubject);
+                .map(|(entity, _, _)| entity)
         }
-        Admission::from_authored(definitions, ImmersiveMode::FossilSearch, camera(&cameras)?)
+        .ok_or(ModeEntryFailure::WrongSubject)?;
+        let mut admission =
+            Admission::from_authored(definitions, ImmersiveMode::FossilSearch, camera)?;
+        let handle = if let Some(pending) = pending_dock {
+            pending.0.clone()
+        } else {
+            definitions
+                .find_object(AssetId::from_key("digpit"))
+                .and_then(|pit| definitions.scene(pit.prefab))
+                .ok_or(ModeEntryFailure::MissingTool)?
+        };
+        let Some(prefab) = scenes.get(&handle) else {
+            if matches!(
+                server.load_state(handle.id()),
+                bevy::asset::LoadState::Failed(_)
+            ) {
+                return Err(ModeEntryFailure::MissingTool);
+            }
+            if pending_dock.is_none() {
+                output
+                    .commands
+                    .entity(session)
+                    .insert(PendingFossilSearchDock(handle));
+            }
+            return Ok(None);
+        };
+        let dock = prefab
+            .prefab_attachment_transform(fossil_finding_dock_id())
+            .ok_or(ModeEntryFailure::MissingTool)?;
+        admission.fossil_finding_dock = Some(Transform::from_matrix(dock));
+        Ok::<_, ModeEntryFailure>(Some((admission, subject)))
     })();
+    let (admission, subject) = match result {
+        Ok(None) => return,
+        Ok(Some((admission, subject))) => (Ok(admission), Some(subject)),
+        Err(reason) => (Err(reason), request.subject),
+    };
     commit_admitted_mode::<FossilSearchControl>(
         session,
         ImmersiveMode::FossilSearch,
-        request.subject,
-        result,
+        subject,
+        admission,
         &definitions,
         output,
     );

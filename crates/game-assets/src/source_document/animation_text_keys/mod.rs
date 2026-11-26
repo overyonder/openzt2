@@ -121,6 +121,9 @@ fn parse_command(command: &str) -> Option<AuthoredAnimationTextCommand> {
     let immediate = command.starts_with('!');
     let command = command.trim_start_matches('!').trim();
     let lower = command.to_ascii_lowercase();
+    if matches!(lower.split_ascii_whitespace().next(), Some("start" | "end")) {
+        return None;
+    }
     let rest = |prefix: &str| command.get(prefix.len()..).map(str::trim);
     let token = |value: &str| first_quoted_or_word(value).unwrap_or_default().to_owned();
     let option = |name: &str| option_f32(command, name);
@@ -258,15 +261,6 @@ fn parse_command(command: &str) -> Option<AuthoredAnimationTextCommand> {
         AuthoredAnimationTextAction::CreateObjectOverride {
             object_asset_key: token(rest("createoverride")?),
         }
-    } else if lower.starts_with("start ") {
-        let body = rest("start")?;
-        AuthoredAnimationTextAction::StartAlignedAnimation {
-            animation_graph_node_asset_key: flag(body, "-name")?.to_owned(),
-            authored_actor_range: flag(body, "-ar").unwrap_or_default().to_owned(),
-            authored_alignment_axes: flag(body, "-at").unwrap_or_default().to_owned(),
-            authored_front_axis: flag(body, "-front").unwrap_or_default().to_owned(),
-            playback_is_looped: body.split_ascii_whitespace().any(|part| part == "-loop"),
-        }
     } else if !command.chars().any(char::is_whitespace) {
         AuthoredAnimationTextAction::RequestAnimationGraphNode(command.to_owned())
     } else {
@@ -319,16 +313,6 @@ fn option_f32(command: &str, name: &str) -> Option<f32> {
             }
             None
         })
-}
-
-fn flag<'a>(command: &'a str, name: &str) -> Option<&'a str> {
-    let mut words = command.split_ascii_whitespace();
-    while let Some(word) = words.next() {
-        if word.eq_ignore_ascii_case(name) {
-            return words.next();
-        }
-    }
-    None
 }
 
 #[cfg(test)]

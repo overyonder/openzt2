@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_construction::construction::construction_transaction_preparation::SubmittedConstruction;
 
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::{
@@ -31,6 +32,71 @@ use super::{
 #[derive(Component, Clone, Copy)]
 pub(super) struct LiveAppliedTankGeometry(pub(super) Entity);
 
+#[derive(Component)]
+pub(super) struct SubmittedTankGeometry {
+    edit: TankGeometryEdit,
+    live: Option<LiveAppliedTankGeometry>,
+}
+
+pub(super) fn capture_submitted_tank_geometry(
+    submissions: Query<(Entity, &SubmittedConstruction), Added<SubmittedConstruction>>,
+    previews: Query<(
+        &TankGeometryEdit,
+        &TankGeometryGesture,
+        Option<&LiveAppliedTankGeometry>,
+    )>,
+    mut commands: Commands,
+) {
+    for (transaction, submission) in submissions {
+        let Ok((edit, gesture, live)) = previews.get(submission.source) else {
+            continue;
+        };
+        if !gesture.pending {
+            continue;
+        }
+        commands.entity(transaction).insert(SubmittedTankGeometry {
+            edit: edit.clone(),
+            live: live.copied(),
+        });
+        if live.is_some() {
+            commands
+                .entity(submission.source)
+                .remove::<LiveAppliedTankGeometry>();
+        }
+    }
+}
+
+pub(super) fn clear_submitted_tank_geometry(
+    submissions: Query<Entity, With<SubmittedTankGeometry>>,
+    mut commands: Commands,
+) {
+    for transaction in submissions {
+        commands
+            .entity(transaction)
+            .remove::<SubmittedTankGeometry>();
+    }
+}
+
+pub(super) fn restore_unprepared_tank_geometry(
+    discarded: On<Discard<SubmittedTankGeometry>>,
+    submissions: Query<&SubmittedTankGeometry, Without<TankGeometryEdit>>,
+    mut tanks: Query<&mut TankGeometry>,
+    boundaries: HabitatBoundaryQueries,
+    mut walls: Query<(&PersistentId, &mut TankWallTopHeight)>,
+) {
+    if let Ok(submission) = submissions.get(discarded.entity) {
+        if let Some(live) = submission.live {
+            restore_live_tank_geometry(
+                &submission.edit,
+                live.0,
+                &mut tanks,
+                &boundaries,
+                &mut walls,
+            );
+        }
+    }
+}
+
 pub(super) fn restore_uncommitted_tank_geometry(
     discarded: On<Discard<TankGeometryEdit>>,
     edits: Query<(&TankGeometryEdit, &LiveAppliedTankGeometry)>,
@@ -41,12 +107,22 @@ pub(super) fn restore_uncommitted_tank_geometry(
     let Ok((edit, live)) = edits.get(discarded.entity) else {
         return;
     };
-    if let Ok(mut geometry) = tanks.get_mut(live.0) {
+    restore_live_tank_geometry(edit, live.0, &mut tanks, &boundaries, &mut walls);
+}
+
+fn restore_live_tank_geometry(
+    edit: &TankGeometryEdit,
+    tank: Entity,
+    tanks: &mut Query<&mut TankGeometry>,
+    boundaries: &HabitatBoundaryQueries,
+    walls: &mut Query<(&PersistentId, &mut TankWallTopHeight)>,
+) {
+    if let Ok(mut geometry) = tanks.get_mut(tank) {
         if *geometry == edit.after {
             geometry.set_if_neq(edit.before);
         }
     }
-    for fence in boundaries.fences(live.0) {
+    for fence in boundaries.fences(tank) {
         let Ok((id, mut current)) = walls.get_mut(fence) else {
             continue;
         };
@@ -176,13 +252,7 @@ fn edit_after_is_reachable(
 pub(super) fn prepare_tank_geometry_construction_edits(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,
-    previews: Query<(
-        &TankGeometryEdit,
-        &TankGeometryGesture,
-        &WorldMember,
-        Option<&LiveAppliedTankGeometry>,
-    )>,
-    transactions: Query<&WorldMember>,
+    transactions: Query<(&SubmittedTankGeometry, &WorldMember)>,
     habitat_indexes: Query<&HabitatIndex>,
     tanks: Query<(
         &Tank,
@@ -200,16 +270,16 @@ pub(super) fn prepare_tank_geometry_construction_edits(
     ),
 ) {
     for request in requests.read() {
-        let Ok((edit, gesture, preview_member, live)) = previews.get(request.preview) else {
+        let Ok((submission, world)) = transactions.get(request.transaction) else {
             continue;
         };
-        let tank = transactions
-            .get(request.transaction)
+        let edit = &submission.edit;
+        let live = submission.live;
+        let tank = habitat_indexes
+            .get(world.root)
             .ok()
-            .filter(|member| member.root == preview_member.root && gesture.pending)
-            .and_then(|member| {
-                let habitat_index = habitat_indexes.get(member.root).ok()?;
-                resolve_edited_tank(edit, member.root, habitat_index, |habitat| {
+            .and_then(|habitat_index| {
+                resolve_edited_tank(edit, world.root, habitat_index, |habitat| {
                     let (tank, geometry, region, summary, member) = tanks.get(habitat).ok()?;
                     let expected = live.map_or(edit.before, |_| edit.after);
                     (*geometry == expected && region.area_square_metres == geometry.area).then(
@@ -241,9 +311,9 @@ pub(super) fn prepare_tank_geometry_construction_edits(
                                 tank,
                                 limits,
                                 |entity| {
-                                    let (_, geometry, adjacent, _, world) =
+                                    let (_, geometry, adjacent, _, adjacent_world) =
                                         tanks.get(entity).ok()?;
-                                    (world.root == preview_member.root
+                                    (adjacent_world.root == world.root
                                         && tank_habitat_seed_cell(adjacent) != Some(edit.seed_cell))
                                     .then_some(geometry.water_height)
                                 },
@@ -254,10 +324,7 @@ pub(super) fn prepare_tank_geometry_construction_edits(
         if valid {
             commands.entity(request.transaction).insert(edit.clone());
             if let Some(live) = live {
-                commands.entity(request.transaction).insert(*live);
-                commands
-                    .entity(request.preview)
-                    .remove::<LiveAppliedTankGeometry>();
+                commands.entity(request.transaction).insert(live);
             }
             prepared.write(TankGeometryEditPrepared {
                 transaction: request.transaction,
@@ -269,7 +336,7 @@ pub(super) fn prepare_tank_geometry_construction_edits(
                 reason: PlacementFailure::InvalidHabitat,
             });
         }
-        commands.entity(request.preview).despawn();
+        commands.entity(request.preview).try_despawn();
     }
 }
 
@@ -362,7 +429,7 @@ pub(super) fn apply_tank_geometry_construction_edits(
                                 *tank,
                                 limits,
                                 |entity| {
-                                    let (_, geometry, adjacent, _, world) =
+                                    let (_, geometry, adjacent, _, adjacent_world) =
                                         tanks.get(entity).ok()?;
                                     (world.root == member.root
                                         && tank_habitat_seed_cell(adjacent) != Some(edit.seed_cell))

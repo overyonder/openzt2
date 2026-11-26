@@ -1,7 +1,4 @@
-use std::{
-    cell::{Cell, RefCell},
-    collections::BTreeMap,
-};
+use std::{cell::RefCell, collections::BTreeMap};
 
 use bevy::ecs::{entity::EntityHashSet, relationship::RelationshipTarget, system::SystemParam};
 use bevy::prelude::*;
@@ -161,7 +158,7 @@ pub(super) struct ScenarioRuleQueries<'w, 's> {
         ),
     >,
     groups: Query<'w, 's, &'static mut ScenarioObjectiveGroup>,
-    roots: Query<'w, 's, (), With<ScenarioRootGroup>>,
+    roots: Query<'w, 's, &'static ScenarioRootGroup>,
     children: Query<'w, 's, &'static ScenarioGroupChildren>,
     parents: Query<'w, 's, &'static ScenarioGroupChildOf>,
     dependents: Query<'w, 's, &'static ScenarioObjectiveDependents>,
@@ -250,27 +247,9 @@ impl ScenarioRuleQueries<'_, '_> {
     }
 
     fn runs_when_paused(&self, entity: Entity, scenario: &ScenarioInvocation) -> bool {
-        if let Ok((objective, ..)) = self.objectives.as_readonly().get(entity) {
-            return scenario
-                .definition
-                .objectives
-                .get(objective.record_index as usize)
-                .is_some_and(|node| node.update_when_paused);
-        }
         self.node(entity, scenario.definition)
-            .is_some_and(|(id, _)| {
-                scenario
-                    .asset
-                    .authored
-                    .scenario_nodes
-                    .get(&id)
-                    .is_some_and(|policy| policy.update_when_paused)
-            })
-            || self.children.get(entity).is_ok_and(|children| {
-                children
-                    .iter()
-                    .any(|child| self.runs_when_paused(child, scenario))
-            })
+            .and_then(|(id, _)| scenario.asset.authored.scenario_nodes.get(&id))
+            .is_some_and(|policy| policy.update_when_paused)
     }
 
     fn reduce(
@@ -279,7 +258,7 @@ impl ScenarioRuleQueries<'_, '_> {
         scenario: &ScenarioInvocation,
     ) -> Option<(AssetId, ScenarioObjectiveStatus)> {
         let (id, prior) = self.node(entity, scenario.definition)?;
-        if scenario.sticky(id, prior, false) {
+        if scenario.sticky(id, prior) {
             return None;
         }
         let groups = self.groups.as_readonly();
@@ -314,14 +293,11 @@ impl ScenarioRuleQueries<'_, '_> {
         changed: &mut MessageWriter<ScenarioObjectiveStatusChanged>,
         finished: &mut MessageWriter<EvaluatedScenarioTerminal>,
     ) {
-        if paused && !self.runs_when_paused(entity, scenario) {
-            return;
-        }
         let Some((id, current)) = self.node(entity, scenario.definition) else {
             return;
         };
         if self.groups.as_readonly().contains(entity) {
-            if scenario.sticky(id, current, false) {
+            if scenario.sticky(id, current) {
                 return;
             }
             let chain = scenario
@@ -361,7 +337,7 @@ impl ScenarioRuleQueries<'_, '_> {
         let Ok((_, mut status, progress, _)) = self.objectives.get_mut(entity) else {
             return;
         };
-        if *status == ScenarioObjectiveStatus::Inactive || scenario.sticky(id, *status, true) {
+        if *status == ScenarioObjectiveStatus::Inactive || scenario.sticky(id, *status) {
             return;
         }
         let Some(next) = scripts.invoke(scenario, entity, id, ScenarioScriptPhase::Evaluate, facts)
@@ -395,17 +371,14 @@ struct ScenarioInvocation<'a> {
 }
 
 impl ScenarioInvocation<'_> {
-    fn sticky(&self, id: AssetId, status: ScenarioObjectiveStatus, default: bool) -> bool {
-        matches!(
-            status,
-            ScenarioObjectiveStatus::Satisfied | ScenarioObjectiveStatus::Failed
-        ) && self
-            .asset
-            .authored
-            .scenario_nodes
-            .get(&id)
-            .and_then(|policy| policy.sticky)
-            .unwrap_or(default)
+    fn sticky(&self, id: AssetId, status: ScenarioObjectiveStatus) -> bool {
+        status != ScenarioObjectiveStatus::Active
+            && self
+                .asset
+                .authored
+                .scenario_nodes
+                .get(&id)
+                .is_some_and(|policy| policy.sticky == Some(true))
     }
 }
 
@@ -539,17 +512,23 @@ pub(super) fn evaluate_due_scenario_rules(
     let spawning = RefCell::new(spawning);
     let contained = |entity| fact_sources.contained_entities(entity);
     let waste = |entity, value| direct.borrow_mut().waste(entity, value);
+    let photo_set = |world, set| direct.borrow_mut().current_photo_set(world, set);
+    let economy = |world, operation| direct.borrow_mut().economy(world, operation);
     let profile = |key, value: Option<Option<&str>>| direct.borrow_mut().profile(key, value);
+    let world_variable = |root, key, value: Option<Option<&str>>| {
+        direct.borrow_mut().world_variable(root, key, value)
+    };
     let spawn_animal = |kind, position, rotation, reserved: &[_]| {
         spawning
             .borrow_mut()
             .resolve(kind, position, rotation, reserved)
     };
     let mut facts = fact_sources.borrow_scenario_lua_query_facts(&contained);
-    let selected_photo_set = Cell::new(None);
-    facts.selected_photo_set = Some(&selected_photo_set);
     facts.waste = Some(&waste);
+    facts.photo_set = Some(&photo_set);
+    facts.economy = Some(&economy);
     facts.profile = Some(&profile);
+    facts.world_variable = Some(&world_variable);
     facts.spawn_animal = Some(&spawn_animal);
     let mut always_run = Vec::new();
     for due in due.read() {
@@ -565,18 +544,28 @@ pub(super) fn evaluate_due_scenario_rules(
         let Ok((leaves, groups)) = rules.owner_rules.get(due.owner) else {
             continue;
         };
-        let roots = if let Some(groups) = groups {
-            groups
-                .iter()
-                .filter(|entity| rules.roots.contains(*entity))
-                .collect::<Vec<_>>()
+        let branches = groups.into_iter().flat_map(|groups| groups.iter());
+        let leaves_in_order = || leaves.into_iter().flat_map(|leaves| leaves.iter());
+        let mut ordered = branches
+            .chain(leaves_in_order())
+            .filter_map(|root| rules.roots.get(root).ok().map(|order| (order.0, root)))
+            .collect::<Vec<_>>();
+        ordered.sort_unstable_by_key(|&(order, _)| order);
+        let roots = if ordered.is_empty() && groups.is_none() {
+            leaves_in_order().collect()
         } else {
-            leaves
+            ordered
                 .into_iter()
-                .flat_map(|leaves| leaves.iter())
-                .collect()
+                .map(|(_, root)| root)
+                .collect::<Vec<_>>()
         };
         for root in roots {
+            if simulation.0
+                && !rules.groups.contains(root)
+                && !rules.runs_when_paused(root, &scenario)
+            {
+                continue;
+            }
             rules.evaluate(
                 root,
                 &scenario,
@@ -621,17 +610,23 @@ pub(super) fn resolve_external_scenario_rule_transitions(
     let spawning = RefCell::new(spawning);
     let contained = |entity| fact_sources.contained_entities(entity);
     let waste = |entity, value| direct.borrow_mut().waste(entity, value);
+    let photo_set = |world, set| direct.borrow_mut().current_photo_set(world, set);
+    let economy = |world, operation| direct.borrow_mut().economy(world, operation);
     let profile = |key, value: Option<Option<&str>>| direct.borrow_mut().profile(key, value);
+    let world_variable = |root, key, value: Option<Option<&str>>| {
+        direct.borrow_mut().world_variable(root, key, value)
+    };
     let spawn_animal = |kind, position, rotation, reserved: &[_]| {
         spawning
             .borrow_mut()
             .resolve(kind, position, rotation, reserved)
     };
     let mut facts = fact_sources.borrow_scenario_lua_query_facts(&contained);
-    let selected_photo_set = Cell::new(None);
-    facts.selected_photo_set = Some(&selected_photo_set);
     facts.waste = Some(&waste);
+    facts.photo_set = Some(&photo_set);
+    facts.economy = Some(&economy);
     facts.profile = Some(&profile);
+    facts.world_variable = Some(&world_variable);
     facts.spawn_animal = Some(&spawn_animal);
     for event in changed.read() {
         if evaluated.contains(&event.objective) {

@@ -233,9 +233,31 @@ pub(super) fn tick_authored_particle_emitters(
 
         let start = timing.elapsed.elapsed_secs();
         let end = timing.elapsed.tick(delta).elapsed_secs();
-        let (within_window, mut emission_closed) = settings
-            .emission_window
-            .map_or((true, false), |window| window.sample(end));
+        let (within_window, mut emission_closed) =
+            settings.emission_window.map_or((true, false), |window| {
+                match settings.controller_clock {
+                    None => window.sample(end),
+                    Some(clock) => {
+                        if clock.flags & 8 == 0 {
+                            return (false, true);
+                        }
+                        let elapsed = if clock.flags & 1 != 0 {
+                            end
+                        } else {
+                            presentation_time.elapsed_secs()
+                        };
+                        let sampled =
+                            crate::scene_prefab::transform_animation_lowering::controller_time(
+                                clock, elapsed,
+                            );
+                        let clamped = (clock.flags >> 1) & 3 >= 2;
+                        let passed = clamped
+                            && ((clock.frequency > 0.0 && sampled > window.stop)
+                                || (clock.frequency < 0.0 && sampled < window.start));
+                        ((window.start..=window.stop).contains(&sampled), passed)
+                    }
+                }
+            });
         let active = !settings.manually_driven && within_window;
         if spawner.active != active {
             spawner.active = active;

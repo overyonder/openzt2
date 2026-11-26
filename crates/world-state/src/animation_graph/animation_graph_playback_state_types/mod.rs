@@ -19,7 +19,7 @@ impl Default for AnimationGraphEnabled {
 pub struct AnimationGraphPlaybackState {
     pub current_animation_graph_node_index: u32,
     pub active_animation_graph_transition: Option<AnimationGraphTransition>,
-    pub active_animation_graph_blend: Option<AnimationGraphBlend>,
+    pub requested_blend_duration_milliseconds: Option<u32>,
 
     pub remaining_transition_steps: std::collections::VecDeque<AnimationGraphRouteStep>,
     pub route_owner: Option<AnimationGraphRouteOwner>,
@@ -48,29 +48,18 @@ pub struct AnimationGraphRouteOwner {
 
 impl AnimationGraphPlaybackState {
     pub fn active_blend_duration_milliseconds(&self) -> Option<u32> {
-        self.active_animation_graph_blend
-            .as_ref()
-            .map(|blend| blend.timer.duration().as_millis().min(u128::from(u32::MAX)) as u32)
+        self.requested_blend_duration_milliseconds
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct AnimationGraphTransition {
     pub target_animation_graph_node_index: u32,
+    pub chain_cursor: Option<AnimationGraphChainCursor>,
 }
 
-#[derive(Clone, Debug)]
-pub struct AnimationGraphBlend {
-    pub timer: Timer,
-}
-
-impl AnimationGraphBlend {
-    pub fn from_duration_milliseconds(milliseconds: u32) -> Option<Self> {
-        (milliseconds != 0).then(|| Self {
-            timer: Timer::new(
-                std::time::Duration::from_millis(u64::from(milliseconds)),
-                TimerMode::Once,
-            ),
-        })
-    }
+#[derive(Clone, Copy, Debug)]
+pub struct AnimationGraphChainCursor {
+    pub edge_index: usize,
+    pub next_clip: usize,
 }

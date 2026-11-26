@@ -6,8 +6,10 @@ use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, Worl
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
+use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_interface_state::information::zoo_message_types::{ZooMessage, ZooMessages};
 use openzt2_zoo_state::animal_behavior::behavior_birth_notice_types::BehaviorBirthNotice;
+use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 
 use super::ui_document_asset_load_failure::UiDocumentAssetLoadFailed;
 
@@ -269,5 +271,226 @@ pub(super) fn discard_notification_without_projected_alert(
 ) {
     if let Ok(alert) = alerts.get(removal.entity) {
         commands.entity(alert.owner).try_despawn();
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct UiGuestThoughtList;
+
+type UiDocumentAsset =
+    openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+
+#[derive(Component)]
+pub(super) struct UiGuestThoughtFragments([Handle<UiDocumentAsset>; 4]);
+
+pub(super) fn load_authored_guest_thought_fragments(
+    mut commands: Commands,
+    server: Res<AssetServer>,
+    lists: Query<Entity, (With<UiGuestThoughtList>, Without<UiGuestThoughtFragments>)>,
+) {
+    for list in &lists {
+        let fragments = [
+            "ui/layout/guestthoughtitembad.xml",
+            "ui/layout/guestthoughtitemnormal.xml",
+            "ui/layout/guestthoughtitemgood.xml",
+            "ui/layout/guestthoughtitemgreat.xml",
+        ]
+        .map(|path| server.load(path));
+        commands
+            .entity(list)
+            .insert(UiGuestThoughtFragments(fragments));
+    }
+}
+
+#[derive(Component)]
+pub(super) struct UiGuestThoughtRow(Entity, usize);
+
+#[derive(Component)]
+pub(super) struct InitialGuestThoughtText(String);
+
+pub(super) fn initialize_authored_guest_thought_text(
+    mut commands: Commands,
+    mut pending: Query<(Entity, &InitialGuestThoughtText, &mut Text)>,
+) {
+    for (entity, initial, mut text) in &mut pending {
+        text.map_unchanged(|text| &mut text.0)
+            .clone_from_if_neq(initial.0.as_str());
+        commands.entity(entity).remove::<InitialGuestThoughtText>();
+    }
+}
+
+pub(super) fn project_selected_guest_thoughts(
+    mut commands: Commands,
+    lists: Query<(
+        Entity,
+        Ref<UiGuestThoughtFragments>,
+        Ref<InheritedVisibility>,
+        Option<&Children>,
+    )>,
+    selection: Query<
+        Ref<openzt2_interface_state::information::entity_selection_types::SelectedSubject>,
+        With<openzt2_interface_state::ui::ui_document_lifecycle_contracts::InGameUiOwner>,
+    >,
+    mut deselected: RemovedComponents<
+        openzt2_interface_state::information::entity_selection_types::SelectedSubject,
+    >,
+    guest_children: Query<
+        Ref<Children>,
+        With<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
+    >,
+    thoughts: Query<
+        Ref<openzt2_zoo_state::behavior_task_execution_types::running_actions::AuthoredViewThought>,
+    >,
+    names: Query<(Option<Ref<Name>>, Option<Ref<SpeciesHandle>>)>,
+    (species_index, species_assets): (Res<SpeciesAssets>, Res<Assets<SpeciesAsset>>),
+    rows: Query<&UiGuestThoughtRow>,
+    assets: Res<Assets<UiDocumentAsset>>,
+    index: Res<LocalizationPrecedenceIndex>,
+    locales: Res<Assets<LocalizationAsset>>,
+    children: Query<&Children>,
+    mut text: Query<&mut Text>,
+) {
+    let removed = deselected.read().count() != 0;
+    let selected = selection.single().ok();
+    let guest = selected
+        .as_ref()
+        .and_then(|selection| guest_children.get(selection.0).ok());
+    let Some(localization) = index.borrow_loaded_localization_view(&locales) else {
+        return;
+    };
+    let history = guest
+        .as_ref()
+        .into_iter()
+        .flat_map(|children| children.iter())
+        .filter_map(|entity| Some((entity, thoughts.get(entity).ok()?)))
+        .collect::<Vec<_>>();
+    let species = species_index.get(&species_assets);
+
+    let changed = removed
+        || index.is_changed()
+        || locales.is_changed()
+        || species_index.is_changed()
+        || species_assets.is_changed()
+        || selected.as_ref().is_some_and(DetectChanges::is_changed)
+        || guest.as_ref().is_some_and(DetectChanges::is_changed)
+        || history.iter().any(|(_, thought)| {
+            thought.is_changed()
+                || thought.arguments.iter().flatten().any(|&argument| {
+                    names.get(argument).is_ok_and(|(name, species)| {
+                        name.is_some_and(|name| name.is_changed())
+                            || species.is_some_and(|species| species.is_changed())
+                    })
+                })
+        });
+    for (list, fragments, visibility, children_of_list) in &lists {
+        if !visibility.get() {
+            continue;
+        }
+        if !changed
+            && !fragments.is_added()
+            && !visibility.is_changed()
+            && !assets.is_changed()
+            && guest.is_some()
+        {
+            continue;
+        }
+        let mut existing = children_of_list
+            .into_iter()
+            .flat_map(|children| children.iter())
+            .filter_map(|child| Some((child, rows.get(child).ok()?)))
+            .collect::<Vec<_>>();
+        let mut order = Vec::new();
+        for (entity, thought) in &history {
+            let priority = match thought.priority {
+                -1 => 0,
+                1 => 2,
+                2 => 3,
+                _ => 1,
+            };
+            let handle = &fragments.0[priority];
+            let Some(fragment) = assets.get(handle) else {
+                continue;
+            };
+            let arguments = thought
+                .arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(slot, &argument)| {
+                    let argument = argument?;
+                    let name = names
+                        .get(argument)
+                        .ok()
+                        .and_then(|(name, subject_species)| {
+                            if slot == 4 {
+                                let subject_species = species?.find(subject_species?.species)?;
+                                localization.find_plain_localized_text(subject_species.name_key)
+                            } else {
+                                name.map(|name| name.into_inner().as_str())
+                            }
+                        });
+                    Some(LocalizationFormatArgument::Text(name.unwrap_or_default()))
+                })
+                .collect::<Vec<_>>();
+            let mut value = String::new();
+            if localization
+                .write_localized_text_with_format_arguments(
+                    thought.localization_key,
+                    &arguments,
+                    &mut value,
+                )
+                .is_err()
+            {
+                continue;
+            }
+            let child = if let Some(index) = existing
+                .iter()
+                .position(|(_, row)| row.0 == *entity && row.1 == priority)
+            {
+                let (child, _) = existing.swap_remove(index);
+                for node in
+                    std::iter::once(child).chain(children.iter_descendants::<Children>(child))
+                {
+                    if let Ok(mut text) = text.get_mut(node) {
+                        text.map_unchanged(|text| &mut text.0)
+                            .clone_from_if_neq(value.as_str());
+                        break;
+                    }
+                }
+                child
+            } else {
+                let (root, nodes) = super::projection::authored_document_projection::project_document_on_entity_with_nodes(
+                    &mut commands,
+                    &openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiDocument { document: handle.clone(), owner: list },
+                    fragment, localization, None, false, None,
+                );
+                commands
+                    .entity(root)
+                    .insert(UiGuestThoughtRow(*entity, priority));
+                let text_node = fragment
+                    .canonical_ui_document()
+                    .nodes
+                    .iter()
+                    .position(|node| {
+                        node.kind == openzt2_game_data::ui_document::node::UiNodeKind::Text
+                    });
+                if let Some(node) = text_node.and_then(|index| nodes.get(index)) {
+                    commands
+                        .entity(*node)
+                        .insert(InitialGuestThoughtText(value));
+                }
+                root
+            };
+            order.push(child);
+        }
+        for (child, _) in existing {
+            commands.entity(child).try_despawn();
+        }
+        let current = children_of_list
+            .into_iter()
+            .flat_map(|children| children.iter())
+            .filter(|&child| rows.contains(child));
+        if !order.iter().copied().eq(current) {
+            commands.entity(list).insert_children(0, &order);
+        }
     }
 }

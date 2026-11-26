@@ -8,6 +8,7 @@ use openzt2_game_assets::{
     lua_script::{
         lua_script_asset_loading::LuaScriptAsset,
         lua_script_module_execution::{
+            execute_lua_script_module_once_per_virtual_machine,
             install_lua_script_dependency_loading_functions, restore_lua_script_module,
         },
         lua_script_sources::LuaScriptSources,
@@ -184,6 +185,7 @@ fn prepare_runtime(
     scripts: &Assets<LuaScriptAsset>,
     index: &LuaScriptSources,
     replace_initialized_globals: bool,
+    retained: Option<&WorldScenarioDocumentAsset>,
 ) -> mlua::Result<ScenarioLuaVirtualMachine> {
     let lua = Lua::new();
     let loaded = RefCell::new(BTreeSet::new());
@@ -195,8 +197,32 @@ fn prepare_runtime(
         install_lua_script_dependency_loading_functions(
             &lua, scope, scripts, index, &loaded, &stack,
         )?;
+        let mut retained_modules = std::collections::BTreeMap::new();
+        if let Some(document) = retained {
+            for binding in &document.document.scenario_script_bindings {
+                if let Some((path, handle)) = document.script(binding) {
+                    retained_modules
+                        .entry(openzt2_game_data::AssetId::from_virtual_path(path))
+                        .or_insert((path, handle));
+                }
+            }
+            for binding in &document.document.photo_challenge_script_bindings {
+                if let Some((path, handle)) = document.photo_script(binding) {
+                    retained_modules
+                        .entry(openzt2_game_data::AssetId::from_virtual_path(path))
+                        .or_insert((path, handle));
+                }
+            }
+        }
         for module in &saved.modules {
-            restore_lua_script_module(&lua, module, scripts, index, &loaded, &stack)?;
+            let id = openzt2_game_data::AssetId::from_virtual_path(module);
+            if let Some(&(path, handle)) = retained_modules.get(&id) {
+                execute_lua_script_module_once_per_virtual_machine(
+                    &lua, path, handle, scripts, &loaded, &stack,
+                )?;
+            } else {
+                restore_lua_script_module(&lua, module, scripts, index, &loaded, &stack)?;
+            }
         }
         Ok(())
     })?;
@@ -254,7 +280,7 @@ pub(crate) fn normalize_original_saved_scenario_lua_state(
     scripts: &Assets<LuaScriptAsset>,
     index: &LuaScriptSources,
 ) -> mlua::Result<ScenarioLuaSavedState> {
-    let runtime = prepare_runtime(saved_arguments, document, scripts, index, false)?;
+    let runtime = prepare_runtime(saved_arguments, document, scripts, index, false, None)?;
     capture_runtime(&runtime)
 }
 
@@ -268,8 +294,10 @@ impl ScenarioLuaContext {
         document: bevy::asset::AssetId<WorldScenarioDocumentAsset>,
         scripts: &Assets<LuaScriptAsset>,
         index: &LuaScriptSources,
+        retained: &WorldScenarioDocumentAsset,
     ) -> mlua::Result<Self> {
-        prepare_runtime(saved, document, scripts, index, true).map(|vm| Self(Some(vm)))
+        prepare_runtime(saved, document, scripts, index, true, Some(retained))
+            .map(|vm| Self(Some(vm)))
     }
 }
 

@@ -9,6 +9,8 @@ use super::super::{
 };
 use super::photo_snapshot_types::{PhotoChallengeProgressSnapshotRecord, PhotoSnapshotRecord};
 
+const PHOTO_CAPTION_PRESENT: u8 = 1 << 7;
+const CHALLENGE_HALF_STARS: u8 = 1 << 6;
 const PHOTO_TAG: u8 = 1;
 const PHOTO_CHALLENGE_TAG: u8 = 2;
 const CHALLENGE_COMPLETED_WITHOUT_ALBUM_PHOTO: u8 = 1 << 7;
@@ -19,7 +21,14 @@ pub(super) fn append_encoded_photo_snapshot_section(
     challenges: &[PhotoChallengeProgressSnapshotRecord],
 ) {
     for photo in photos {
-        bytes.push(PHOTO_TAG);
+        bytes.push(
+            PHOTO_TAG
+                | if photo.caption.is_some() {
+                    PHOTO_CAPTION_PRESENT
+                } else {
+                    0
+                },
+        );
         bytes.extend_from_slice(&photo.persistent_identifier.0.to_le_bytes());
         bytes.extend_from_slice(&photo.album_persistent_identifier.0.to_le_bytes());
         bytes.extend_from_slice(&photo.album_order.to_le_bytes());
@@ -42,6 +51,10 @@ pub(super) fn append_encoded_photo_snapshot_section(
             .challenge_photo_file_identifiers
             .iter()
             .for_each(|id| bytes.extend_from_slice(&id.0));
+        if let Some(caption) = &photo.caption {
+            bytes.extend_from_slice(&(caption.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(caption.as_bytes());
+        }
     }
     for challenge in challenges {
         bytes.push(PHOTO_CHALLENGE_TAG);
@@ -53,7 +66,11 @@ pub(super) fn append_encoded_photo_snapshot_section(
                 .0
                 .to_le_bytes(),
         );
-        let mut rating = challenge.rating_stars;
+        let mut rating = if challenge.rating_half_stars % 2 == 0 {
+            challenge.rating_half_stars / 2
+        } else {
+            challenge.rating_half_stars | CHALLENGE_HALF_STARS
+        };
         if challenge.completed && challenge.completed_by_photo_persistent_identifier.is_none() {
             rating |= CHALLENGE_COMPLETED_WITHOUT_ALBUM_PHOTO;
         }
@@ -77,10 +94,12 @@ pub(super) fn decode_and_validate_photo_snapshot_section(
     let mut challenges = Vec::new();
     let mut last_tag = PHOTO_TAG;
     for _ in 0..range.encoded_record_count {
-        let tag = *payload
+        let encoded_tag = *payload
             .get(cursor)
             .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
-        if tag < last_tag {
+        let tag = encoded_tag & !PHOTO_CAPTION_PRESENT;
+        let has_caption = encoded_tag != tag;
+        if tag < last_tag || (has_caption && tag != PHOTO_TAG) {
             return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
         }
         last_tag = tag;
@@ -136,6 +155,26 @@ pub(super) fn decode_and_validate_photo_snapshot_section(
                 })
                 .collect::<Vec<_>>();
             cursor += count.saturating_mul(16);
+            let caption = if has_caption {
+                let length = u32::from_le_bytes(
+                    payload
+                        .get(cursor..cursor.saturating_add(4))
+                        .and_then(|bytes| bytes.try_into().ok())
+                        .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?,
+                ) as usize;
+                cursor += 4;
+                let caption = payload
+                    .get(cursor..cursor.saturating_add(length))
+                    .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
+                cursor += length;
+                Some(
+                    std::str::from_utf8(caption)
+                        .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?
+                        .to_owned(),
+                )
+            } else {
+                None
+            };
             let expected = width
                 .checked_mul(height)
                 .and_then(|n| n.checked_mul(4))
@@ -165,6 +204,7 @@ pub(super) fn decode_and_validate_photo_snapshot_section(
                 image_width_pixels: width,
                 image_height_pixels: height,
                 rgba8_pixel_bytes: pixels,
+                caption,
                 challenge_photo_file_identifiers: challenge_files,
             });
         } else if tag == PHOTO_CHALLENGE_TAG {
@@ -180,9 +220,15 @@ pub(super) fn decode_and_validate_photo_snapshot_section(
                 record[16..24].try_into().unwrap_or([0; 8]),
             ));
             let completed_without_photo = record[24] & CHALLENGE_COMPLETED_WITHOUT_ALBUM_PHOTO != 0;
-            let rating_stars = record[24] & !CHALLENGE_COMPLETED_WITHOUT_ALBUM_PHOTO;
+            let rating =
+                record[24] & !(CHALLENGE_COMPLETED_WITHOUT_ALBUM_PHOTO | CHALLENGE_HALF_STARS);
+            let rating_half_stars = if record[24] & CHALLENGE_HALF_STARS == 0 {
+                rating * 2
+            } else {
+                rating
+            };
             cursor += 25;
-            if rating_stars > 5
+            if rating_half_stars > 10
                 || (completed_without_photo && completed.0 != 0)
                 || challenges
                     .last()
@@ -196,7 +242,7 @@ pub(super) fn decode_and_validate_photo_snapshot_section(
                 challenge_definition_identifier,
                 completed: completed.0 != 0 || completed_without_photo,
                 completed_by_photo_persistent_identifier: (completed.0 != 0).then_some(completed),
-                rating_stars,
+                rating_half_stars,
             });
         } else {
             return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);

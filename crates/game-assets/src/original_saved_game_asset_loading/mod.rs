@@ -16,10 +16,10 @@ use crate::{
     },
 };
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext, LoadedAsset},
+    asset::{AssetLoader, LoadContext, LoadedAsset, io::Reader},
     prelude::*,
 };
-use std::io;
+use std::{collections::BTreeMap, io};
 
 #[derive(Asset, TypePath, Debug)]
 pub struct OriginalSavedGameAsset {
@@ -31,6 +31,13 @@ pub struct OriginalSavedGameAsset {
     #[dependency]
     pub economy: Handle<crate::world_definitions::world_definition_asset_set_refresh_and_indexing::saved_world_economy_asset::SavedWorldEconomyAsset>,
     pub unlimited_cash: bool,
+    saved_entity_handles: BTreeMap<u32, u64>,
+}
+
+impl OriginalSavedGameAsset {
+    pub fn persistent_id_for_saved_handle(&self, handle: u32) -> Option<u64> {
+        self.saved_entity_handles.get(&handle).copied()
+    }
 }
 
 #[derive(TypePath)]
@@ -129,11 +136,17 @@ impl AssetLoader for OriginalSavedGameAssetLoader {
                     "saved BFGManager topLevelGlobalID is not a nonzero u64",
                 )
             })?;
-        starting_zoos[0].next_persistent_identifier = Some(next);
+        starting_zoos[0].next_persistent_identifier = Some(
+            starting_zoos[0]
+                .next_persistent_identifier
+                .unwrap_or(next)
+                .max(next),
+        );
         starting_zoos[0].id = map.starting_zoo;
         starting_zoos[0].map = map.id;
         source.document.starting_zoos = starting_zoos;
         source.scenes = starting.scenes;
+        let saved_entity_handles = starting.authored.original_saved_entity_handles;
         source.authored.former_fence_types = starting
             .authored
             .former_fence_types
@@ -142,7 +155,7 @@ impl AssetLoader for OriginalSavedGameAssetLoader {
             .collect();
         let (configuration, authored, unlimited_cash, economy) =
             load_saved_world_configuration(&document, map.id, &self.archives, context).await?;
-        source.authored.scenario_nodes = authored.scenario_nodes;
+        source.authored.merge(authored)?;
         source.document.scenarios = configuration.scenarios;
         source.document.scenario_script_bindings = configuration.scenario_script_bindings;
         let terrain = context.load::<TerrainAsset>(path);
@@ -157,6 +170,7 @@ impl AssetLoader for OriginalSavedGameAssetLoader {
             terrain,
             economy,
             unlimited_cash,
+            saved_entity_handles,
         })
     }
 

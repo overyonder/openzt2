@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 use bevy::{ecs::system::SystemParam, prelude::*};
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_data::AssetId;
 use openzt2_interface_state::camera::camera_control_message_types::SetCameraMode;
@@ -47,12 +48,19 @@ pub(in crate::immersive_modes) struct PendingMode<M: Component> {
 }
 
 #[derive(Component)]
-#[relationship(relationship_target = OwnedImmersiveAvatars)]
-struct OwnedImmersiveAvatar(Entity);
+#[relationship(relationship_target = OwnedImmersiveEntities)]
+struct OwnedImmersiveEntity(Entity);
 
 #[derive(Component)]
-#[relationship_target(relationship = OwnedImmersiveAvatar, linked_spawn)]
-struct OwnedImmersiveAvatars(Vec<Entity>);
+#[relationship_target(relationship = OwnedImmersiveEntity, linked_spawn)]
+struct OwnedImmersiveEntities(Vec<Entity>);
+
+#[derive(Component)]
+pub(super) struct PendingFossilSearchDock(Handle<ScenePrefabAsset>);
+
+fn fossil_finding_dock_id() -> AssetId {
+    AssetId::from_key("dock_fossilfinding")
+}
 
 struct StaffAvatar {
     transform: Transform,
@@ -67,6 +75,7 @@ struct Admission {
     lock_subject: bool,
     initial_angles: Option<FirstPersonViewAngles>,
     avatar: Option<StaffAvatar>,
+    fossil_finding_dock: Option<Transform>,
 }
 
 impl Admission {
@@ -93,6 +102,7 @@ impl Admission {
             )
             .then(|| calculate_initial_first_person_view_angles(definitions, definition)),
             avatar: None,
+            fossil_finding_dock: None,
         })
     }
 }
@@ -121,6 +131,8 @@ pub(super) fn reserve_mode(commands: &mut Commands, request: EnterImmersiveMode)
 #[derive(SystemParam)]
 pub(in crate::immersive_modes) struct ModeAdmission<'w, 's> {
     commands: Commands<'w, 's>,
+    locomotion: Query<'w, 's, &'static mut DirectLocomotion>,
+    locomotion_tuning: Query<'w, 's, &'static mut FirstPersonLocomotionTuning>,
     camera_requests: MessageWriter<'w, SetCameraMode>,
     entered: MessageWriter<'w, ImmersiveModeEntered>,
     rejected: MessageWriter<'w, ImmersiveModeRejected>,
@@ -137,6 +149,8 @@ fn commit_admitted_mode<M: Component + Default>(
     let ModeAdmission {
         mut commands,
         mut camera_requests,
+        mut locomotion,
+        mut locomotion_tuning,
         mut entered,
         mut rejected,
     } = output;
@@ -156,7 +170,7 @@ fn commit_admitted_mode<M: Component + Default>(
                     avatar.transform,
                     GlobalTransform::from(avatar.transform),
                     avatar.world,
-                    OwnedImmersiveAvatar(session),
+                    OwnedImmersiveEntity(session),
                 ))
                 .id(),
         );
@@ -213,12 +227,20 @@ fn commit_admitted_mode<M: Component + Default>(
                 controller: session,
             },));
             if mode != ImmersiveMode::SuperStaff {
-                commands.entity(subject).insert(DirectLocomotion::default());
+                if let Ok(mut current) = locomotion.get_mut(subject) {
+                    current.set_if_neq(DirectLocomotion::default());
+                } else {
+                    commands.entity(subject).insert(DirectLocomotion::default());
+                }
             }
             if mode == ImmersiveMode::FirstPerson {
-                commands
-                    .entity(subject)
-                    .insert(FirstPersonLocomotionTuning::default());
+                if let Ok(mut current) = locomotion_tuning.get_mut(subject) {
+                    current.set_if_neq(FirstPersonLocomotionTuning::default());
+                } else {
+                    commands
+                        .entity(subject)
+                        .insert(FirstPersonLocomotionTuning::default());
+                }
             }
         }
     }
@@ -227,6 +249,18 @@ fn commit_admitted_mode<M: Component + Default>(
     }
     if let Ok(definitions) = definitions.get() {
         attach_authored_immersive_mode_consumer_policies(definitions, mode, session, &mut commands);
+    }
+    if let Some(dock) = admission.fossil_finding_dock {
+        commands.entity(session).remove::<PendingFossilSearchDock>();
+        commands.spawn((
+            openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier(
+                fossil_finding_dock_id(),
+            ),
+            dock,
+            Visibility::Inherited,
+            ChildOf(admission.camera),
+            OwnedImmersiveEntity(session),
+        ));
     }
     camera_requests.write(SetCameraMode {
         mode: camera_mode,

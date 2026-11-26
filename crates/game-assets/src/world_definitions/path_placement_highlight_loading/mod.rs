@@ -1,7 +1,7 @@
 use std::io;
 
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 
@@ -50,7 +50,7 @@ impl AssetLoader for PathPlacementHighlightLoader {
                     "path highlight curve has no texture",
                 )
             })?;
-            let requirements = |name: &str| -> io::Result<Vec<[i32; 3]>> {
+            let requirements = |name: &str, cardinal: bool| -> io::Result<Vec<[i32; 3]>> {
                 curve
                     .element_children()
                     .filter(|node| node.name == name)
@@ -68,10 +68,10 @@ impl AssetLoader for PathPlacementHighlightLoader {
                                 })
                         };
                         let direction = value("dir")?;
-                        if !matches!(direction, 0 | 2 | 4 | 6) {
+                        if !(0..8).contains(&direction) || (cardinal && direction % 2 != 0) {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidData,
-                                "path highlight requirement is not cardinal",
+                                "invalid path curve TriangleID direction",
                             ));
                         }
                         Ok([value("x")?, value("y")?, direction])
@@ -80,8 +80,12 @@ impl AssetLoader for PathPlacementHighlightLoader {
             };
             curves.push(PathPlacementHighlightCurve {
                 texture: context.load(format!("entities/objects/paths/shared/{texture}")),
-                on: requirements("on")?,
-                off: requirements("off")?,
+                on: requirements("on", true)?,
+                off: requirements("off", true)?,
+                curb_endpoints: [
+                    requirements("curb1", false)?.first().copied(),
+                    requirements("curb2", false)?.first().copied(),
+                ],
             });
         }
         Ok(PathPlacementHighlightAsset {

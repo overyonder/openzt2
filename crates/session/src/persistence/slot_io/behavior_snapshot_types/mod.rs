@@ -113,6 +113,8 @@ pub(super) struct BehaviorSplineDockSnapshot {
     pub target: BehaviorSnapshotEntityReference,
     pub phase: SplineDockPhase,
     pub owns_disabled_collider: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_seconds: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,6 +221,15 @@ pub(super) struct BehaviorTaskActorSnapshot {
     pub membership: Option<BehaviorInteractionMembershipSnapshot>,
     #[serde(default)]
     pub transaction: Option<BehaviorTransactionSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub splash: Option<BehaviorSplashSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct BehaviorSplashSnapshot {
+    pub seek_seconds: f32,
+    pub emitted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

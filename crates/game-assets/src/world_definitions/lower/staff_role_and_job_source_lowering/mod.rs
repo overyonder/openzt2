@@ -5,10 +5,23 @@ use super::world_definition_source_value_reading_and_conversion::{
     asset, asset_list, flags, id, number_or, required, required_number,
 };
 use crate::source_document::resolved_source_record_index::{BindError, RecordView};
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::staff_management::{
     StaffJobCapabilityFlags, StaffJobDefinition, StaffJobEffect, StaffJobKind, StaffRoleDefinition,
 };
-use openzt2_game_data::AssetId;
+
+pub(super) fn lower_person_caffeine_factors(
+    record: &RecordView<'_, '_>,
+) -> Result<openzt2_game_data::CaffeineFactors, BindError> {
+    crate::source_document::authored_caffeine_factors::lower_caffeine_factors(record, |name| {
+        super::source_element_tree_search::authored_type_family_component_attribute(
+            record,
+            "BFAIEntityDataShared",
+            name,
+        )
+        .or_else(|| record.value(&[name]))
+    })
+}
 
 pub(super) fn lower_authored_staff_job_capabilities(
     record: &RecordView<'_, '_>,
@@ -34,6 +47,7 @@ pub(super) fn bind_staff(
         .map(id)
         .unwrap_or_else(|| id(&format!("personname:{}", record.key)));
     output.document.staff.push(StaffRoleDefinition {
+        caffeine_factors: lower_person_caffeine_factors(record)?,
         id: id(record.key),
         object: asset(record, &["object", "entity"]),
         name_pool,

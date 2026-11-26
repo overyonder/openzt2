@@ -1,6 +1,6 @@
 use bevy::{diagnostic::FrameCount, prelude::*};
+use bevy_hanabi::{EffectMesh, EffectSpawner, ParticleSpawnPoint};
 pub use bevy_hanabi::{EffectParticleSizeScale, ParticleAliveCount, ParticleSpawnBatch};
-use bevy_hanabi::{EffectSpawner, ParticleSpawnPoint};
 use openzt2_game_data::{particle::particle_emission_point::ParticleEmissionPoint, AssetId};
 
 use super::{
@@ -66,20 +66,39 @@ pub(super) struct ParticleSpawnAwaitingClear;
 
 pub(crate) fn prepare_explicit_particle_emitters(
     mut commands: Commands,
-    emitters: Query<(Entity, &ParticleEffectPointEmitter), Added<ParticleEffectPointEmitter>>,
+    mut emitters: Query<
+        (
+            Entity,
+            &ParticleEffectPointEmitter,
+            Option<&mut PendingEffectInstance>,
+            Option<&mut EffectMesh>,
+            Has<ParticlePointsAwaitingUpload>,
+        ),
+        Added<ParticleEffectPointEmitter>,
+    >,
 ) {
-    for (entity, emitter) in &emitters {
+    for (entity, emitter, pending, mesh_target, upload_pending) in &mut emitters {
         let mut target = commands.entity(entity);
-        target.insert(PendingEffectInstance {
+        let request = PendingEffectInstance {
             effect_asset: emitter.effect_asset.clone(),
             requested_emitter: Some(emitter.emitter),
             manual_particle_count: 0,
-        });
+        };
+        if let Some(mut pending) = pending {
+            pending.set_if_neq(request);
+        } else {
+            target.insert(request);
+        }
         if let Some(mesh) = &emitter.mesh {
-            target.insert((
-                bevy_hanabi::EffectMesh(mesh.clone()),
-                ParticlePointsAwaitingUpload,
-            ));
+            let mesh = EffectMesh(mesh.clone());
+            if let Some(mut mesh_target) = mesh_target {
+                mesh_target.set_if_neq(mesh);
+            } else {
+                target.insert(mesh);
+            }
+            if !upload_pending {
+                target.insert(ParticlePointsAwaitingUpload);
+            }
         }
     }
 }
@@ -133,6 +152,7 @@ pub(super) fn upload_queued_particle_points(
             &mut ParticleEffectPointEmitter,
             &mut ParticleSpawnBatch,
             &mut EffectSpawner,
+            Option<&mut EffectRetirementReadback>,
         ),
         (
             With<ParticlePointsAwaitingUpload>,
@@ -140,7 +160,7 @@ pub(super) fn upload_queued_particle_points(
         ),
     >,
 ) {
-    for (entity, mut emitter, mut batch, mut spawner) in &mut emitters {
+    for (entity, mut emitter, mut batch, mut spawner, retirement) in &mut emitters {
         batch.submission = batch.submission.wrapping_add(1);
         batch.points.extend(
             emitter
@@ -160,9 +180,12 @@ pub(super) fn upload_queued_particle_points(
             .remove::<ParticlePointsAwaitingUpload>()
             .insert(ParticleSpawnAwaitingClear);
         if manual_count != 0 {
-            target.insert(EffectRetirementReadback::WaitingForParticles(
-                frame.0.wrapping_add(1),
-            ));
+            let waiting = EffectRetirementReadback::WaitingForParticles(frame.0.wrapping_add(1));
+            if let Some(mut retirement) = retirement {
+                retirement.set_if_neq(waiting);
+            } else {
+                target.insert(waiting);
+            }
         }
     }
 }

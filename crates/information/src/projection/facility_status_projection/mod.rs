@@ -1,4 +1,5 @@
 use super::panel_binding_families::*;
+use super::text_replacement_operations::currency_cents;
 use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_data::ui_document::node_property_binding::UiIntegerPropertyBindingSource;
 
@@ -67,7 +68,9 @@ pub(crate) fn project_selected_facility_status_to_visible_information_panels(
                 continue;
             };
             let Some(next_value) = (match &property_binding.0 {
-                UiIntegerPropertyBindingSource::FacilityPriceCents => price.map(|price| price.0 .0),
+                UiIntegerPropertyBindingSource::FacilityPriceCents => {
+                    price.map(|price| currency_cents(price.0))
+                }
                 UiIntegerPropertyBindingSource::FacilityCapacityUsed => facility.map(|_| {
                     i64::try_from(reservations.map_or(0, RelationshipTarget::len))
                         .unwrap_or(i64::MAX)
@@ -82,13 +85,13 @@ pub(crate) fn project_selected_facility_status_to_visible_information_panels(
                     inventory.map(|inventory| i64::from(inventory.capacity))
                 }
                 UiIntegerPropertyBindingSource::FacilityUpkeepCentsPerMonth => {
-                    upkeep.map(|upkeep| upkeep.0 .0)
+                    upkeep.map(|upkeep| currency_cents(upkeep.0))
                 }
                 UiIntegerPropertyBindingSource::FacilityProfitCents => {
-                    profit.map(|profit| profit.total.0)
+                    profit.map(|profit| currency_cents(profit.total))
                 }
                 UiIntegerPropertyBindingSource::FacilityAverageProfitCents => {
-                    profit.map(|profit| profit.average().0)
+                    profit.map(|profit| currency_cents(profit.average()))
                 }
                 UiIntegerPropertyBindingSource::FacilityOperatingDays => {
                     opened.map(|opened| i64::from(zoo_clock.absolute_day.saturating_sub(opened.0)))
@@ -96,7 +99,7 @@ pub(crate) fn project_selected_facility_status_to_visible_information_panels(
                 UiIntegerPropertyBindingSource::FacilityOperatingMonths => opened
                     .map(|opened| i64::from(zoo_clock.absolute_day.saturating_sub(opened.0) / 30)),
                 UiIntegerPropertyBindingSource::DonationTotalCents => {
-                    donations.map(|donations| donations.amount.0)
+                    donations.map(|donations| currency_cents(donations.amount))
                 }
                 UiIntegerPropertyBindingSource::DonationCount => {
                     donations.map(|donations| i64::from(donations.count))
@@ -155,7 +158,10 @@ mod tests {
             )
                 .chain(),
         );
-        let subject = app.world_mut().spawn(MonthlyUpkeep(Money(5000))).id();
+        let subject = app
+            .world_mut()
+            .spawn(MonthlyUpkeep(Money::from_cents(5000)))
+            .id();
         let owner = app.world_mut().spawn(SelectedSubject(subject)).id();
         let panel = app
             .world_mut()
@@ -189,7 +195,7 @@ mod tests {
         );
         app.world_mut()
             .entity_mut(subject)
-            .insert(MonthlyUpkeep(Money(7500)));
+            .insert(MonthlyUpkeep(Money::from_cents(7500)));
         app.update();
         assert_eq!(app.world().get::<Text>(text).unwrap().0, "$75");
     }

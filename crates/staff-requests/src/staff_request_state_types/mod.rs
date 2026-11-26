@@ -3,12 +3,7 @@ use openzt2_game_data::world_definitions::staff_management::StaffJobKind;
 use openzt2_game_data::AssetId;
 use openzt2_zoo_state::staff::staff_job_types::StaffJobRouting;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum StaffRequestControllerSample {
-    NumberQ16(i32),
-    Boolean(bool),
-    NoValue,
-}
+use super::staff_request_fact_changes::StaffRequestFactValue;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct StaffRequestRowIdentity {
@@ -20,18 +15,13 @@ pub(super) struct StaffRequestRowIdentity {
     pub(super) ordinal: u16,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct StaffRequestRuntimeState {
     pub(super) row: StaffRequestRowIdentity,
     pub(super) row_index: usize,
     pub(super) job_kind: Option<StaffJobKind>,
-    pub(super) previous: Option<StaffRequestThresholdState>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct StaffRequestThresholdState {
-    pub(super) trigger: bool,
-    pub(super) cancel: bool,
+    pub(super) previous: Option<StaffRequestFactValue>,
+    pub(super) created: bool,
 }
 
 #[derive(Component, Debug, Default)]

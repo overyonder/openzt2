@@ -1,25 +1,23 @@
 use bevy::prelude::*;
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
-use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::AnimalAdoptionRefund;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::economy::general_economy_types::{
     GeneralEconomyLedger, GeneralEconomyTransaction,
 };
 
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    complete_behavior_refill, RunningBehaviorEconomyTransaction, RunningBehaviorInstruction,
+    RunningBehaviorEconomyTransaction, RunningBehaviorInstruction,
 };
 
 use super::{
     account_transaction_types::{
-        Account, TransactionCompleted, TransactionKind, TransactionRejected, TransactionRejection,
-        TransactionRequest, TransactionSettlement,
+        Account, RecordedAccountMovement, TransactionCompleted, TransactionDomain,
+        TransactionRejected, TransactionRejection, TransactionRequest, TransactionSettlement,
     },
     behavior_transaction_state::BehaviorTransactionPayment,
     facility_economy_types::Wallet,
-    keeper_refill_settlement::{KeeperRefillSettlement, StagedBehaviorRefill},
+    keeper_refill_settlement::{KeeperRefillPayment, KeeperRefillSettlement},
     money_types::Money,
     zoo_cash_types::{UnlimitedZooCash, ZooCash},
 };
@@ -111,28 +109,12 @@ pub(super) struct AccountRequestCursor(bevy::ecs::message::MessageCursor<Transac
 #[derive(Component)]
 pub(super) struct AccountSettlementDomain<const PLAYER: bool>;
 
-#[derive(Message)]
-pub(super) struct RecordedAccountMovement<const PLAYER: bool> {
-    pub(super) root: Entity,
-    pub(super) kind: TransactionKind,
-    pub(super) subject: Option<Entity>,
-    pub(super) zoo_delta: Money,
-    pub(super) named_payment: Option<(Entity, openzt2_game_data::AssetId)>,
-}
-
 // Requests emitted between the simulation and construction boundaries are
 // consumed at the latter boundary without traversing the earlier batch again.
 pub(super) fn stage_requested_account_transactions<const PLAYER: bool>(
     mut commands: Commands,
     requests: Res<Messages<TransactionRequest>>,
     mut cursor: ResMut<AccountRequestCursor>,
-    player_operations: Query<
-        (),
-        Or<(
-            With<super::zoo_cash_ui::UiCashGrantPendingTransaction>,
-            With<AnimalAdoptionRefund>,
-        )>,
-    >,
     settlements: Query<(), With<TransactionSettlement>>,
 ) {
     let mut accepted = bevy::ecs::entity::EntityHashSet::default();
@@ -140,12 +122,7 @@ pub(super) fn stage_requested_account_transactions<const PLAYER: bool>(
         if settlements.contains(request.operation) || !accepted.insert(request.operation) {
             continue;
         }
-        let player = matches!(
-            request.kind,
-            TransactionKind::Construction
-                | TransactionKind::Research
-                | TransactionKind::AnimalAdoption
-        ) || player_operations.contains(request.operation);
+        let player = request.domain == TransactionDomain::Player;
         let pending = (
             AwaitingAccountSettlement,
             TransactionSettlement::Pending {
@@ -171,7 +148,6 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
             &mut ZooCash,
             Option<&UnlimitedZooCash>,
             Option<&mut GeneralEconomyLedger>,
-            Option<&ZooClock>,
         ),
         With<WorldRoot>,
     >,
@@ -185,7 +161,7 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
             Entity,
             &mut TransactionSettlement,
             Option<&BehaviorTransactionPayment>,
-            Option<&StagedBehaviorRefill>,
+            Option<&KeeperRefillPayment>,
             Option<&GeneralEconomyTransaction>,
         ),
         (
@@ -201,7 +177,7 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
         ),
         Without<PendingBehaviorTaskFailure>,
     >,
-    mut keeper_refills: KeeperRefillSettlement,
+    keeper_refills: KeeperRefillSettlement,
 ) {
     let mut pending = transaction_operations
         .iter()
@@ -231,17 +207,20 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
             // still owns the request. Act -> Economy may cross a failure/restart.
             // Other producers retain their existing settlement contracts.
             if let Some(owner) = behavior_payment {
-                let valid =
-                    behavior_tasks
-                        .get(owner.actor)
-                        .is_ok_and(|(task, instruction, pending)| {
-                            pending.payment == Some(request.operation)
-                                && pending.facility == owner.facility
-                                && pending.transaction == owner.transaction
-                                && pending.owns(task, instruction)
-                        });
-                if !valid {
+                let (task, instruction, pending) = behavior_tasks
+                    .get(owner.actor)
+                    .map_err(|_| TransactionRejection::Cancelled)?;
+                if pending.payment != Some(request.operation)
+                    || pending.facility != owner.facility
+                    || pending.transaction != owner.transaction
+                    || !pending.owns(task, instruction)
+                {
                     return Err(TransactionRejection::Cancelled);
+                }
+                if let Some(refill) = refill {
+                    keeper_refills
+                        .validate(owner.actor, task, refill)
+                        .ok_or(TransactionRejection::Cancelled)?;
                 }
             }
             let debit_owner = match request.debit {
@@ -266,7 +245,7 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
                         .0
                 }
             };
-            let (_, mut zoo_cash, unlimited_zoo_cash, mut general_ledger, clock) = roots
+            let (_, mut zoo_cash, unlimited_zoo_cash, mut general_ledger) = roots
                 .get_mut(root)
                 .map_err(|_| TransactionRejection::MissingAccount)?;
             let debit_account_balance = read_account_balance_for_transaction(
@@ -297,7 +276,7 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
                     .as_deref()
                     .is_some_and(|ledger| ledger.cash().is_some())
             {
-                let delta = zoo_delta.unwrap_or_default().0;
+                let delta = zoo_delta.unwrap_or_default();
                 general_ledger
                     .as_deref()
                     .and_then(|ledger| ledger.cash_after_transaction(delta))
@@ -306,23 +285,6 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
             } else {
                 None
             };
-
-            if let (Some(owner), Some(refill)) = (behavior_payment, refill) {
-                let (task, instruction, _) = behavior_tasks
-                    .get(owner.actor)
-                    .map_err(|_| TransactionRejection::Cancelled)?;
-                let tick = clock.ok_or(TransactionRejection::Cancelled)?.tick;
-                keeper_refills
-                    .commit(owner.actor, task, refill)
-                    .ok_or(TransactionRejection::Cancelled)?;
-                complete_behavior_refill(
-                    owner.actor,
-                    instruction.id(),
-                    tick,
-                    refill.continuation,
-                    &mut commands,
-                );
-            }
 
             if let Some(delta) = general_cash_change {
                 general_ledger
@@ -381,6 +343,7 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
         match settlement {
             Ok(_) => {
                 completed_transactions.write(TransactionCompleted {
+                    domain: request.domain,
                     operation: request.operation,
                     debit: request.debit,
                     credit: request.credit,
@@ -391,6 +354,7 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
             }
             Err(reason) => {
                 rejected_transactions.write(TransactionRejected {
+                    domain: request.domain,
                     operation: request.operation,
                     debit: request.debit,
                     credit: request.credit,

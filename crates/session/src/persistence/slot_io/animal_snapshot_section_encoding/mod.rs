@@ -7,6 +7,7 @@ use super::{
 };
 use bevy::prelude::Quat;
 use openzt2_game_data::species::Sex;
+use openzt2_game_data::AssetId;
 use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
 
 const MAXIMUM_ANIMAL_SNAPSHOT_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
@@ -61,6 +62,11 @@ pub(super) fn validate_animal_snapshot_records(
                 .any(|value| !value.is_finite())
             || (Quat::from_array(record.rotation).length_squared() - 1.0).abs() > 0.001
             || record.scale.iter().any(|value| *value <= 0.0)
+            || record.treatment.is_some_and(|treatment| {
+                matches!(treatment.provider, 0 | u64::MAX)
+                    || treatment.definition == AssetId::default()
+                    || treatment.execution_id == Some(0)
+            })
             || record.name.as_ref().is_some_and(|name| name.len() > 4096)
             || record.welfare.as_ref().is_some_and(|welfare| {
                 welfare

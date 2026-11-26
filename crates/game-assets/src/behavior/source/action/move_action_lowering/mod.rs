@@ -40,7 +40,6 @@ mod tests {
     fn bare_bfbehmove_lowers_to_the_native_field_defaults() {
         let move_action = lower_one_authored_move_action(br#"<tasks><BFBehMove/></tasks>"#);
         assert_eq!(move_action.target_node_name, None);
-        // Native default from `construct_BFBehMove_members`: moveRadius 2.0 m.
         assert_eq!(move_action.move_radius_cm, 200);
         assert_eq!(move_action.locomotion_speed, None);
     }
@@ -71,6 +70,14 @@ mod tests {
     }
 
     #[test]
+    fn move_retains_the_authored_water_surface_depth() {
+        let action =
+            lower_one_authored_move_action(br#"<tasks><BFBehMove depthBelowSurface="4"/></tasks>"#);
+        assert_eq!(action.depth_below_surface_m, Some(4.0));
+        assert_eq!(action.height_above_floor_m, None);
+    }
+
+    #[test]
     fn native_default_route_policies_and_ignored_fields_are_preserved() {
         assert!(lower_one_authored_action(
             br#"<tasks><BFBehMove pathRadius="0" closestApproach="false" depthBelowSurface="-1" heightAboveFloor="-1" hitRadius="8" depthAboveBottom="1"/></tasks>"#,
@@ -94,8 +101,7 @@ pub(super) fn lower_move_action_source_node(
                     | "closestApproach"
                     | "depthBelowSurface"
                     | "heightAboveFloor"
-                    // Native read_BFBehMove_xml has no bindings for these;
-                    // preserve its observed no-op behavior.
+                    // These keys do not change the move radius or floor clearance.
                     | "hitRadius"
                     | "depthAboveBottom"
         )
@@ -110,6 +116,15 @@ pub(super) fn lower_move_action_source_node(
         read_optional_trimmed_string_attribute(move_action_source_node, "locoSpeed")
             .filter(|speed| !speed.eq_ignore_ascii_case("variable"))
             .map(|speed| BehaviorGroundLocomotionSpeed::from_authored(&speed));
+    let water_height_constraint = |name| -> io::Result<Option<f32>> {
+        match read_optional_float_attribute(move_action_source_node, name)? {
+            None | Some(-1.0) => Ok(None),
+            Some(value) if value.is_finite() && value >= 0.0 => Ok(Some(value)),
+            Some(_) => Err(invalid_behavior_source_data(format!(
+                "BFBehMove has invalid {name}"
+            ))),
+        }
+    };
     Ok(Some(BehaviorAction::Move(BehaviorMoveAction {
         locomotion_speed,
         target_node_name: read_optional_trimmed_string_attribute(
@@ -118,6 +133,8 @@ pub(super) fn lower_move_action_source_node(
         ),
         move_radius_cm: read_optional_centimetres_attribute(move_action_source_node, "moveRadius")?
             .unwrap_or(200),
+        depth_below_surface_m: water_height_constraint("depthBelowSurface")?,
+        height_above_floor_m: water_height_constraint("heightAboveFloor")?,
     })))
 }
 
@@ -183,15 +200,6 @@ fn validate_supported_bfbehmove_default_policies(source_node: &DataNode) -> io::
         return Err(invalid_behavior_source_data(
             "BFBehMove closestApproach has unrecovered live semantics",
         ));
-    }
-    for attribute_name in ["depthBelowSurface", "heightAboveFloor"] {
-        if read_optional_float_attribute(source_node, attribute_name)?
-            .is_some_and(|value| value != -1.0)
-        {
-            return Err(invalid_behavior_source_data(format!(
-                "BFBehMove {attribute_name} has no live terrain constraint mapping"
-            )));
-        }
     }
     Ok(())
 }

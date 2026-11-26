@@ -3,35 +3,15 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBe
 use openzt2_zoo_state::guests::guest_simulation_types::GuestSpeciesViewCounts;
 use openzt2_zoo_state::guests::guest_survey_types::GuestSurveyExperience;
 use bevy::prelude::*;
-use openzt2_zoo_state::progression::fame_types::GuestSpeciesFameViews;
-use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
+use openzt2_zoo_state::progression::fame_types::{GuestSpeciesFameViews, ZooSpeciesFameViews};
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
-use openzt2_zoo_state::guests::guest_simulation_types::{Guest, GuestArchetype, GuestFavouriteAnimal};
+use openzt2_zoo_state::guests::guest_simulation_types::{GuestArchetype, GuestFavouriteAnimal};
 
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorViewingProgress;
-
-pub(super) fn initialize_guest_species_view_counts(
-    species_assets: Res<Assets<SpeciesAsset>>,
-    active_species: Res<SpeciesAssets>,
-    guests: Query<Entity, (With<Guest>, Without<GuestSpeciesViewCounts>)>,
-    mut commands: Commands,
-) {
-    if guests.is_empty() {
-        return;
-    }
-    let Some(species) = active_species.get(&species_assets) else {
-        return;
-    };
-    let capacity = species.species().count();
-    for guest in &guests {
-        commands
-            .entity(guest)
-            .insert(GuestSpeciesViewCounts(Vec::with_capacity(capacity)));
-    }
-}
 
 #[allow(
     clippy::type_complexity,
@@ -48,10 +28,12 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
         &mut GuestSpeciesViewCounts,
         &mut GuestSurveyExperience,
         &mut GuestSpeciesFameViews,
+        &WorldMember,
         Option<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
         Option<&mut BehaviorViewingProgress>,
     )>,
     animals: Query<(&SpeciesHandle, &GlobalTransform)>,
+    mut zoo_views: Query<&mut ZooSpeciesFameViews>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         reactions.clear();
@@ -69,6 +51,7 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
             mut counts,
             mut experience,
             mut fame_views,
+            member,
             task,
             meter,
         )) = guests.get_mut(reaction.guest)
@@ -97,7 +80,7 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
         )]
         let discount = policy
             .species_discount
-            .powf(*count as f32)
+            .powi(i32::try_from(*count).unwrap_or(i32::MAX))
             .max(policy.minimum_species_discount);
         let distance = position
             .translation()
@@ -126,12 +109,16 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
             }
         }
         experience.saw_favorite_animal |= favourite.0 == Some(species.species);
-        let entertainment = reaction.entertainment_score * distance_factor;
+        let entertainment = reaction.entertainment_score * preferred * distance_factor;
         experience.observe_entertainment(entertainment);
         let fame = fame_views.0.entry(species.species).or_default();
+        let previous = *fame;
         fame.events = fame.events.saturating_add(1);
         fame.entertainment += entertainment;
-        if entertainment != 0.0 {
+        if let Ok(mut zoo) = zoo_views.get_mut(member.root) {
+            zoo.replace_contribution(species.species, previous, *fame);
+        }
+        if reaction.donation_score != 0.0 {
             *count = count.saturating_add(1);
         }
     }

@@ -37,3 +37,12 @@ pub(crate) fn archive_entry_asset_source_path(path: &Path) -> Option<(PathBuf, u
     let archive = archive.parse().ok()?;
     Some((path.with_file_name(stem.file_stem()?), archive, ordinal))
 }
+
+pub(super) fn archive_reload_generation_for_path(path: &Path) -> Option<u64> {
+    archive_entry_asset_source_path(path)?;
+    let stem = Path::new(path.file_stem()?);
+    let stem = Path::new(stem.file_stem()?);
+    let stamp = stem.extension()?.to_str()?;
+    let (_, generation) = stamp.split_once('-')?;
+    generation.parse().ok()
+}

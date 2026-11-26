@@ -10,7 +10,10 @@ use super::super::persistence_failure_types::WorldSnapshotPersistenceFailure;
 use super::persistence_slot_filesystem_task_types::PersistenceSlotOperation;
 
 #[derive(Component)]
-#[require(PersistenceSlotOperation)]
+#[require(
+    PersistenceSlotOperation,
+    openzt2_interface_state::persistence::save_slot_types::PersistenceBusy
+)]
 pub(crate) struct PendingSnapshotApplication {
     pub(in crate::persistence) source: SavedGameSource,
     pub(super) saved_world_document: Option<Handle<WorldScenarioDocumentAsset>>,

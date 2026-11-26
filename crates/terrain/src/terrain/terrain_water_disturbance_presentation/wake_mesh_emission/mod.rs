@@ -3,10 +3,8 @@ use bevy::ecs::entity::EntityHashMap;
 use bevy::ecs::system::SystemParam;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
+use bevy_hanabi::{ParticleAliveCount, ParticleSpawnBatch};
 use openzt2_game_assets::effect::explicit_particle_emission::ParticleEffectPointEmitter;
-use openzt2_game_assets::effect::explicit_particle_emission::{
-    ParticleAliveCount, ParticleSpawnBatch,
-};
 use openzt2_game_assets::effect::particle_wave_surface::ParticleEffectWaveSurface;
 use openzt2_game_assets::effect::ParticleEffectDocumentAsset;
 use openzt2_game_assets::graphics_settings_types::{FourLevelGraphicsDetail, GraphicsSettings};
@@ -35,9 +33,16 @@ pub(in crate::terrain) struct WaterWakeMeshParticle;
 pub(crate) fn update_water_wake_wave_uniforms(
     regions: TerrainWaterRegionQuery,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    waves: Query<&TerrainWaterWaveRegisters>,
-    groups: Query<&ChildOf, With<WaterWakeEmission>>,
-    mut particles: Query<(&ChildOf, &mut ParticleEffectWaveSurface), With<WaterWakeMeshParticle>>,
+    waves: Query<Ref<TerrainWaterWaveRegisters>>,
+    changed_regions: Query<(), Or<(
+        Changed<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionSource>,
+        Changed<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionEdit>,
+    )>>,
+    groups: Query<Ref<ChildOf>, With<WaterWakeEmission>>,
+    mut particles: Query<
+        (Ref<ChildOf>, &mut ParticleEffectWaveSurface),
+        With<WaterWakeMeshParticle>,
+    >,
 ) {
     for (parent, mut uniforms) in &mut particles {
         let Ok(region_parent) = groups.get(parent.parent()) else {
@@ -47,6 +52,15 @@ pub(crate) fn update_water_wake_wave_uniforms(
         let (Some(region), Ok(wave)) = (regions.get(owner), waves.get(owner)) else {
             continue;
         };
+        if !wave.is_changed()
+            && !parent.is_changed()
+            && !region_parent.is_changed()
+            && !uniforms.is_added()
+            && !terrain_assets.is_changed()
+            && !changed_regions.contains(owner)
+        {
+            continue;
+        }
         let Some(terrain) = terrain_assets.get(region.terrain()) else {
             continue;
         };

@@ -1,10 +1,10 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt::Write,
-};
+use std::{collections::BTreeSet, fmt::Write};
 
 use bevy::{
-    ecs::{entity::EntityHashSet, relationship::RelationshipTarget},
+    ecs::{
+        entity::EntityHashSet, entity_disabling::Disabled, query::Allow,
+        relationship::RelationshipTarget,
+    },
     prelude::*,
 };
 use openzt2_game_assets::{
@@ -19,8 +19,8 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
-    localization::LocalizationFormatArgument,
-    ui_document::widget_live_collection::UiWidgetLiveCollectionSource, AssetId,
+    AssetId, localization::LocalizationFormatArgument,
+    ui_document::widget_live_collection::UiWidgetLiveCollectionSource,
 };
 use openzt2_interface_state::ui::{
     authored_reusable_list_and_table_runtime_types::{
@@ -28,11 +28,12 @@ use openzt2_interface_state::ui::{
     },
     authored_ui_node_projection_components::UiValue,
 };
-use openzt2_world_state::world_spawn::world_membership_types::{
-    DefinitionId, WorldMember, WorldMembers, WorldRoot,
+use openzt2_world_state::world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted,
+    world_membership_types::{DefinitionId, WorldMember, WorldMembers, WorldRoot},
 };
 use openzt2_zoo_state::{
-    donations::donation_payment_types::{DonationCategoryTotals, DonationTotal},
+    donations::donation_payment_types::{DonationTotal, ZooDonationSummary},
     economy::currency_formatting::write_whole_dollar_currency_with_thousands_separators,
     shows::show_stage_types::{ShowName, ShowStage},
     transport_tours::transport_circuit_types::TransportCircuit,
@@ -50,9 +51,6 @@ struct SpeciesDonations {
     label: AssetId,
     total: DonationTotal,
 }
-
-#[derive(Component, Default, PartialEq, Eq)]
-pub struct WorldShowDonationTotal(pub Option<DonationTotal>);
 
 #[derive(Resource, Default, PartialEq, Eq)]
 pub(super) struct DonationSpeciesCategories(Vec<(AssetId, BTreeSet<AssetId>)>);
@@ -89,119 +87,119 @@ pub(super) fn resolve_donation_species_categories(
     ));
 }
 
+#[derive(Message)]
+pub(super) struct RetiredFinanceDonationSubject(Entity);
+
+pub(super) fn invalidate_retired_finance_donation_subjects(
+    retired: On<Discard<(TransportCircuit, ShowStage, DonationTotal, WorldMember)>>,
+    subjects: Query<
+        &WorldMember,
+        (
+            Or<(With<TransportCircuit>, With<ShowStage>)>,
+            Allow<Disabled>,
+        ),
+    >,
+    mut invalidated: MessageWriter<RetiredFinanceDonationSubject>,
+) {
+    if let Ok(member) = subjects.get(retired.entity) {
+        invalidated.write(RetiredFinanceDonationSubject(member.root));
+    }
+}
+
 pub(super) fn reduce_donations_for_finance_reports(
     mut reports: Query<
         (
             Entity,
-            Option<Ref<WorldMembers>>,
+            Option<&WorldMembers>,
+            Option<Ref<ZooDonationSummary>>,
             &mut FinanceDonationReports,
-            &mut WorldShowDonationTotal,
         ),
         With<WorldRoot>,
     >,
     species: Res<DonationSpeciesCategories>,
-    categories: Query<&DonationCategoryTotals>,
     tours: Query<(), (With<TransportCircuit>, With<DonationTotal>)>,
-    stages: Query<Option<&DonationTotal>, With<ShowStage>>,
-    membership: Query<&WorldMember>,
+    stages: Query<(), With<ShowStage>>,
     changes: Query<
         &WorldMember,
-        Or<(
-            Changed<DonationCategoryTotals>,
-            Added<TransportCircuit>,
-            Added<ShowStage>,
-            Changed<DonationTotal>,
-        )>,
+        (
+            Or<(With<TransportCircuit>, With<ShowStage>)>,
+            Or<(
+                Added<TransportCircuit>,
+                Added<ShowStage>,
+                Added<DonationTotal>,
+                Changed<WorldMember>,
+            )>,
+        ),
     >,
-    mut removed: (
-        RemovedComponents<DonationCategoryTotals>,
-        RemovedComponents<DonationTotal>,
-        RemovedComponents<TransportCircuit>,
-        RemovedComponents<ShowStage>,
-        RemovedComponents<WorldMembers>,
-    ),
+    mut retired: MessageReader<RetiredFinanceDonationSubject>,
+    mut removed_summaries: RemovedComponents<ZooDonationSummary>,
 ) {
     let affected: EntityHashSet = changes
         .iter()
         .map(|member| member.root)
-        .chain(
-            membership
-                .iter_many(
-                    removed
-                        .0
-                        .read()
-                        .chain(removed.1.read())
-                        .chain(removed.2.read())
-                        .chain(removed.3.read()),
-                )
-                .flatten()
-                .map(|member| member.root),
-        )
-        .chain(removed.4.read())
+        .chain(retired.read().map(|subject| subject.0))
         .collect();
-    for (world, members, mut report, mut show_totals) in &mut reports {
-        if !report.is_added()
-            && !species.is_changed()
-            && !affected.contains(&world)
-            && !members.as_ref().is_some_and(Ref::is_changed)
-        {
-            continue;
-        }
-        let entities = || {
-            members
-                .as_deref()
-                .into_iter()
-                .flat_map(RelationshipTarget::iter)
-        };
-        let mut by_category = BTreeMap::<AssetId, DonationTotal>::new();
-        for categories in categories.iter_many(entities()).flatten() {
-            for (category, amount) in categories.iter() {
-                add_total(by_category.entry(category).or_default(), amount);
-            }
-        }
-        let mut next = FinanceDonationReports::default();
-        for (label, keys) in &species.0 {
-            let mut total = DonationTotal::default();
-            for key in keys {
-                if let Some(amount) = by_category.remove(key) {
-                    add_total(&mut total, amount);
-                }
-            }
-            if total.count != 0 {
-                next.species.push(SpeciesDonations {
-                    label: *label,
-                    total,
-                });
-            }
-        }
-        next.tours
-            .extend(entities().filter(|&entity| tours.contains(entity)));
-        next.shows
-            .extend(entities().filter(|&entity| stages.contains(entity)));
-        next.tours.sort_unstable_by_key(|entity| entity.to_bits());
-        next.shows.sort_unstable_by_key(|entity| entity.to_bits());
-        let total = stages
-            .iter_many(next.shows.iter().copied())
-            .flatten()
-            .flatten()
-            .try_fold(DonationTotal::default(), |total, item| {
-                Some(DonationTotal {
-                    amount: total.amount.checked_add(item.amount)?,
-                    count: total.count.checked_add(item.count)?,
+    let removed_summaries: EntityHashSet = removed_summaries.read().collect();
+    for (world, members, summary, mut report) in &mut reports {
+        let lists_changed = report.is_added() || affected.contains(&world);
+        let species_changed = report.is_added()
+            || species.is_changed()
+            || summary.as_ref().is_some_and(Ref::is_changed)
+            || removed_summaries.contains(&world);
+        let entities = || members.into_iter().flat_map(RelationshipTarget::iter);
+        if species_changed {
+            let mut seen = BTreeSet::new();
+            let next = species
+                .0
+                .iter()
+                .filter_map(|(label, keys)| {
+                    let mut total = DonationTotal::default();
+                    for &key in keys {
+                        if seen.insert(key) {
+                            if let Some(amount) = summary
+                                .as_ref()
+                                .and_then(|summary| summary.total(Some(key)))
+                            {
+                                add_total(&mut total, amount);
+                            }
+                        }
+                    }
+                    (total.count != 0).then_some(SpeciesDonations {
+                        label: *label,
+                        total,
+                    })
                 })
-            });
-        show_totals.set_if_neq(WorldShowDonationTotal(total));
-        report.set_if_neq(next);
+                .collect::<Vec<_>>();
+            if report.species != next {
+                report.species = next;
+            }
+        }
+        if lists_changed {
+            let mut tour_rows = entities()
+                .filter(|&entity| tours.contains(entity))
+                .collect::<Vec<_>>();
+            let mut show_rows = entities()
+                .filter(|&entity| stages.contains(entity))
+                .collect::<Vec<_>>();
+            tour_rows.sort_unstable_by_key(|entity| entity.to_bits());
+            show_rows.sort_unstable_by_key(|entity| entity.to_bits());
+            if report.tours != tour_rows {
+                report.tours = tour_rows;
+            }
+            if report.shows != show_rows {
+                report.shows = show_rows;
+            }
+        }
     }
 }
 
 fn add_total(total: &mut DonationTotal, amount: DonationTotal) {
     total.count = total.count.saturating_add(amount.count);
-    total.amount.0 = total.amount.0.saturating_add(amount.amount.0);
+    total.amount = total.amount.saturating_add(amount.amount);
 }
 
 pub(super) fn project_finance_donation_rows(
-    reports: Query<Ref<FinanceDonationReports>, With<WorldRoot>>,
+    reports: Query<Ref<FinanceDonationReports>, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     sources: Query<(
         Option<Ref<Name>>,
         Option<Ref<ShowName>>,
@@ -334,7 +332,7 @@ pub(super) fn project_finance_donation_rows(
                         }
                     }
                     "amount" => {
-                        let value = total.amount.0;
+                        let value = super::display_currency_cents(total.amount);
                         if let Some(mut numeric) = numeric {
                             numeric.set_if_neq(UiValue(value));
                         }

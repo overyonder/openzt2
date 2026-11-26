@@ -68,9 +68,7 @@ pub(super) fn advance_donation_interactions_and_request_completed_payments(
             acceptors.get(progress.acceptor).is_ok(),
             opportunities.get(progress.subject).is_ok(),
         )
-        .or_else(|| {
-            (wallet.0 .0 < progress.amount.0).then_some(DonationRejection::InsufficientFunds)
-        });
+        .or_else(|| (wallet.0 < progress.amount).then_some(DonationRejection::InsufficientFunds));
         if let Some(reason) = rejection {
             rejected_donations.write(DonationRejected {
                 guest,

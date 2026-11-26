@@ -9,7 +9,7 @@ use openzt2_zoo_state::environment::environment_state_types::WorldEnvironment;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_world_state::simulation_time::simulation_clock_types::{ZooClock, ZooDayCadence};
 use openzt2_world_state::world_spawn::prefab_ambient_light_contribution::PrefabAmbientLightContribution;
 use openzt2_world_state::world_spawn::prefab_model_tint::PrefabModelTint;
 
@@ -24,9 +24,8 @@ use super::{
         EnvironmentVisualProjections,
     },
     environment_presentation_types::{
-        AboveWaterFog, EnvironmentCameraRelativeVisual, EnvironmentOfWorld,
-        EnvironmentPresentationPending, EnvironmentSky, EnvironmentTexture,
-        EnvironmentVisualSampleIndex, EnvironmentVisuals,
+        AboveWaterFog, EnvironmentCameraRelativeVisual, EnvironmentOfWorld, EnvironmentSky,
+        EnvironmentTexture, EnvironmentVisualSampleIndex, EnvironmentVisuals,
     },
     environment_state_types::{Daylight, ObjectAmbientLight},
     environment_visual_construction::create_environment_texture_renderer_components,
@@ -34,7 +33,7 @@ use super::{
 };
 
 pub(super) fn publish_world_daylight_from_zoo_clock(
-    clocks: Query<Ref<ZooClock>>,
+    clocks: Query<(Ref<ZooClock>, Ref<ZooDayCadence>)>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
     mut environments: Query<(&EnvironmentOfWorld, &mut Daylight)>,
@@ -44,13 +43,15 @@ pub(super) fn publish_world_daylight_from_zoo_clock(
         return;
     };
     for (owner, mut daylight) in &mut environments {
-        let Ok(clock) = clocks.get(owner.0) else {
+        let Ok((clock, cadence)) = clocks.get(owner.0) else {
             continue;
         };
-        if !clock.is_changed() && !definitions_changed {
+        if !clock.is_changed() && !cadence.is_changed() && !definitions_changed {
             continue;
         }
-        if let Some(fraction) = calculate_environment_month_fraction(&clock, definitions.timing()) {
+        if let Some(fraction) =
+            calculate_environment_month_fraction(&clock, *cadence, definitions.timing())
+        {
             daylight.set_if_neq(Daylight { fraction });
         }
     }
@@ -231,7 +232,6 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
         &WorldEnvironment,
         Option<Ref<Weather>>,
         Option<Ref<WeatherTransition>>,
-        Option<&EnvironmentPresentationPending>,
         Option<&Children>,
         Option<&EnvironmentVisuals>,
         Ref<EnvironmentVisualProjections>,
@@ -282,7 +282,6 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
         environment,
         weather,
         transition,
-        pending,
         children,
         visuals,
         visual_projections,
@@ -303,7 +302,7 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
             && !weather.as_ref().is_some_and(|weather| weather.is_changed())
             && !settings.is_changed()
             && !transition.as_ref().is_some_and(DetectChanges::is_changed)
-            && pending.is_none()
+            && !fog.is_added()
         {
             continue;
         }
@@ -682,9 +681,6 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
                 }
             }
         }
-        commands
-            .entity(entity)
-            .remove::<EnvironmentPresentationPending>();
     }
 }
 

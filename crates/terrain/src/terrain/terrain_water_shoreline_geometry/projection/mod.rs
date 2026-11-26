@@ -24,8 +24,8 @@ pub(crate) struct PreparedTerrainShorelineMeshGroups {
     pub(crate) slots: Vec<(Entity, usize)>,
 }
 
-#[derive(Component)]
-pub(crate) struct TerrainShorelineGeometryProjected;
+#[derive(Component, PartialEq)]
+pub(crate) struct TerrainShorelineRippleBoundary(pub(crate) Box<[Transform]>);
 
 pub(crate) fn project_changed_terrain_shoreline_geometry(
     mut commands: Commands,
@@ -45,11 +45,11 @@ pub(crate) fn project_changed_terrain_shoreline_geometry(
     mut projection_states: Query<
         (
             Entity,
-            Option<&TerrainShorelineGeometryProjected>,
+            Option<&mut TerrainShorelineRippleBoundary>,
             Option<&mut PreparedTerrainShorelineMeshGroups>,
         ),
         Or<(
-            With<TerrainShorelineGeometryProjected>,
+            With<TerrainShorelineRippleBoundary>,
             With<PreparedTerrainShorelineMeshGroups>,
         )>,
     >,
@@ -62,7 +62,7 @@ pub(crate) fn project_changed_terrain_shoreline_geometry(
         if regions.get(owner).is_none() {
             discard_row_meshes(&mut commands, owner, &surfaces);
             commands.entity(owner).remove::<(
-                TerrainShorelineGeometryProjected,
+                TerrainShorelineRippleBoundary,
                 PreparedTerrainShorelineMeshGroups,
             )>();
         }
@@ -78,7 +78,7 @@ pub(crate) fn project_changed_terrain_shoreline_geometry(
             if projected.is_some() || pending.is_some() {
                 discard_row_meshes(&mut commands, owner, &surfaces);
                 commands.entity(owner).remove::<(
-                    TerrainShorelineGeometryProjected,
+                    TerrainShorelineRippleBoundary,
                     PreparedTerrainShorelineMeshGroups,
                 )>();
             }
@@ -105,7 +105,10 @@ pub(crate) fn project_changed_terrain_shoreline_geometry(
         let Some(asset) = assets.get(source.terrain()) else {
             continue;
         };
-        let Some(groups) = construct_chunk_groups(asset, index, owner, &source, &chunks) else {
+        let mut ripple_slots = Vec::new();
+        let Some(groups) =
+            construct_chunk_groups(asset, index, owner, &source, &chunks, &mut ripple_slots)
+        else {
             continue;
         };
         let slots = groups
@@ -118,10 +121,11 @@ pub(crate) fn project_changed_terrain_shoreline_geometry(
         } else {
             commands.entity(owner).insert(next);
         }
-        if projected.is_none() {
-            commands
-                .entity(owner)
-                .insert(TerrainShorelineGeometryProjected);
+        let boundary = TerrainShorelineRippleBoundary(ripple_slots.into_boxed_slice());
+        if let Some(mut current) = projected {
+            current.set_if_neq(boundary);
+        } else {
+            commands.entity(owner).insert(boundary);
         }
     }
 }
@@ -144,12 +148,14 @@ fn construct_chunk_groups(
     owner: Entity,
     source: &TerrainWaterRegionView<'_>,
     chunks: &Query<(Entity, Ref<TerrainChunk>)>,
+    ripple_slots: &mut Vec<Transform>,
 ) -> Option<Vec<(Entity, usize, ConstructedTerrainShorelineMeshGroup)>> {
     let cells_per_chunk = u32::from(asset.terrain_chunk_cells_per_side()?);
     if cells_per_chunk == 0 || cells_per_chunk % 4 != 0 {
         return None;
     }
-    let patches = construct_source_region_shoreline_patches(asset, membership, owner, source)?;
+    let patches =
+        construct_source_region_shoreline_patches(asset, membership, owner, source, ripple_slots)?;
     let mut by_chunk = BTreeMap::<(u32, u32), Vec<TerrainShorelinePatch>>::new();
     for (tile, patch) in patches {
         let coord = tile * 4 / cells_per_chunk;

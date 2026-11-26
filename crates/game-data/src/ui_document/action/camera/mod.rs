@@ -30,6 +30,10 @@ pub enum UiCameraAction {
         command: AssetId,
         pressed: bool,
     },
+    SetFirstPersonCommandState {
+        command: UiFirstPersonCommand,
+        pressed: bool,
+    },
     SetCameraZoomDirection {
         direction: UiCameraSignedAxisDirection,
     },
@@ -39,6 +43,18 @@ pub enum UiCameraAction {
     StopCameraZoom,
     StopCameraRotation,
     StopCameraPan,
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum UiFirstPersonCommand {
+    Forward,
+    Backward,
+    TurnLeft,
+    TurnRight,
+    Up,
+    Down,
+    Crouch,
+    FreeMouseLook,
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]

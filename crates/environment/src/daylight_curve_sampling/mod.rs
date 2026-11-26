@@ -4,21 +4,24 @@ const DAY_FRACTION_UNITS: f32 = u16::MAX as f32;
 
 pub(super) fn calculate_environment_month_fraction(
     clock: &openzt2_world_state::simulation_time::simulation_clock_types::ZooClock,
+    cadence: openzt2_world_state::simulation_time::simulation_clock_types::ZooDayCadence,
     timing: &openzt2_game_data::world_definitions::simulation_time::SimulationTimingDefinition,
 ) -> Option<f32> {
     use openzt2_world_state::simulation_time::zoo_calendar_calculation::calculate_zoo_calendar_for_absolute_day;
-    let day_fraction = calculate_daylight_fraction(clock.tick_in_day, timing.ticks_per_day)?;
+    let day_fraction = cadence.day_fraction(*clock)?;
     let calendar = calculate_zoo_calendar_for_absolute_day(&timing.calendar, clock.absolute_day);
     let month_days = timing.calendar.month_lengths[usize::from(calendar.month - 1)];
     // Environment time advances through the month, with a tenth-cycle phase
     // offset. Its calendar sampling has minute precision.
     let minutes = (day_fraction * 1440.0).floor();
-    let fraction = (f32::from(calendar.day) + minutes / 1440.0) / f32::from(month_days) + 0.1;
-    Some(if fraction > 1.0 {
-        fraction - 1.0
-    } else {
-        fraction
-    })
+    let fraction = (f64::from(calendar.day) + minutes / 1440.0) / f64::from(month_days) + 0.1;
+    Some(
+        (if fraction > 1.0 {
+            fraction - 1.0
+        } else {
+            fraction
+        }) as f32,
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -26,11 +29,6 @@ pub(super) struct CyclicDaylightCurveSample {
     pub(super) left_keyframe_index: usize,
     pub(super) right_keyframe_index: usize,
     pub(super) interpolation_fraction: f32,
-}
-
-pub(super) fn calculate_daylight_fraction(tick_within_day: u32, ticks_per_day: u32) -> Option<f32> {
-    (ticks_per_day > 0 && tick_within_day < ticks_per_day)
-        .then(|| tick_within_day as f32 / ticks_per_day as f32)
 }
 
 pub(super) fn encode_daylight_fraction_as_u16(daylight_fraction: f32) -> u16 {

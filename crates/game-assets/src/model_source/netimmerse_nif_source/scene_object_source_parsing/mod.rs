@@ -99,9 +99,37 @@ fn parse_light(
     source_bytes: &[u8],
     cursor: &mut usize,
     source_path: &str,
+    encoded_version: u32,
 ) -> Result<NetImmerseNiLight> {
+    let av_object = parse_transformable_scene_object(source_bytes, cursor, source_path)?;
+    let enabled = encoded_version < 0x0a01_006a
+        || read_source_boolean(
+            source_bytes,
+            cursor,
+            source_path,
+            "NiDynamicEffect switch state",
+        )?;
+    let affected_node_refs = if encoded_version >= super::NETIMMERSE_VERSION_10_1_0_0 {
+        let count = read_u32_little_endian(
+            source_bytes,
+            cursor,
+            source_path,
+            "NiDynamicEffect affected count",
+        )?;
+        read_i32_values(
+            source_bytes,
+            cursor,
+            source_path,
+            count,
+            "NiDynamicEffect affected node",
+        )?
+    } else {
+        Vec::new()
+    };
     Ok(NetImmerseNiLight {
-        av_object: parse_transformable_scene_object(source_bytes, cursor, source_path)?,
+        av_object,
+        enabled,
+        affected_node_refs,
         dimmer: read_f32_little_endian(source_bytes, cursor, source_path, "NiLight dimmer")?,
         ambient: read_three_component_vector(source_bytes, cursor, source_path, "NiLight ambient")?,
         diffuse: read_three_component_vector(source_bytes, cursor, source_path, "NiLight diffuse")?,
@@ -118,9 +146,10 @@ pub(super) fn parse_directional_light(
     source_bytes: &[u8],
     cursor: &mut usize,
     source_path: &str,
+    encoded_version: u32,
 ) -> Result<NetImmerseNiDirectionalLight> {
     Ok(NetImmerseNiDirectionalLight {
-        light: parse_light(source_bytes, cursor, source_path)?,
+        light: parse_light(source_bytes, cursor, source_path, encoded_version)?,
     })
 }
 
@@ -128,9 +157,10 @@ pub(super) fn parse_ambient_light(
     source_bytes: &[u8],
     cursor: &mut usize,
     source_path: &str,
+    encoded_version: u32,
 ) -> Result<NetImmerseNiAmbientLight> {
     Ok(NetImmerseNiAmbientLight {
-        light: parse_light(source_bytes, cursor, source_path)?,
+        light: parse_light(source_bytes, cursor, source_path, encoded_version)?,
     })
 }
 
@@ -138,9 +168,10 @@ pub(super) fn parse_point_light(
     source_bytes: &[u8],
     cursor: &mut usize,
     source_path: &str,
+    encoded_version: u32,
 ) -> Result<NetImmerseNiPointLight> {
     Ok(NetImmerseNiPointLight {
-        light: parse_light(source_bytes, cursor, source_path)?,
+        light: parse_light(source_bytes, cursor, source_path, encoded_version)?,
         constant_attenuation: read_f32_little_endian(
             source_bytes,
             cursor,

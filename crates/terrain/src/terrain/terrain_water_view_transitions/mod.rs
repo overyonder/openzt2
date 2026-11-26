@@ -5,17 +5,27 @@ use openzt2_zoo_state::terrain::terrain_water_view_state::{
     TerrainWaterCameraPose, TerrainWaterRegionFade, TerrainWaterTrainingFade,
 };
 
+#[derive(Message)]
+pub(super) struct WaterFadeTransitionChanged;
+
 pub(super) fn advance_terrain_water_region_fades(
     time: Res<Time>,
     phase: Res<State<GamePhase>>,
     mut regions: Query<&mut TerrainWaterRegionFade>,
+    mut transitions: MessageWriter<WaterFadeTransitionChanged>,
 ) {
     if *phase.get() != GamePhase::InGame {
         return;
     }
     for mut fade in &mut regions {
+        if !fade.is_active() {
+            continue;
+        }
         let mut next = *fade;
         next.advance(time.delta_secs());
+        if next.is_transitioning() != fade.is_transitioning() {
+            transitions.write(WaterFadeTransitionChanged);
+        }
         fade.set_if_neq(next);
     }
 }

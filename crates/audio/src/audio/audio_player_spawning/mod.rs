@@ -4,6 +4,7 @@ use bevy::{
     audio::{AudioPlayer, AudioSource, PlaybackSettings, Volume},
     prelude::*,
 };
+use openzt2_animals::animal_health::RampageAudioMix;
 use openzt2_game_data::audio::AudioUsage;
 
 use openzt2_interface_state::settings::audio_settings_types::AudioSettings;
@@ -59,6 +60,24 @@ pub(super) struct NonspatialCueVoices(Vec<Entity>);
 #[derive(Component)]
 pub(super) struct NonspatialCueOwner;
 
+#[derive(Component)]
+#[relationship(relationship_target = WorldAudioVoices)]
+pub(super) struct WorldAudioVoiceOf(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = WorldAudioVoiceOf, linked_spawn)]
+pub(super) struct WorldAudioVoices(Vec<Entity>);
+
+pub(super) fn rampage_voice_gain(mix: Option<&RampageAudioMix>, selection: u64) -> f32 {
+    mix.map_or(1.0, |mix| {
+        if selection == mix.loop_selection {
+            mix.loop_gain
+        } else {
+            mix.other_sound_gain
+        }
+    })
+}
+
 #[derive(Default)]
 pub(super) struct AudioVoiceAdmission {
     pub(super) pool: Option<Entity>,
@@ -67,6 +86,8 @@ pub(super) struct AudioVoiceAdmission {
     pub(super) distance: Option<SpatialCueDistance>,
     pub(super) distance_gain: Option<f32>,
     pub(super) environment_gain: Option<f32>,
+    pub(super) world: Option<Entity>,
+    pub(super) rampage_gain: Option<f32>,
     pub(super) stage_acoustics: Option<StageVoiceAcoustics>,
 }
 
@@ -122,7 +143,8 @@ pub(super) fn spawn_audio_player_or_deferred_playback(
                 request.emitter.is_some(),
                 source_gain,
             ) * admission.distance_gain.unwrap_or(1.0)
-                * admission.environment_gain.unwrap_or(1.0),
+                * admission.environment_gain.unwrap_or(1.0)
+                * admission.rampage_gain.unwrap_or(1.0),
         ),
         ..playback_settings
     };
@@ -137,6 +159,9 @@ pub(super) fn spawn_audio_player_or_deferred_playback(
         if let Some(owner) = admission.nonspatial_owner {
             playback_entity.insert(NonspatialCueVoiceOf(owner));
         }
+    }
+    if let Some(root) = admission.world {
+        playback_entity.insert(WorldAudioVoiceOf(root));
     }
     let uses_stage_acoustics = admission.stage_acoustics.is_some();
     if let Some(acoustics) = admission.stage_acoustics {

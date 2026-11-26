@@ -4,12 +4,12 @@ use super::world_definition_source_value_reading_and_conversion::{
 };
 use crate::source_document::resolved_source_record_index::{BindError, RecordView};
 use crate::world_definitions::behavior_auxiliary_source_types::LoweredBehaviorAuxiliary;
+use openzt2_game_data::AssetId;
+use openzt2_game_data::world_definitions::UNAUTHORED_TRICK_DISPLAY_ORDER;
 use openzt2_game_data::world_definitions::animal_shows_and_training::{
     ShowRuleDefinition, ShowStageDefinition, TrickDefinition, TrickOutcomeTokens,
 };
 use openzt2_game_data::world_definitions::extinct_animal_recovery::FossilPlacementPolicy;
-use openzt2_game_data::world_definitions::UNAUTHORED_TRICK_DISPLAY_ORDER;
-use openzt2_game_data::AssetId;
 
 pub(super) fn bind_show_stage(
     record: &RecordView<'_, '_>,
@@ -181,26 +181,18 @@ pub(super) fn bind_behavior_auxiliary(
                 "fossil placement policy has an empty authored root",
             ));
         }
-        let mut placeable = policy.placeable_objects.clone();
-        placeable.sort_unstable_by_key(|id| id.0);
-        placeable.dedup();
-        let mut non_placeable = policy.non_placeable_objects.clone();
-        non_placeable.sort_unstable_by_key(|id| id.0);
-        non_placeable.dedup();
-        if placeable.is_empty()
-            || non_placeable.is_empty()
-            || placeable.iter().any(|id| {
-                non_placeable
-                    .binary_search_by_key(&id.0, |other| other.0)
-                    .is_ok()
-            })
+        let placeable_objects = policy.placeable_objects.clone();
+        let non_placeable_objects = policy.non_placeable_objects.clone();
+        if placeable_objects.is_empty()
+            || non_placeable_objects.is_empty()
+            || placeable_objects
+                .iter()
+                .any(|id| non_placeable_objects.contains(id))
         {
             return Err(simple_error(
                 "fossil placement policy lists are empty or overlap",
             ));
         }
-        let placeable_objects = placeable;
-        let non_placeable_objects = non_placeable;
         output.document.fossil_placement = Some(FossilPlacementPolicy {
             puzzle_root: AssetId::from_virtual_path(&policy.puzzle_root),
             entity_root: AssetId::from_virtual_path(&policy.entity_root),

@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{ecs::entity::EntityHashMap, prelude::*};
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -10,11 +10,15 @@ use openzt2_game_data::AssetId;
 use openzt2_interface_state::information::zoo_message_types::{ZooMessage, ZooMessages};
 use openzt2_world_state::world_spawn::{
     world_load_completion_marker::WorldLoadCompleted,
-    world_membership_types::{WorldMembers, WorldRoot},
+    world_membership_types::{WorldMember, WorldMembers, WorldRoot},
 };
 use openzt2_zoo_state::progression::{
-    fame_types::{FameAuthoredPresentation, FameGateAppearanceRequested},
+    fame_types::{FameAuthoredPresentation, FameGateAppearanceRequested, ZooSpeciesFameViews},
     profile_scenario_variables::ProfileScenarioVariables,
+};
+use openzt2_zoo_state::{
+    animal_behavior::behavior_trigger_types::BehaviorSubjectTrigger,
+    guests::guest_simulation_types::Guest,
 };
 use super::authored_fame_script::{AuthoredFameScript, FameEntityFacts, FameScriptEffect};
 
@@ -26,7 +30,7 @@ use super::{
     fame_types::{Fame, ZooMaximumFame},
     profile_challenge_types::TotalAnimalsReleasedCount,
     rating_types::ZooRating,
-    zoo_rating_input_types::{GuestRatingFacts, GuestSpeciesSeen},
+    zoo_rating_input_types::GuestRatingFacts,
 };
 
 pub(super) fn apply_scenario_maximum_fame_requests(
@@ -77,7 +81,7 @@ pub(super) fn update_authored_fame(
             &mut Fame,
             Option<&WorldMembers>,
             &GuestRatingFacts,
-            Option<&GuestSpeciesSeen>,
+            Option<&ZooSpeciesFameViews>,
             &super::authored_award_programs::AuthoredAwardPoints,
             Option<&super::AwardGlobalVariables>,
             &ZooRating,
@@ -90,11 +94,25 @@ pub(super) fn update_authored_fame(
     entities: FameEntityFacts,
     mut presentation: FamePresentation,
     mut changed: MessageWriter<ProgressionFactChanged>,
+    mut subject_triggers: Option<MessageReader<BehaviorSubjectTrigger>>,
+    guest_worlds: Query<&WorldMember, With<Guest>>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
     let active_world = active_world.single().ok();
+    let mut departing = EntityHashMap::<usize>::default();
+    if let Some(triggers) = subject_triggers.as_mut() {
+        let adjust_fame = AssetId::from_key("adjust_zoofame");
+        for trigger in triggers
+            .read()
+            .filter(|trigger| trigger.trigger == adjust_fame)
+        {
+            if let Ok(member) = guest_worlds.get(trigger.subject) {
+                *departing.entry(member.root).or_default() += 1;
+            }
+        }
+    }
     for (
         world,
         mut world_fame,
@@ -106,87 +124,89 @@ pub(super) fn update_authored_fame(
         rating,
         scenario_award_points,
         total_animals_released,
-        script,
+        mut script,
     ) in &mut worlds
     {
         let active = active_world == Some(world);
-        let mut next_fame = *world_fame;
-        if let Some((mut script, mut authored_ui)) = script {
-            let result = script.evaluate(
-                &script_sources,
-                &script_assets,
-                views,
-                next_fame,
-                awards.0,
-                scenario_award_points.0,
-                total_animals_released.0,
-                &entities,
-                members,
-                definitions,
-                presentation.variables.as_deref(),
-                award_globals,
-            );
-            let result = match result {
-                Ok(result) => result,
-                Err(error) => {
-                    debug!(%error, "authored fame evaluation failed");
-                    continue;
-                }
-            };
+        for _ in 0..departing.remove(&world).unwrap_or(1) {
+            let mut next_fame = *world_fame;
+            if let Some((script, authored_ui)) = script.as_mut() {
+                let result = script.evaluate(
+                    &script_sources,
+                    &script_assets,
+                    views,
+                    next_fame,
+                    awards.0,
+                    scenario_award_points.0,
+                    total_animals_released.0,
+                    &entities,
+                    members,
+                    definitions,
+                    presentation.variables.as_deref(),
+                    award_globals,
+                );
+                let result = match result {
+                    Ok(result) => result,
+                    Err(error) => {
+                        debug!(%error, "authored fame evaluation failed");
+                        continue;
+                    }
+                };
 
-            for effect in result.effects {
-                match effect {
-                    FameScriptEffect::Fame(half_stars, percent) => {
-                        update_current_and_maximum_fame(&mut next_fame, half_stars, percent);
-                        if world_fame.set_if_neq(next_fame) && active {
-                            changed.write(ProgressionFactChanged::Fame);
-                        }
-                    }
-                    FameScriptEffect::Gate(request) => {
-                        presentation.gates.write(request);
-                    }
-                    FameScriptEffect::Notice(key, seconds) if active => {
-                        let view = presentation
-                            .active_localization
-                            .as_deref()
-                            .zip(presentation.localizations.as_deref())
-                            .and_then(|(index, assets)| {
-                                index.borrow_loaded_localization_view(assets)
-                            });
-                        if let (Some(view), Ok(mut messages), Some(now)) = (
-                            view,
-                            presentation.messages.get_mut(world),
-                            presentation.now.as_deref(),
-                        ) {
-                            if let Some(text) =
-                                view.find_plain_localized_text(AssetId::from_key(&key))
-                            {
-                                messages.messages.push(ZooMessage {
-                                    text: text.to_owned(),
-                                    expires_at_seconds: now.elapsed_secs_f64() + seconds,
-                                });
+                for effect in result.effects {
+                    match effect {
+                        FameScriptEffect::Fame(half_stars, percent) => {
+                            update_current_and_maximum_fame(&mut next_fame, half_stars, percent);
+                            if world_fame.set_if_neq(next_fame) && active {
+                                changed.write(ProgressionFactChanged::Fame);
                             }
                         }
+                        FameScriptEffect::Gate(request) => {
+                            presentation.gates.write(request);
+                        }
+                        FameScriptEffect::Notice(key, seconds) if active => {
+                            let view = presentation
+                                .active_localization
+                                .as_deref()
+                                .zip(presentation.localizations.as_deref())
+                                .and_then(|(index, assets)| {
+                                    index.borrow_loaded_localization_view(assets)
+                                });
+                            if let (Some(view), Ok(mut messages), Some(now)) = (
+                                view,
+                                presentation.messages.get_mut(world),
+                                presentation.now.as_deref(),
+                            ) {
+                                if let Some(text) =
+                                    view.find_plain_localized_text(AssetId::from_key(&key))
+                                {
+                                    messages.messages.push(ZooMessage {
+                                        text: text.to_owned(),
+                                        expires_at_seconds: now.elapsed_secs_f64() + seconds,
+                                    });
+                                }
+                            }
+                        }
+                        FameScriptEffect::Notice(_, _) => {}
                     }
-                    FameScriptEffect::Notice(_, _) => {}
                 }
-            }
-            authored_ui.set_if_neq(result.presentation);
-        } else if rating.overall_available && definitions.fame_thresholds().next().is_some() {
-            let next = select_fame_level_for_rating_and_guest_count(
-                definitions.fame_thresholds().map(|threshold| {
-                    (
-                        threshold.level,
-                        threshold.minimum_rating,
-                        threshold.minimum_guests,
-                    )
-                }),
-                rating.overall_permille,
-                guests.count,
-            );
-            update_current_and_maximum_fame(&mut next_fame, next, f32::from(next) * 10.0);
-            if world_fame.set_if_neq(next_fame) && active {
-                changed.write(ProgressionFactChanged::Fame);
+                authored_ui.set_if_neq(result.presentation);
+            } else if rating.overall_available && definitions.fame_thresholds().next().is_some() {
+                let next = select_fame_level_for_rating_and_guest_count(
+                    definitions.fame_thresholds().map(|threshold| {
+                        (
+                            threshold.level,
+                            threshold.minimum_rating,
+                            threshold.minimum_guests,
+                        )
+                    }),
+                    rating.overall_permille,
+                    guests.count,
+                );
+                update_current_and_maximum_fame(&mut next_fame, next, f32::from(next) * 10.0);
+                if world_fame.set_if_neq(next_fame) && active {
+                    changed.write(ProgressionFactChanged::Fame);
+                }
             }
         }
     }

@@ -1,6 +1,6 @@
 use super::{
     animal_entity_spawning::insert_animal_entity_from_resolved_components,
-    scripted_animal_spawning::{resolve_scripted_animal_spawn, ScriptedAnimalInitialization},
+    scripted_animal_spawning::{ScriptedAnimalInitialization, resolve_scripted_animal_spawn},
 };
 use bevy::prelude::*;
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
@@ -60,7 +60,7 @@ pub(super) fn hydrate_starting_animals(
         let Some((species, mut components)) = resolve_scripted_animal_spawn(
             species,
             saved.variant,
-            definitions.timing().ticks_per_day,
+            crate::zoo_day_cadence(definitions).ticks_per_zoo_day(),
             &mut random,
         ) else {
             commands

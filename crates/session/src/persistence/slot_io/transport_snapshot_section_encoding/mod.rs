@@ -248,7 +248,33 @@ fn validate_graph(
             .binary_search_by_key(&id, |row| row.persistent_identifier.0)
             .is_ok()
     };
-    if !graph.poses.windows(2).all(|rows| rows[0].0 < rows[1].0)
+    if !graph
+        .fares_dollars
+        .windows(2)
+        .all(|rows| rows[0].0 < rows[1].0)
+        || graph.fares_dollars.iter().any(|(id, fare)| {
+            !known_circuit(*id)
+                || !fare.is_finite()
+                || *fare < 0.0
+                || graph
+                    .fares
+                    .binary_search_by_key(id, |(saved, _)| *saved)
+                    .is_ok()
+        })
+        || !graph
+            .sky_station_crossings
+            .windows(2)
+            .all(|rows| rows[0].vehicle < rows[1].vehicle)
+        || graph.sky_station_crossings.iter().any(|crossing| {
+            !known_vehicle(crossing.vehicle)
+                || !crossing.distance.is_finite()
+                || crossing.distance < 0.0
+                || !graph
+                    .routes
+                    .iter()
+                    .any(|route| route.pieces.first() == Some(&crossing.next_route))
+        })
+        || !graph.poses.windows(2).all(|rows| rows[0].0 < rows[1].0)
         || !graph.fares.windows(2).all(|rows| rows[0].0 < rows[1].0)
         || !graph.junctions.windows(2).all(|rows| rows[0].0 < rows[1].0)
         || graph.poses.iter().any(|(id, pose)| {

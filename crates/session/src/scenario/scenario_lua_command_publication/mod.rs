@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
-use openzt2_zoo_state::economy::scenario_economy_command_types::ScenarioEconomyCommand;
 use openzt2_zoo_state::progression::award_and_progression_fact_types::AdjustScenarioAwardPointTotalRequest;
 
 use super::{
@@ -12,7 +11,6 @@ use super::{
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct ScenarioLuaOutputs<'w, 's> {
     members: Query<'w, 's, &'static WorldMember>,
-    economy: MessageWriter<'w, ScenarioEconomyCommand>,
     award_points: MessageWriter<'w, AdjustScenarioAwardPointTotalRequest>,
     challenge_offers: MessageWriter<'w, CreateScenarioChallengeOfferFromLuaSourcePathRequest>,
     panels: MessageWriter<'w, super::challenge_offer_types::ScenarioChallengePanelRequest>,
@@ -22,12 +20,11 @@ pub(super) struct ScenarioLuaOutputs<'w, 's> {
     available_content: MessageWriter<'w,
         openzt2_zoo_state::progression::adoption_and_content_availability_types::MakeScenarioContentAvailableRequest,
     >,
-    photo_challenge_sets: MessageWriter<'w,
-        super::scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest,
-    >,
     persist_profile_variables: MessageWriter<'w,
         openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables,
     >,
+    camera: MessageWriter<'w, openzt2_interface_state::camera::camera_control_message_types::ScriptedOverheadCameraMotion>,
+    fossil: MessageWriter<'w, openzt2_extinct_animals::fossil_site_types::SetFossilPuzzleToFind>,
     ui: MessageWriter<'w, super::scenario_lua_ui::ScenarioUiCommand>,
     entities: MessageWriter<'w, super::scenario_lua_entity_commands::ScenarioEntityCommand>,
     fame: MessageWriter<'w, openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame>,
@@ -52,26 +49,30 @@ impl ScenarioLuaOutputs<'_, '_> {
             );
         }
         let _ = self.entities.write_batch(result.entities);
-        let _ = self
-            .ui
-            .write_batch(result.ui.into_iter().map(|mut command| {
-                if let super::scenario_lua_ui::ScenarioUiCommand::ZooMessage {
-                    root: owner, ..
-                } = &mut command
-                {
-                    *owner = Some(root);
+        for mut command in result.ui {
+            use super::scenario_lua_ui::ScenarioUiCommand;
+            match command {
+                ScenarioUiCommand::OverheadMotion(operation) => {
+                    self.camera.write(openzt2_interface_state::camera::camera_control_message_types::ScriptedOverheadCameraMotion { root, operation });
                 }
-                command
-            }));
+                ScenarioUiCommand::FossilPuzzle(puzzle) => {
+                    self.fossil.write(
+                        openzt2_extinct_animals::fossil_site_types::SetFossilPuzzleToFind {
+                            root,
+                            puzzle,
+                        },
+                    );
+                }
+                _ => {
+                    if let ScenarioUiCommand::ZooMessage { root: owner, .. } = &mut command {
+                        *owner = Some(root);
+                    }
+                    self.ui.write(command);
+                }
+            }
+        }
         if result.persist_profile_variables {
             self.persist_profile_variables.write(openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables);
-        }
-        if let Some(set) = result.current_photo_challenge_set {
-            self.photo_challenge_sets.write(
-                super::scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest {
-                    set,
-                },
-            );
         }
         for definition in result.available_content {
             self.available_content.write(
@@ -91,12 +92,6 @@ impl ScenarioLuaOutputs<'_, '_> {
             panel.source = Some(terminal);
             self.panels.write(panel);
         }
-        result.economy_operations.into_iter().for_each(|operation| {
-            self.economy.write(ScenarioEconomyCommand {
-                terminal,
-                operation,
-            });
-        });
         result
             .award_point_adjustments
             .into_iter()

@@ -82,7 +82,10 @@ fn water_depth(navigation: &TerrainDerivedNavigationGraph, cell: u32, water_heig
 }
 
 #[derive(Message)]
-pub(super) struct TankNavigationWaterChanged(pub(super) Entity);
+pub(super) struct TankNavigationWaterChanged {
+    pub(super) root: Entity,
+    pub(super) cells: Option<Vec<[u32; 2]>>,
+}
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn project_tank_water_onto_navigation_cells(
@@ -224,10 +227,12 @@ pub(super) fn project_tank_water_onto_navigation_cells(
             .filter(|(_, _, _, member, _)| member.is_none_or(|member| member.root == world_entity))
             .filter_map(|(entity, _, _, _, cells)| cells.or_else(|| pending_cells.get(&entity)))
     };
-    let changed = if rebuild {
+    let cells = if rebuild {
         water.replace_cells(active_tanks().flat_map(|cells| cells.wet.iter().copied()));
-        true
-    } else if !affected.is_empty() {
+        None
+    } else if affected.is_empty() {
+        Some(Vec::new())
+    } else {
         for cells in active_tanks() {
             for (&cell, depth) in &mut affected {
                 if let Ok(index) = cells.wet.binary_search_by_key(&cell, |&(key, _)| key) {
@@ -236,16 +241,20 @@ pub(super) fn project_tank_water_onto_navigation_cells(
             }
         }
         affected.retain(|node, depth| water.depth_centimetres(*node).unwrap_or_default() != *depth);
-        let changed = !affected.is_empty();
-        if changed {
+        let cells: Vec<_> = affected
+            .keys()
+            .filter_map(|&node| navigation.calculate_terrain_cell_for_navigation_node(node))
+            .collect();
+        if !affected.is_empty() {
             water.update_cells(affected);
         }
-        changed
-    } else {
-        false
+        Some(cells)
     };
-    if changed && *phase.get() == GamePhase::InGame {
-        water_changes.write(TankNavigationWaterChanged(world_entity));
+    if cells.as_ref().is_none_or(|cells| !cells.is_empty()) && *phase.get() == GamePhase::InGame {
+        water_changes.write(TankNavigationWaterChanged {
+            root: world_entity,
+            cells,
+        });
     }
     for (tank, cells) in pending_cells {
         commands.entity(tank).insert(cells);

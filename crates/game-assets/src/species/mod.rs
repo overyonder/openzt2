@@ -14,8 +14,9 @@ use crate::world_asset_preparation::WorldAssetPreparation;
 use self::{
     species_asset_loading::SpeciesAssetLoader,
     species_asset_set_refresh_and_indexing::{
-        discover_species_catalogue_sources,
+        SpeciesCatalogueLoad, discover_species_catalogue_sources,
         index_loaded_species_assets_by_species_and_variant_identifier,
+        registered_animal_binder_sources_changed,
     },
     species_asset_types::{SpeciesAsset, SpeciesAssets},
 };
@@ -25,6 +26,7 @@ pub struct SpeciesAssetPlugin;
 impl Plugin for SpeciesAssetPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<SpeciesAsset>()
+            .init_asset::<SpeciesCatalogueLoad>()
             .init_asset_loader::<SpeciesAssetLoader>()
             .init_resource::<SpeciesAssets>()
             .add_message::<ArchiveOverlayChanged>()
@@ -32,18 +34,26 @@ impl Plugin for SpeciesAssetPlugin {
                 PreUpdate,
                 (
                     discover_species_catalogue_sources.run_if(
-                        condition_changed_to(
-                            true,
-                            in_state(GamePhase::Loading)
-                                .or_else(in_state(GamePhase::InGame))
-                                .or_else(any_with_component::<WorldAssetPreparation>),
-                        )
-                        .or_else(on_message::<ArchiveOverlayChanged>),
+                        condition_changed_to(true, species_catalogue_requested).or_eager(
+                            registered_animal_binder_sources_changed
+                                .and_then(species_catalogue_requested),
+                        ),
                     ),
-                    index_loaded_species_assets_by_species_and_variant_identifier,
+                    index_loaded_species_assets_by_species_and_variant_identifier.run_if(
+                        on_message::<AssetEvent<SpeciesCatalogueLoad>>
+                            .or_else(on_message::<AssetEvent<SpeciesAsset>>)
+                            .or_else(on_message::<bevy::asset::AssetLoadFailedEvent<SpeciesAsset>>),
+                    ),
                 )
                     .chain()
                     .after(bevy::asset::AssetTrackingSystems),
             );
     }
+}
+
+fn species_catalogue_requested(
+    state: Res<State<GamePhase>>,
+    preparations: Query<(), With<WorldAssetPreparation>>,
+) -> bool {
+    matches!(state.get(), GamePhase::Loading | GamePhase::InGame) || !preparations.is_empty()
 }

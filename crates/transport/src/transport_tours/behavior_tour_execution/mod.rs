@@ -10,7 +10,7 @@ use openzt2_world_state::{
 use openzt2_zoo_state::{
     behavior_task_execution_types::{
         running_actions::{
-            mark_behavior_task_for_failure_and_stop_navigation, AuthoredTourRide, RunBehaviorTour,
+            mark_behavior_task_for_failure_and_stop_navigation, AuthoredTourRide, GuestVisitedTourStations, RunBehaviorTour,
             RunningBehaviorInstruction, WhenBehaviorAction,
         },
         BehaviorTaskExecutionState,
@@ -158,6 +158,7 @@ fn advance_tours(
         ),
         With<RunBehaviorTour>,
     >,
+    mut visited_stations: Query<&mut GuestVisitedTourStations>,
     mut boarding: MessageWriter<BoardTransportRequest>,
     mut commands: Commands,
 ) {
@@ -171,6 +172,13 @@ fn advance_tours(
             && step.is_current(task)
         {
             if let Ok(clock) = clocks.get(world.root) {
+                if let Ok(mut visited) = visited_stations.get_mut(actor) {
+                    for station in [ride.source, ride.destination] {
+                        if !visited.0.contains(&station) {
+                            visited.0.insert(station);
+                        }
+                    }
+                }
                 step.complete(actor, clock.tick, &mut commands);
             }
         }

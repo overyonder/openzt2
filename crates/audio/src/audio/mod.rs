@@ -2,7 +2,7 @@
 use openzt2_zoo_state::audio::audio_environment_types;
 use openzt2_zoo_state::audio::audio_playback_message_types;
 
-mod ambient_audio_emitter_playback;
+pub mod ambient_audio_emitter_playback;
 mod audio_cue_playback;
 mod audio_cue_resolution;
 mod audio_player_spawning;
@@ -64,10 +64,11 @@ impl Plugin for AudioPlugin {
         app.world_mut().spawn(CueVoicePool::Spatial);
         app.world_mut()
             .spawn((CueVoicePool::Nonspatial, NonspatialCueOwner));
+        stage_voice_acoustics::install_room_mix(app);
         app.add_audio_source::<stage_voice_acoustics::StageVoiceSource>()
-            .init_resource::<stage_voice_acoustics::StageVoiceCompletion>()
             .add_computed_state::<MenuMusicState>()
             .add_message::<PlayAudioCue>()
+            .add_message::<ambient_audio_emitter_playback::AddAwardAmbientCue>()
             .add_message::<PlayPositionedAudioCue>()
             .add_message::<PlayAudioClip>()
             .add_message::<StopAudioCue>()
@@ -118,6 +119,8 @@ impl Plugin for AudioPlugin {
                         .chain(),
                     crowd_audio_playback::project_current_crowd_into_audio_playback,
                     play_changed_allowed_ambient_audio_emitters,
+                    ambient_audio_emitter_playback::play_awarded_ambient_cues
+                        .run_if(on_message::<ambient_audio_emitter_playback::AddAwardAmbientCue>),
                     admit_pending_menu_music.run_if(
                         resource_changed::<AudioAssets>
                             .or_eager(on_message::<AssetEvent<AudioAsset>>),
@@ -128,7 +131,8 @@ impl Plugin for AudioPlugin {
             .add_systems(
                 Update,
                 (
-                    merge_produced_audio_requests,
+                    merge_produced_audio_requests
+                        .after(openzt2_animals::animal_health::RampageAudioMixProjection),
                     spatial_cue_distance::publish_spatial_audio_listener
                         .after(TerrainWaterCameraContactProjection),
                     execute_audio_stop_requests
@@ -142,10 +146,8 @@ impl Plugin for AudioPlugin {
                         .after(spatial_cue_distance::publish_spatial_audio_listener)
                         .after(audio_cue_playback::retire_empty_positioned_audio_groups)
                         .run_if(on_message::<PlayPositionedAudioCue>),
-                    stage_voice_acoustics::release_finished_dry_voices,
                     execute_audio_cue_playback_requests
                         .after(audio_cue_playback::forward_positioned_audio_cue_playback_requests)
-                        .after(stage_voice_acoustics::release_finished_dry_voices)
                         .run_if(on_message::<AdmitAudioCue>),
                     execute_direct_audio_clip_playback_requests
                         .after(execute_audio_stop_requests)
@@ -157,6 +159,8 @@ impl Plugin for AudioPlugin {
             .add_systems(
                 Update,
                 (
+                    stage_voice_acoustics::publish_room_mix_output_controls
+                        .after(project_listener_audio_environment),
                     stage_voice_acoustics::publish_stage_voice_controls
                         .after(advance_listener_stage_crossfades)
                         .after(execute_audio_cue_playback_requests),

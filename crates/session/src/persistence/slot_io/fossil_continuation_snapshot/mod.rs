@@ -4,6 +4,7 @@ use bevy::{
     ecs::{relationship::RelationshipTarget, system::SystemParam},
     prelude::*,
 };
+use openzt2_extinct_animals::fossil_site_types::{DigPit, FossilSiteKind, RequestedFossilPuzzle};
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
@@ -23,9 +24,7 @@ use openzt2_zoo_state::extinct_animals::{
         CollectedFossilPiece, FossilAssemblyCompleted, FossilAssemblySlot, FossilAssemblySlotOf,
         FossilAssemblySlots, FossilPieceInSlot, FossilPieceOfWorld, FossilSetAssembly,
     },
-    fossil_recovery_types::{
-        FossilDiscoveryLevel, FossilDiscoveryRandomStream, FossilRecoverySite,
-    },
+    fossil_recovery_types::{FossilDiscoveryLevel, FossilDiscoveryRandomStream},
 };
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +36,20 @@ pub(super) struct FossilContinuation {
     sites: Vec<FossilSiteSnapshot>,
     pieces: Vec<FossilPieceSnapshot>,
     assemblies: Vec<FossilAssemblySnapshot>,
+    #[serde(skip)]
+    pub(super) details: FossilSiteDetails,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(super) struct FossilSiteDetails {
+    requested: Option<AssetId>,
+    kinds: BTreeMap<u64, u8>,
+}
+
+impl FossilSiteDetails {
+    pub(super) fn is_empty(&self) -> bool {
+        self.requested.is_none() && self.kinds.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -75,7 +88,13 @@ impl FossilContinuation {
             .map(|assembly| (assembly.table, assembly))
             .collect();
         let valid_asset = |id| id != AssetId::default();
-        self.assemblies.len() == assemblies.len()
+        self.details.requested.is_none_or(valid_asset)
+            && self
+                .details
+                .kinds
+                .iter()
+                .all(|(id, kind)| *kind <= 3 && self.sites.iter().any(|site| site.id == *id))
+            && self.assemblies.len() == assemblies.len()
             && self.assemblies.iter().all(|assembly| {
                 assembly.table != 0
                     && assembly.table < next
@@ -88,7 +107,6 @@ impl FossilContinuation {
                 site.id != 0
                     && site.id < next
                     && ids.insert(site.id)
-                    && valid_asset(site.set)
                     && site.position.iter().all(|value| value.is_finite())
             })
             && self.pieces.iter().all(|piece| {
@@ -123,15 +141,18 @@ impl FossilContinuation {
 #[derive(SystemParam)]
 pub(super) struct CaptureFossilContinuation<'w, 's> {
     level: Query<'w, 's, &'static FossilDiscoveryLevel>,
+    requested: Query<'w, 's, &'static RequestedFossilPuzzle>,
     sites: Query<
         'w,
         's,
         (
             &'static PersistentId,
-            &'static FossilRecoverySite,
+            Option<&'static FossilSiteKind>,
+            Has<DigPit>,
             &'static Transform,
-            &'static FossilDiscoveryRandomStream,
+            Option<&'static FossilDiscoveryRandomStream>,
         ),
+        Or<(With<FossilSiteKind>, With<DigPit>)>,
     >,
     pieces: Query<
         'w,
@@ -164,17 +185,38 @@ impl CaptureFossilContinuation<'_, '_> {
     ) -> Result<Option<FossilContinuation>, Failure> {
         let level = self.level.get(root).ok().map(|level| level.0);
         let members = || members.into_iter().flat_map(RelationshipTarget::iter);
+        let mut details = FossilSiteDetails {
+            requested: self.requested.get(root).ok().map(|puzzle| puzzle.0),
+            ..Default::default()
+        };
         let mut sites = self
             .sites
             .iter_many(members())
             .flatten()
-            .map(|(id, site, pose, random)| FossilSiteSnapshot {
-                id: id.0,
-                set: site.fossil_set_definition_identifier,
-                position: pose.translation.to_array(),
-                random: random.0.to_raw(),
+            .map(|(id, kind, pit, pose, random)| {
+                let kind = match (kind, pit) {
+                    (_, true) => 3,
+                    (Some(FossilSiteKind::Puzzle), false) => 0,
+                    (Some(FossilSiteKind::PlaceableObject), false) => 1,
+                    (Some(FossilSiteKind::Cash), false) => 2,
+                    (None, false) => return Err(Failure::CorruptSnapshotSection),
+                };
+                let random = if pit {
+                    [0, 1]
+                } else {
+                    random.ok_or(Failure::CorruptSnapshotSection)?.0.to_raw()
+                };
+                if kind != 0 {
+                    details.kinds.insert(id.0, kind);
+                }
+                Ok(FossilSiteSnapshot {
+                    id: id.0,
+                    set: AssetId::default(),
+                    position: pose.translation.to_array(),
+                    random,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, Failure>>()?;
         let mut assemblies = self
             .tables
             .iter_many(members())
@@ -227,15 +269,18 @@ impl CaptureFossilContinuation<'_, '_> {
         sites.sort_unstable_by_key(|site| site.id);
         pieces.sort_unstable_by_key(|piece| piece.id);
         assemblies.sort_unstable_by_key(|assembly| assembly.table);
-        Ok(
-            (level.is_some() || !sites.is_empty() || !pieces.is_empty() || !assemblies.is_empty())
-                .then_some(FossilContinuation {
-                    level,
-                    sites,
-                    pieces,
-                    assemblies,
-                }),
-        )
+        Ok((level.is_some()
+            || !details.is_empty()
+            || !sites.is_empty()
+            || !pieces.is_empty()
+            || !assemblies.is_empty())
+        .then_some(FossilContinuation {
+            level,
+            sites,
+            pieces,
+            assemblies,
+            details,
+        }))
     }
 }
 
@@ -245,6 +290,7 @@ pub(super) struct RestoreFossilContinuation<'w, 's> {
     assets: Res<'w, Assets<WorldDefinitionAsset>>,
     definitions: Res<'w, WorldDefinitions>,
     levels: Query<'w, 's, &'static mut FossilDiscoveryLevel>,
+    requested: Query<'w, 's, &'static mut RequestedFossilPuzzle>,
 }
 
 impl RestoreFossilContinuation<'_, '_> {
@@ -284,7 +330,7 @@ impl RestoreFossilContinuation<'_, '_> {
             if self.identities.get(root, PersistentId(site.id)).is_some() {
                 return Err(Failure::BrokenPersistentEntityReference);
             }
-            if catalogue.find_fossil_set(site.set).is_none() {
+            if site.set != AssetId::default() && catalogue.find_fossil_set(site.set).is_none() {
                 return Err(Failure::UnknownAssetIdentifier);
             }
         }
@@ -299,17 +345,45 @@ impl RestoreFossilContinuation<'_, '_> {
                 return Err(Failure::BrokenPersistentEntityReference);
             }
         }
-        let marker = if snapshot.sites.is_empty() {
-            None
-        } else {
-            let definition = catalogue
-                .find_object(AssetId::from_key("fossilsite"))
-                .ok_or(Failure::UnknownAssetIdentifier)?;
-            let scene = catalogue
-                .scene(definition.prefab)
-                .ok_or(Failure::UnknownAssetIdentifier)?;
-            Some((definition, scene))
-        };
+        let site_assets = snapshot
+            .sites
+            .iter()
+            .map(|site| {
+                let kind = snapshot
+                    .details
+                    .kinds
+                    .get(&site.id)
+                    .copied()
+                    .unwrap_or_default();
+                let definition = catalogue
+                    .find_object(AssetId::from_key(if kind == 3 {
+                        "digpit"
+                    } else {
+                        "fossilsite"
+                    }))
+                    .ok_or(Failure::UnknownAssetIdentifier)?;
+                let scene = catalogue
+                    .scene(definition.prefab)
+                    .ok_or(Failure::UnknownAssetIdentifier)?;
+                Ok((kind, definition, scene))
+            })
+            .collect::<Result<Vec<_>, Failure>>()?;
+        let requested = snapshot
+            .details
+            .requested
+            .map(|puzzle| {
+                catalogue
+                    .find_fossil_set(puzzle)
+                    .ok_or(Failure::UnknownAssetIdentifier)?;
+                Ok(RequestedFossilPuzzle(puzzle))
+            })
+            .transpose()?;
+        super::restored_component_values::restore_optional_component(
+            &mut commands.entity(root),
+            self.requested.get_mut(root).ok(),
+            requested,
+            true,
+        );
 
         if let Some(level) = snapshot.level {
             if let Ok(mut current) = self.levels.get_mut(root) {
@@ -318,20 +392,31 @@ impl RestoreFossilContinuation<'_, '_> {
                 commands.entity(root).insert(FossilDiscoveryLevel(level));
             }
         }
-        if let Some((marker, scene)) = marker {
-            for site in &snapshot.sites {
-                commands.spawn((
-                    WorldMember { root },
-                    PersistentId(site.id),
-                    DefinitionId(marker.id),
-                    FossilRecoverySite {
-                        fossil_set_definition_identifier: site.set,
-                    },
+        for (site, (kind, marker, scene)) in snapshot.sites.iter().zip(site_assets) {
+            let mut entity = commands.spawn((
+                WorldMember { root },
+                PersistentId(site.id),
+                DefinitionId(marker.id),
+                Transform::from_translation(Vec3::from_array(site.position))
+                    .with_scale(Vec3::splat(marker.prefab_scale)),
+                if kind == 3 {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                },
+                PrefabPresentation::new(scene.clone()),
+            ));
+            if kind == 3 {
+                entity.insert(DigPit);
+            } else {
+                let kind = match kind {
+                    1 => FossilSiteKind::PlaceableObject,
+                    2 => FossilSiteKind::Cash,
+                    _ => FossilSiteKind::Puzzle,
+                };
+                entity.insert((
+                    kind,
                     FossilDiscoveryRandomStream(DeterministicRng::from_raw(site.random)),
-                    Transform::from_translation(Vec3::from_array(site.position))
-                        .with_scale(Vec3::splat(marker.prefab_scale)),
-                    Visibility::Hidden,
-                    PrefabPresentation::new(scene.clone()),
                 ));
             }
         }

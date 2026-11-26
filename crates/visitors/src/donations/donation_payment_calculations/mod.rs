@@ -9,12 +9,12 @@ pub(super) fn accumulate_completed_donation_total(
     current_total: DonationTotal,
     completed_amount: Money,
 ) -> Option<DonationTotal> {
-    if completed_amount.0 <= 0 {
+    if !completed_amount.is_positive() {
         return None;
     }
 
     Some(DonationTotal {
-        amount: Money(current_total.amount.0.checked_add(completed_amount.0)?),
+        amount: current_total.amount.checked_add(completed_amount)?,
         count: current_total.count.checked_add(1)?,
     })
 }

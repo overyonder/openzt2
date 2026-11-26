@@ -72,6 +72,16 @@ pub struct PrefabEntity {
     pub billboards: Vec<PrefabBillboard>,
     pub lights: Vec<PrefabLight>,
     pub effects: Vec<PrefabEffect>,
+    #[serde(default)]
+    pub terrain_decal: Option<PrefabTerrainDecal>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]
+pub struct PrefabTerrainDecal {
+    pub texture: AssetId,
+    pub radius_metres: f32,
+    pub alpha_blend: bool,
+    pub lighting: bool,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]

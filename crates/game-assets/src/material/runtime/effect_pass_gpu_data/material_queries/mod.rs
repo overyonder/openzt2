@@ -4,6 +4,9 @@ use super::{
     EffectPassMaterial, EffectPassTextureAssets, EFFECT_ENVIRONMENT_REGISTER_BUFFER,
     FIXED_FUNCTION_WORLD_LIGHT_BUFFER,
 };
+use crate::model_source::native_model_source_lowering_types::{
+    NetImmerseMaterialAnimation, NetImmerseMaterialColorChannel, NetImmerseMaterialSample,
+};
 use bevy::{
     prelude::*,
     render::render_resource::{BlendState, ColorWrites, CompareFunction, StencilState},
@@ -74,6 +77,37 @@ impl EffectPassTextureAssets {
 }
 
 impl EffectPassMaterial {
+    /// Samples the linked controllers of an instance-owned material pass.
+    pub fn sample_netimmerse_material_animations(
+        &mut self,
+        animations: &[NetImmerseMaterialAnimation],
+        scene_seconds: f32,
+        instance_seconds: f32,
+    ) {
+        use NetImmerseMaterialColorChannel::{Ambient, Diffuse, Emissive, Specular};
+
+        let values = &mut self.fixed_function.values[40..44];
+        let mut sampled = [values[0], values[1], values[2], values[3]];
+        for animation in animations {
+            match animation.sample(scene_seconds, instance_seconds) {
+                NetImmerseMaterialSample::Alpha(alpha) => sampled[0].w = alpha,
+                NetImmerseMaterialSample::Color(channel, color) => {
+                    let index = match channel {
+                        Diffuse => 0,
+                        Ambient => 1,
+                        Specular => 2,
+                        Emissive => 3,
+                    };
+                    sampled[index] = Vec3::from_array(color).extend(sampled[index].w);
+                }
+            }
+        }
+        if &*values != sampled.as_slice() {
+            values.copy_from_slice(&sampled);
+            self.dirty_fixed_function = true;
+        }
+    }
+
     pub(in crate::material) fn present_texture_asset_count(&self) -> usize {
         self.texture_assets.present_texture_asset_count()
     }

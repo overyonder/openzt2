@@ -138,11 +138,11 @@ fn parse_particle_info(
             source_path,
             "NiParticleInfo timestamp",
         )?,
-        unknown_short: read_u16_little_endian(
+        generation: read_u16_little_endian(
             source_bytes,
             cursor,
             source_path,
-            "NiParticleInfo unknown short",
+            "NiParticleInfo generation",
         )?,
         vertex_id: read_u16_little_endian(
             source_bytes,
@@ -249,11 +249,17 @@ pub(super) fn parse_particle_system_controller(
         source_path,
         "NiParticleSystemController lifetime random",
     )?;
-    let emit_flags = read_u16_little_endian(
+    let use_birth_rate = read_source_boolean(
         source_bytes,
         cursor,
         source_path,
-        "NiParticleSystemController emit flags",
+        "NiParticleSystemController use birth rate",
+    )?;
+    let spawn_on_death = read_source_boolean(
+        source_bytes,
+        cursor,
+        source_path,
+        "NiParticleSystemController spawn on death",
     )?;
     let start_random = read_three_component_vector(
         source_bytes,
@@ -267,35 +273,35 @@ pub(super) fn parse_particle_system_controller(
         source_path,
         "NiParticleSystemController emitter ref",
     )?;
-    let unknown_short_2 = read_u16_little_endian(
+    let spawn_generations = read_u16_little_endian(
         source_bytes,
         cursor,
         source_path,
-        "NiParticleSystemController unknown short 2",
+        "NiParticleSystemController spawn generations",
     )?;
-    let unknown_float_13 = read_f32_little_endian(
+    let spawn_probability = read_f32_little_endian(
         source_bytes,
         cursor,
         source_path,
-        "NiParticleSystemController unknown float 13",
+        "NiParticleSystemController spawn probability",
     )?;
-    let unknown_int_1 = read_u32_little_endian(
+    let spawn_multiplier = read_u16_little_endian(
         source_bytes,
         cursor,
         source_path,
-        "NiParticleSystemController unknown int 1",
+        "NiParticleSystemController spawn multiplier",
     )?;
-    let unknown_int_2 = read_u32_little_endian(
+    let spawn_speed_chaos = read_f32_little_endian(
         source_bytes,
         cursor,
         source_path,
-        "NiParticleSystemController unknown int 2",
+        "NiParticleSystemController spawn speed chaos",
     )?;
-    let unknown_short_3 = read_u16_little_endian(
+    let spawn_direction_chaos = read_f32_little_endian(
         source_bytes,
         cursor,
         source_path,
-        "NiParticleSystemController unknown short 3",
+        "NiParticleSystemController spawn direction chaos",
     )?;
     let particle_count = read_u16_little_endian(
         source_bytes,
@@ -329,33 +335,34 @@ pub(super) fn parse_particle_system_controller(
         emit_rate,
         lifetime,
         lifetime_random,
-        emit_flags,
+        use_birth_rate,
+        spawn_on_death,
         start_random,
         emitter_ref,
-        unknown_short_2,
-        unknown_float_13,
-        unknown_int_1,
-        unknown_int_2,
-        unknown_short_3,
+        spawn_generations,
+        spawn_probability,
+        spawn_multiplier,
+        spawn_speed_chaos,
+        spawn_direction_chaos,
         num_valid,
         particles,
-        unknown_link_ref: read_i32_little_endian(
+        emitter_modifier_ref: read_i32_little_endian(
             source_bytes,
             cursor,
             source_path,
-            "NiParticleSystemController unknown link",
+            "NiParticleSystemController emitter modifier",
         )?,
-        particle_extra_ref: read_i32_little_endian(
+        particle_modifier_ref: read_i32_little_endian(
             source_bytes,
             cursor,
             source_path,
-            "NiParticleSystemController particle extra",
+            "NiParticleSystemController particle modifier",
         )?,
-        unknown_link_2_ref: read_i32_little_endian(
+        collider_ref: read_i32_little_endian(
             source_bytes,
             cursor,
             source_path,
-            "NiParticleSystemController unknown link 2",
+            "NiParticleSystemController collider",
         )?,
         trailer: read_u8(
             source_bytes,

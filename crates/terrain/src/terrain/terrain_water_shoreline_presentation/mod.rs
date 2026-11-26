@@ -1,4 +1,7 @@
+use std::time::Duration;
+
 use crate::terrain::terrain_water_shoreline_geometry::projection::PreparedTerrainShorelineMeshGroups;
+use crate::terrain::terrain_water_shoreline_geometry::projection::TerrainShorelineRippleBoundary;
 use crate::terrain::terrain_water_shoreline_geometry::ConstructedTerrainShorelineMeshGroup;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::camera::visibility::RenderLayers;
@@ -9,11 +12,19 @@ use openzt2_game_assets::graphics_settings_types::GraphicsEffectQuality;
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_assets::material::material_asset_types::MaterialAsset;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_data::terrain::TerrainShorelineRippleTiming;
 use openzt2_game_data::terrain::TerrainWaterShoreConfiguration;
 use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
 use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTransparentRenderStage;
+use openzt2_world_state::{
+    simulation_time::native_visual_random_stream::NativeVisualRandomStream,
+    world_spawn::prefab_presentation_types::PrefabPresentation,
+    world_spawn::world_membership_types::WorldMember,
+};
 use openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::TerrainWaterWaveRegisters;
+use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionSource;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
     TerrainWaterMembershipIndex, TerrainWaterRegionQuery,
 };
@@ -23,6 +34,173 @@ use openzt2_zoo_state::terrain::terrain_water_shoreline_presentation_types::{
     TerrainShorelineDraws, TerrainShorelineRegion, TerrainWaterShorelineSurface,
 };
 use openzt2_zoo_state::terrain::terrain_water_underwater_particle_types::TerrainWaterRegionLight;
+
+#[derive(Component)]
+pub(super) struct TerrainShorelineRippleEmission {
+    scene: Handle<ScenePrefabAsset>,
+    timing: TerrainShorelineRippleTiming,
+    interval: Timer,
+    spawned_this_period: usize,
+    lifetime: Duration,
+}
+
+#[derive(Component)]
+pub(super) struct TerrainShorelineRippleInstance {
+    lifetime: Timer,
+}
+
+pub(super) fn expire_terrain_shoreline_ripples(
+    time: Res<Time>,
+    mut instances: Query<(Entity, &mut TerrainShorelineRippleInstance)>,
+    mut commands: Commands,
+) {
+    for (entity, mut instance) in &mut instances {
+        if instance.lifetime.tick(time.delta()).is_finished() {
+            commands.entity(entity).try_despawn();
+        }
+    }
+}
+
+pub(super) fn emit_terrain_shoreline_ripples(
+    mut commands: Commands,
+    time: Res<Time>,
+    terrain_assets: Res<Assets<TerrainAsset>>,
+    scene_assets: Res<Assets<ScenePrefabAsset>>,
+    graphics: Res<GraphicsSettings>,
+    regions: TerrainWaterRegionQuery,
+    mut random: ResMut<NativeVisualRandomStream>,
+    mut owners: Query<
+        (
+            Entity,
+            Option<Ref<TerrainShorelineRippleBoundary>>,
+            Option<&TerrainWaterRegionSource>,
+            Option<&Children>,
+            &GlobalTransform,
+            Option<&WorldMember>,
+            Option<&mut TerrainShorelineRippleEmission>,
+        ),
+        Or<(
+            With<TerrainShorelineRippleBoundary>,
+            With<TerrainShorelineRippleEmission>,
+        )>,
+    >,
+    instances: Query<&TerrainShorelineRippleInstance>,
+    parents: Query<&ChildOf>,
+    members: Query<&WorldMember>,
+) {
+    for (owner, boundary, source, children, global, member, emission) in &mut owners {
+        let configuration = boundary
+            .as_ref()
+            .filter(|boundary| !boundary.0.is_empty())
+            .and_then(|_| {
+                let region = regions.get(owner)?;
+                let terrain = terrain_assets.get(region.terrain())?;
+                let biome = region.biome(terrain)?;
+                let shoreline = &biome.water_presentation.as_ref()?.shoreline;
+                let timing = if region.edited_state().is_none() {
+                    terrain
+                        .shoreline_ripple_for_region(source?.source_region_index())?
+                        .1
+                } else {
+                    shoreline.ripple_timing()
+                };
+                let (scene, lifetime) = terrain.shoreline_ripple_instance(
+                    shoreline.ripple_system.as_deref()?,
+                    &biome.name,
+                    &graphics,
+                )?;
+                let period = Duration::try_from_secs_f32(timing.period_seconds).ok()?;
+                (!period.is_zero() && !lifetime.is_zero())
+                    .then_some((scene, timing, period, lifetime))
+            });
+        let children = children
+            .into_iter()
+            .flat_map(|children| children.iter())
+            .filter_map(|child| Some((child, instances.get(child).ok()?)));
+        let Some((scene, timing, period, lifetime)) = configuration else {
+            if emission.is_some() {
+                for (child, _) in children {
+                    commands.entity(child).try_despawn();
+                }
+                commands
+                    .entity(owner)
+                    .remove::<TerrainShorelineRippleEmission>();
+            }
+            continue;
+        };
+        let Some(boundary) = boundary else { continue };
+        let reset = boundary.is_changed()
+            || emission.as_ref().is_none_or(|emission| {
+                emission.scene != *scene
+                    || emission.timing != timing
+                    || emission.lifetime != lifetime
+            });
+        if reset {
+            for (child, _) in children {
+                commands.entity(child).try_despawn();
+            }
+            let next = TerrainShorelineRippleEmission {
+                scene: scene.clone(),
+                timing,
+                interval: Timer::new(period, TimerMode::Once),
+                spawned_this_period: 0,
+                lifetime,
+            };
+            if let Some(mut emission) = emission {
+                *emission = next;
+            } else {
+                commands.entity(owner).insert(next);
+            }
+            continue;
+        }
+        let Some(mut emission) = emission else {
+            continue;
+        };
+        if !scene_assets.contains(scene) {
+            continue;
+        }
+        if time.delta() > emission.interval.remaining() {
+            emission.interval.reset();
+            emission.spawned_this_period = 0;
+            continue;
+        }
+        emission.interval.tick(time.delta());
+        let count = boundary.0.len();
+        let maximum = ((count as f64 * f64::from(timing.maximum_coverage)) as usize).max(1);
+        let per_period =
+            ((count as f64 * f64::from(timing.maximum_coverage_per_period)) as usize).max(1);
+        let allowance = (emission.interval.fraction() * per_period as f32) as usize;
+        let available = allowance.saturating_sub(emission.spawned_this_period);
+        if available == 0 || children.count() == maximum {
+            continue;
+        }
+        let emit = usize::from(random.next_u15()) % available;
+        emission.spawned_this_period += emit;
+        let world_to_parent = global.affine().inverse();
+        let member = member.or_else(|| {
+            parents
+                .iter_ancestors::<ChildOf>(owner)
+                .find_map(|entity| members.get(entity).ok())
+        });
+        for _ in 0..emit {
+            let slot = usize::from(random.next_u15()) % count;
+            let mut ripple = commands.spawn((
+                TerrainShorelineRippleInstance {
+                    lifetime: Timer::new(lifetime, TimerMode::Once),
+                },
+                PrefabPresentation::new(scene.clone()),
+                Transform::from_matrix(Mat4::from(
+                    world_to_parent * boundary.0[slot].compute_affine(),
+                )),
+                Visibility::Inherited,
+                ChildOf(owner),
+            ));
+            if let Some(member) = member {
+                ripple.insert(*member);
+            }
+        }
+    }
+}
 
 #[derive(Component)]
 pub(super) struct TerrainShorelineMeshSlot(usize);
@@ -261,31 +439,28 @@ pub(super) fn update_terrain_shoreline_material_animation_bindings(
     regions: TerrainWaterRegionQuery,
     materials: Query<(
         &TerrainWaterShorelinePresentation,
-        &TerrainWaterWaveRegisters,
+        Ref<TerrainWaterWaveRegisters>,
         &TerrainWaterRegionLight,
     )>,
     mut surfaces: Query<(
-        &TerrainShorelineRegion,
-        &MeshMaterial3d<EffectPassMaterial>,
+        Ref<TerrainShorelineRegion>,
+        Ref<TerrainWaterShorelineSurface>,
+        Ref<MeshMaterial3d<EffectPassMaterial>>,
         &mut Visibility,
     )>,
     mut effect_passes: ResMut<Assets<EffectPassMaterial>>,
     mut uniform_buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
-    for (surface, handle, mut visibility) in &mut surfaces {
-        let Ok((presentation, waves, light)) = materials.get(surface.0) else {
+    for (owner, surface, handle, mut visibility) in &mut surfaces {
+        let Ok((presentation, waves, light)) = materials.get(owner.0) else {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
-        let Some(source) = regions.get(surface.0) else {
+        let Some(source) = regions.get(owner.0) else {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
         let Some(terrain) = terrain_assets.get(source.terrain()) else {
-            visibility.set_if_neq(Visibility::Hidden);
-            continue;
-        };
-        let Some(height) = source.surface_height(terrain) else {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
@@ -296,17 +471,19 @@ pub(super) fn update_terrain_shoreline_material_animation_bindings(
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
-        let Some(mut pass) = effect_passes.get_mut(&handle.0) else {
+        let Some(pass) = effect_passes.get_mut_untracked(handle.id()) else {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
         bind_shoreline_material_values(
-            &mut pass,
+            pass,
             configuration.surface_material.configuration.shore.as_ref(),
             presentation,
             Some(light.raw_base_rgba().truncate()),
         );
-        waves.bind_wave_channels_to_effect_pass(height, &mut pass);
+        if waves.is_changed() || owner.is_changed() || surface.is_changed() || handle.is_changed() {
+            waves.bind_wave_channels_to_effect_pass(surface.surface_plane_height, pass);
+        }
         pass.write_programmable_float_registers_to_persistent_buffers(&mut uniform_buffers);
         visibility.set_if_neq(Visibility::Inherited);
     }

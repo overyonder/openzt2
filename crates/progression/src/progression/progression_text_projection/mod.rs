@@ -15,6 +15,7 @@ use super::{fame_types::Fame, rating_types::ZooRating, research_types::ResearchP
 
 /// Projects canonical progression facts through authored locale formats.
 pub(super) fn project_progression_facts_into_authored_ui_text(
+    time: Res<Time<Fixed>>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,
     worlds: Query<
@@ -93,9 +94,9 @@ pub(super) fn project_progression_facts_into_authored_ui_text(
                 );
             }
             UiTextPropertyBindingSource::ResearchProgress { format } => {
-                let (elapsed, required) = project
+                let (required, elapsed) = project
                     .as_ref()
-                    .map(|(project, _)| (project.elapsed_ticks, project.required_ticks))
+                    .map(|(project, _)| project.saved_ticks(time.timestep()))
                     .unwrap_or_default();
                 let percentage_basis_points = project
                     .as_ref()

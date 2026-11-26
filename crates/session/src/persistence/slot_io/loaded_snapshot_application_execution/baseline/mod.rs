@@ -150,6 +150,7 @@ pub(super) fn begin_snapshot_baseline_load(
     }
     loads.write(BeginWorldLoad {
         saved_world_document: pending.saved_world_document.as_ref().map(Handle::id),
+        mode_document: None,
         operation: Some(operation),
         scenario: decoded.world.scenario_definition_identifier,
         mode: decoded.world.session_mode,

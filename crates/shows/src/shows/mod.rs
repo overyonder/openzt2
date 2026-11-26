@@ -1,5 +1,11 @@
 //! Animal show stages, authored schedules, editor state, and platform upgrades.
 
+pub use running_show_schedule::{
+    ActiveShowTrickOf, ActiveShowTricks, ShowColumnWait, ShowRunSlotOrder,
+};
+pub use scheduled_trick_execution::{ScheduledTrickToken, ShowTrickTokens, TrickTokenForShow};
+pub use show_scoring::ShowScoreSamples;
+
 mod authored_show_rewards;
 mod running_show_schedule;
 mod scheduled_trick_execution;
@@ -35,6 +41,7 @@ pub mod show_timing_operations;
 
 use bevy::prelude::*;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
+use openzt2_zoo_state::construction::FixedConstructionSet;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
@@ -99,6 +106,8 @@ impl Plugin for ShowsPlugin {
             .add_message::<EditShowMixerSlot>()
             .add_message::<ShowAudienceFeedback>()
             .add_message::<ShowMasterOfCeremoniesCue>()
+            .add_message::<openzt2_zoo_state::guests::guest_simulation_types::GuestNeedAdjustmentDue>()
+            .add_message::<openzt2_zoo_state::habitat::habitat_cell_ownership_changes::HabitatCellOwnershipChanged>()
             .add_observer(show_audience_lifecycle::clear_completed_show_watch_action)
             .add_observer(show_audience_lifecycle::discard_experience_when_guest_stops_watching)
             .add_observer(show_event_lifecycle::discard_delivered_event_when_its_window_retires)
@@ -155,7 +164,22 @@ impl Plugin for ShowsPlugin {
             .add_systems(
                 FixedUpdate,
                 show_stage_identification_and_hydration::hydrate_show_stages_from_active_world_definitions
-                    .in_set(FixedGameSet::Act)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
+                openzt2_zoo_state::shows::show_stage_habitat_projection::project_show_stage_habitats
+                    .after(show_stage_identification_and_hydration::hydrate_show_stages_from_active_world_definitions)
+                    .after(openzt2_zoo_state::habitat::habitat_types::HabitatTopologyPublication)
+                    .before(FixedConstructionSet::Prepare)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
+                show_audience_lifecycle::reconcile_guest_show_needs
+                    .in_set(FixedGameSet::Think)
+                    .after(openzt2_zoo_state::guests::GuestDestinationSelection)
+                    .before(BehaviorStepFixedSet::Think)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
@@ -171,6 +195,7 @@ impl Plugin for ShowsPlugin {
                 (
                     (
                         running_show_schedule::advance_running_stage_shows
+                            .after(running_show_schedule::hydrate_restored_show_columns)
                             .after(show_event_lifecycle::dispatch_released_animal_show_events),
                         running_show_schedule::start_next_stage_show_or_break
                             .after(running_show_schedule::initialize_show_schedule_cursors),
@@ -178,6 +203,7 @@ impl Plugin for ShowsPlugin {
                     show_audience_lifecycle::retire_interrupted_show_watch_actions
                         .after(openzt2_zoo_state::guests::GuestLifecycleAdvance),
                     running_show_schedule::initialize_show_schedule_cursors,
+                    running_show_schedule::hydrate_restored_show_columns,
                     show_event_lifecycle::schedule_authored_animal_show_events,
                     show_scoring::apply_authored_trick_outcome_scores
                         .after(show_event_lifecycle::schedule_authored_animal_show_events),

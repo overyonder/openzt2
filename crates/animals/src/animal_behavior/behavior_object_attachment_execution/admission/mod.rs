@@ -2,7 +2,9 @@ use super::*;
 use crate::animal_behavior::behavior_container_admission::BehaviorAdmissionInstruction;
 use bevy::ecs::{entity::Entities, world::EntityWorldMut};
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
-use openzt2_world::world_spawn::prefab_world_instance_spawning::hydrate_loaded_scene_prefab_into_world_instance_root;
+use openzt2_world::world_spawn::prefab_world_instance_spawning::{
+    hydrate_loaded_scene_prefab_into_world_instance_root, PrefabWorldInstanceRootValues,
+};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
     InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest,
@@ -151,7 +153,14 @@ pub(super) fn apply_object_attachment_admissions(
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     mut playback: MessageWriter<AnimationClipPlaybackRequest>,
     entities: &Entities,
-    mut carried_objects: Query<(Option<&mut ContainedObject>, Option<&mut Visibility>)>,
+    mut attachment_values: ParamSet<(
+        Query<(Option<&mut ContainedObject>, Option<&mut Visibility>)>,
+        Query<(
+            Option<&mut Transform>,
+            Option<&mut Visibility>,
+            Option<&mut DefinitionId>,
+        )>,
+    )>,
     mut food_props: Query<&mut held_food_prop::HeldFoodPropAttachment>,
 ) {
     use InteractionContainerAdmissionOutcome::{Granted, Refused};
@@ -169,7 +178,7 @@ pub(super) fn apply_object_attachment_admissions(
                 outcome,
                 definitions.get(&definition_assets),
                 &mut commands,
-                &mut carried_objects,
+                &mut attachment_values.p0(),
             );
         }
         (
@@ -195,7 +204,17 @@ pub(super) fn apply_object_attachment_admissions(
                     commands.entity(member).try_despawn();
                     return;
                 };
-                if !hydrate_admitted_attachment(member, spawn, id, &prefabs, &mut commands) {
+                let mut roots = attachment_values.p1();
+                let Ok((transform, visibility, definition)) = roots.get_mut(member) else {
+                    return;
+                };
+                let values = PrefabWorldInstanceRootValues {
+                    transform,
+                    visibility,
+                    definition,
+                };
+                if !hydrate_admitted_attachment(member, spawn, id, values, &prefabs, &mut commands)
+                {
                     commands.entity(member).try_despawn();
                     return;
                 }
@@ -204,6 +223,7 @@ pub(super) fn apply_object_attachment_admissions(
                 if slot_owns_item(definitions.get(&definition_assets), &attachment, slot) {
                     commands.entity(member).try_despawn();
                 } else {
+                    let mut carried_objects = attachment_values.p0();
                     let previous = carried_objects
                         .get_mut(member)
                         .ok()
@@ -224,7 +244,7 @@ pub(super) fn apply_object_attachment_admissions(
                 member,
                 attachment,
                 visibility,
-                &mut carried_objects,
+                &mut attachment_values.p0(),
                 &mut commands,
             );
             match finish {
@@ -377,6 +397,7 @@ fn hydrate_admitted_attachment(
     member: Entity,
     spawn: NewAttachedObject,
     id: PersistentId,
+    mut values: PrefabWorldInstanceRootValues<'_>,
     prefabs: &Assets<ScenePrefabAsset>,
     commands: &mut Commands,
 ) -> bool {
@@ -387,6 +408,7 @@ fn hydrate_admitted_attachment(
         hydrate_loaded_scene_prefab_into_world_instance_root(
             commands,
             member,
+            values,
             prefab,
             handle,
             spawn.world.root,
@@ -398,15 +420,25 @@ fn hydrate_admitted_attachment(
             RigidBody::Kinematic,
         );
     } else {
-        commands.entity(member).try_insert((
+        let mut entity = commands.entity(member);
+        entity.try_insert_if_new((
             spawn.world,
-            DefinitionId(spawn.definition),
             id,
             Inspectable {
                 definition: spawn.definition,
             },
-            spawn.instance_transform,
         ));
+        if let Some(transform) = &mut values.transform {
+            transform.set_if_neq(spawn.instance_transform);
+        } else {
+            entity.try_insert_if_new(spawn.instance_transform);
+        }
+        let definition = DefinitionId(spawn.definition);
+        if let Some(current) = &mut values.definition {
+            current.set_if_neq(definition);
+        } else {
+            entity.try_insert_if_new(definition);
+        }
     }
     true
 }

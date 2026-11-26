@@ -95,6 +95,10 @@ impl Plugin for TopologyPlugin {
             app.add_plugins(PersistentIdIndexPlugin);
         }
         app.register_required_components::<WorldRoot, TopologyIndex>()
+            .add_message::<openzt2_progression::progression::AwardProgramEffect>()
+            .add_systems(Update, fence_segment_prefab_refresh::replace_zoo_wall_definitions
+                .before(refresh_fence_segment_prefabs_after_topology_index_changes)
+                .run_if(on_message::<openzt2_progression::progression::AwardProgramEffect>))
             .add_observer(detach_removed_fence_endpoints)
             .add_observer(despawn_fence_with_removed_endpoint)
             .add_observer(path_support_hydration::remove_supports_when_path_tile_is_removed)

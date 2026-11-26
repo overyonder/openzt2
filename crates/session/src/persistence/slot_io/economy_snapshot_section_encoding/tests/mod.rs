@@ -5,9 +5,9 @@ use openzt2_game_data::{
 
 fn economy() -> EconomySnapshotRecords {
     EconomySnapshotRecords {
-        zoo_cash: Money(12345),
+        zoo_cash: Money::from_cents(12345),
         unlimited_cash: Some(true),
-        admission_price: Money(250),
+        admission_price: Money::from_cents(250),
         admissions_open: true,
         current_calendar_month: 0,
         lifetime_income: Money::ZERO,
@@ -20,11 +20,11 @@ fn economy() -> EconomySnapshotRecords {
             persistent_identifier: PersistentId(42),
             complete_component_state: true,
             opening_zoo_day: Some(3),
-            profit: Some((1250, 2)),
+            profit: Some((Money::from_cents(1250), 2)),
             price_index: Some(4),
             maintenance_schedule_index: Some(2),
-            wallet: Some(2000),
-            price: Some(500),
+            wallet: Some(Money::from_cents(2000)),
+            price: Some(Money::from_cents(500)),
             service: Some(ServiceFacilitySnapshot {
                 definition: AssetId::from_key("test-service"),
                 capacity: 3,
@@ -139,7 +139,7 @@ fn complete_absence_clears_retained_state_and_legacy_absence_preserves_it() {
         .spawn((
             PersistentId(42),
             WorldMember { root },
-            Wallet(Money(900)),
+            Wallet(Money::from_cents(900)),
             FacilityPriceIndex(4),
             ObjectEconomyFactsResolved,
             ServiceFacilityFactsResolved,

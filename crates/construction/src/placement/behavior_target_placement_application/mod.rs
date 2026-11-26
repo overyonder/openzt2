@@ -297,6 +297,7 @@ pub(super) fn put_down_behavior_target_placements(
                 })
                 .id();
             creation.payments.write(TransactionRequest {
+                domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Simulation,
                 operation: payment,
                 debit: Account::Zoo,
                 credit: Account::External,
@@ -898,6 +899,8 @@ fn request_behavior_target_placement_refund(
 ) {
     let operation = commands.spawn(BehaviorTargetPlacementRefund).id();
     requests.write(TransactionRequest {
+        domain:
+            openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Simulation,
         operation,
         debit: Account::External,
         credit: Account::Zoo,

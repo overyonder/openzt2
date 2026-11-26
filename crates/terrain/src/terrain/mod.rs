@@ -65,6 +65,7 @@ use crate::terrain::terrain_waterfall_projection::advance_authored_terrain_water
 use crate::terrain::water_regions::project_natural_water_regions;
 use crate::terrain::water_regions::rebuild_edited_water_regions;
 use bevy::prelude::*;
+use openzt2_construction::construction::construction_transaction_preparation::ConstructionSubmissionSet;
 use openzt2_zoo_state::terrain::terrain_brush_types::DefinedTerrainStroke;
 use openzt2_zoo_state::terrain::terrain_brush_types::TerrainStroke;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
@@ -102,7 +103,10 @@ pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.init_asset::<authored_terrain_brush_modes::TerrainBrushMode>()
+        app.register_required_components::<
+            WorldRoot,
+            terrain_water_disturbance_presentation::TerrainWaterSprayAudioSequence,
+        >().init_asset::<authored_terrain_brush_modes::TerrainBrushMode>()
             .init_asset_loader::<authored_terrain_brush_modes::TerrainBrushModeLoader>()
             .init_resource::<authored_terrain_brush_modes::TerrainBrushControls>()
             .add_systems(Startup, authored_terrain_brush_modes::load_authored_terrain_brush_modes)
@@ -121,6 +125,8 @@ impl Plugin for TerrainPlugin {
             .add_observer(terrain_chunk_index_cleanup::index_validated_terrain_chunk)
             .add_observer(terrain_chunk_index_cleanup::remove_discarded_terrain_chunk_from_indexes)
             .add_message::<terrain_water_wake_capability::WaterWakeCapabilityInvalidated>()
+            .add_message::<terrain_water_view_transitions::WaterFadeTransitionChanged>()
+            .add_message::<openzt2_world::physics::water_surface_disturbance_projection::NamedWaterSurfaceEffect>()
             .add_observer(terrain_water_wake_capability::invalidate_discarded_water_surface_group)
             .add_observer(terrain_water_wake_capability::invalidate_discarded_water_surface_pass)
             .add_plugins(terrain_water_rays::view_occlusion::WaterRayOcclusionPlugin)
@@ -178,6 +184,8 @@ impl Plugin for TerrainPlugin {
                             .run_if(water_regions::water_target_refresh_is_ready),
 
                         water_regions::edit_retention::reclaim_unretained_retired_water_owners,
+                        water_regions::authored_membership::report_changed_membership_status
+                            .after(water_regions::authored_membership::project_terrain_water_membership),
                         water_regions::authored_membership::project_terrain_water_membership
                             .after(project_natural_water_regions)
                             .after(water_regions::edit_retention::reclaim_unretained_retired_water_owners),
@@ -198,7 +206,6 @@ impl Plugin for TerrainPlugin {
                             .after(terrain_waterfall_projection::prepare_changed_terrain_waterfall_geometry),
                         terrain_water_renderer_inputs::advance_authored_terrain_water_surface_effect_state
                             .after(publish_terrain_water_surfaces)
-                            .after(terrain_waterfall_projection::publish_terrain_waterfall_draws)
                             .after(terrain_water_renderer_inputs::initialize_authored_terrain_water_region_material_state),
                         apply_authored_water_impact_events_to_geometric_wave_channels
                             .after(terrain_water_renderer_inputs::advance_authored_terrain_water_surface_effect_state),
@@ -254,7 +261,10 @@ impl Plugin for TerrainPlugin {
                         update_authored_terrain_water_renderer_inputs
                             .after(terrain_water_renderer_inputs::prepare_changed_water_capture_projections),
                     ),
-                    terrain_water_disturbance_presentation::present_authored_water_surface_spray_samples,
+                    (
+                        terrain_water_disturbance_presentation::present_authored_water_surface_spray_samples,
+                        terrain_water_disturbance_presentation::present_named_water_surface_effects,
+                    ),
                     (
                         terrain_water_caustics::systems::advance_terrain_caustic_animation
                             .after(terrain_water_disturbance_presentation::present_authored_water_surface_spray_samples),
@@ -268,6 +278,10 @@ impl Plugin for TerrainPlugin {
                     ),
                     (
                         terrain_water_shoreline_geometry::projection::project_changed_terrain_shoreline_geometry,
+                        terrain_water_shoreline_presentation::expire_terrain_shoreline_ripples,
+                        terrain_water_shoreline_presentation::emit_terrain_shoreline_ripples
+                            .after(terrain_water_shoreline_geometry::projection::project_changed_terrain_shoreline_geometry)
+                            .after(terrain_water_shoreline_presentation::expire_terrain_shoreline_ripples),
                         terrain_water_shoreline_presentation::initialize_terrain_shoreline_material_animation,
                         terrain_water_shoreline_presentation::advance_terrain_shoreline_material_animation
                             .after(terrain_water_shoreline_presentation::initialize_terrain_shoreline_material_animation),
@@ -292,9 +306,11 @@ impl Plugin for TerrainPlugin {
                         terrain_water_underwater_particles::runtime::synchronize_region_underwater_particle_effects
                             .after(terrain_water_disturbance_presentation::wake_mesh_emission::present_water_wake_samples),
                         terrain_water_underwater_particles::runtime::emit_region_underwater_particles
+                            .after(terrain_water_underwater_particles::runtime::synchronize_region_underwater_particle_effects)
                             .after(terrain_water_underwater_particles::runtime::project_region_suspension_volumes),
-                        terrain_water_underwater_particles::runtime::update_underwater_particle_visibility,
-                    ).chain(),
+                        terrain_water_underwater_particles::runtime::update_underwater_particle_visibility
+                            .after(terrain_water_underwater_particles::runtime::synchronize_region_underwater_particle_effects),
+                    ),
                     terrain_water_underwater_particles::runtime::project_region_suspension_volumes,
                     advance_authored_terrain_waterfall_decal_detail_texture_coordinates,
                     (
@@ -350,11 +366,13 @@ impl Plugin for TerrainPlugin {
                 (
                     authored_terrain_brush_modes::apply_authored_terrain_brush_controls
                         .after(openzt2_zoo_state::construction::ConstructionCursorUpdateSet),
-                    update_terrain_brush_preview_and_commit_completed_pointer_strokes,
+                    update_terrain_brush_preview_and_commit_completed_pointer_strokes
+                        .after(authored_terrain_brush_modes::apply_authored_terrain_brush_controls),
                     resolve_authored_terrain_brush_definitions_into_concrete_strokes,
-                    terrain_live_brush_application::dispatch_held_terrain_strokes,
+                    terrain_live_brush_application::dispatch_held_terrain_strokes
+                        .after(update_terrain_brush_preview_and_commit_completed_pointer_strokes)
+                        .after(resolve_authored_terrain_brush_definitions_into_concrete_strokes),
                 )
-                    .chain()
                     .in_set(GameSet::Intent),
             )
             .add_systems(
@@ -362,6 +380,17 @@ impl Plugin for TerrainPlugin {
                 roll_back_cancelled_live_terrain_brush_edit
                     .before(openzt2_zoo_state::construction::ConstructionPreviewCancellationSet)
                     .in_set(GameSet::Ui),
+            )
+            .add_systems(
+                Update,
+                terrain_edit_preparation::capture_submitted_terrain_brush_stroke
+                    .in_set(ConstructionSubmissionSet),
+            )
+            .add_systems(
+                FixedUpdate,
+                terrain_edit_preparation::clear_submitted_terrain_brush_paths
+                    .after(FixedConstructionSet::Prepare)
+                    .before(FixedConstructionSet::Apply),
             )
             .add_systems(
                 FixedUpdate,
@@ -375,6 +404,7 @@ impl Plugin for TerrainPlugin {
                         .before(FixedConstructionPreparedDomainEditMaterializationSet)
                         .before(openzt2_zoo_state::construction::ConstructionDomainPreparationCollectionSet),
                     despawn_terrain_brush_previews_after_transaction_preparation
+                        .in_set(FixedConstructionSet::Prepare)
                         .after(prepare_terrain_sample_deltas_for_construction_transactions),
                 )
                     .in_set(FixedConstructionSet::Prepare),

@@ -3,14 +3,14 @@ use super::{
     world_definition_source_document_lowering::lower_resolved_world_definition_source_document_closure_to_canonical_document,
 };
 use crate::asset_source::{
-    archive_entry_asset_path::{archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION},
     AssetArchives,
+    archive_entry_asset_path::{ARCHIVE_ENTRY_ASSET_EXTENSION, archive_entry_asset_source_path},
 };
 use crate::source_document::{
     blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
 };
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 use std::{io, path::Path, sync::Arc};
@@ -74,18 +74,17 @@ impl AssetLoader for WorldDefinitionAssetLoader {
             presentation_dependencies::resolve_world_definition_presentation_models(
                 &self.archives,
                 context,
-                &path,
                 &documents,
             )
             .await?;
-        let mut timekeeper = None;
+        let mut metadata = Default::default();
         let mut document =
             lower_resolved_world_definition_source_document_closure_to_canonical_document(
                 &documents,
                 &actor_manifest_resolution_index,
                 &path,
                 authored_type_registry_source_order,
-                &mut timekeeper,
+                &mut metadata,
             )?
             .ok_or_else(|| {
                 io::Error::new(
@@ -110,8 +109,15 @@ impl AssetLoader for WorldDefinitionAssetLoader {
                 document,
                 &actor_manifest_resolution_index,
                 &resolved_models,
+                metadata.tank_material_paths,
             )?;
-        asset.timekeeper = timekeeper;
+        asset.metadata = metadata.runtime;
+        for source in &asset.tank_water_material_sources {
+            context
+                .read_asset_bytes(source.path.to_string())
+                .await
+                .map_err(io::Error::other)?;
+        }
         let uses_puzzle_background = puzzle_textures.is_some();
         if let Some(puzzle_textures) = puzzle_textures {
             let mut textures = asset.textures.into_vec();

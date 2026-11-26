@@ -59,7 +59,9 @@ pub(crate) fn project_live_zoo_status_to_authored_information_bindings(
             continue;
         }
         let next = match &binding.0 {
-            UiIntegerPropertyBindingSource::ZooCashCents => cash.as_ref().map(|cash| cash.0 .0),
+            UiIntegerPropertyBindingSource::ZooCashCents => cash
+                .as_ref()
+                .map(|cash| super::text_replacement_operations::currency_cents(cash.0)),
             UiIntegerPropertyBindingSource::ZooFameHalfStars => {
                 fame.as_ref().map(|fame| i64::from(fame.half_stars))
             }

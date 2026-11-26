@@ -15,7 +15,7 @@ use openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioCue;
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_world_state::simulation_time::deterministic_random_stream::RngDomain;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_world_state::simulation_time::simulation_clock_types::{ZooClock, ZooDayCadence};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
@@ -48,8 +48,10 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
             Ref<openzt2_interface_state::photos::photo_album_types::DefaultPhotoAlbumStorageInitializedForWorld>,
             Option<Ref<SelectedWorldDocumentHandles>>,
             Ref<ZooClock>,
+            Ref<ZooDayCadence>,
             Ref<ZooSeed>,
             &mut PersistentIdAllocator,
+            Option<&mut AmbientSpawnCadence>,
         ),
         Without<WorldEnvironments>,
     >,
@@ -67,12 +69,15 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
     let Some(scenario_catalogue) = active_scenarios.get(&scenarios) else {
         return;
     };
-    for (root, world, loaded, photos, documents, clock, seed, mut allocator) in &mut roots {
+    for (root, world, loaded, photos, documents, clock, cadence, seed, mut allocator, ambient) in
+        &mut roots
+    {
         if !catalogue_changed
             && !world.is_changed()
             && !loaded.is_added()
             && !photos.is_added()
             && !clock.is_added()
+            && !cadence.is_changed()
             && !seed.is_changed()
             && !documents.as_ref().is_some_and(DetectChanges::is_changed)
         {
@@ -108,7 +113,8 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
             warn!(environment = ?environment_id, weather = ?initial_weather_id, "native environment has no initial weather definition");
             continue;
         }
-        let Some(fraction) = calculate_environment_month_fraction(&clock, definitions.timing())
+        let Some(fraction) =
+            calculate_environment_month_fraction(&clock, *cadence, definitions.timing())
         else {
             continue;
         };
@@ -156,10 +162,15 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
             environment_commands.insert(weather);
         }
         let environment_entity = environment_commands.id();
-        commands.entity(root).insert(AmbientSpawnCadence {
+        let next_ambient = AmbientSpawnCadence {
             timer: Timer::new(std::time::Duration::ZERO, TimerMode::Once),
             random: DeterministicRng::from_entity(*seed, persistent_id, RngDomain::AmbientSpawner),
-        });
+        };
+        if let Some(mut ambient) = ambient {
+            *ambient = next_ambient;
+        } else {
+            commands.entity(root).insert(next_ambient);
+        }
         if let Some(initial_weather) = initial_weather {
             project_weather_audio_and_effects(
                 environment_entity,

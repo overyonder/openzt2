@@ -32,8 +32,12 @@ use super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes;
 fn disease_check_interval(definitions: WorldDefinitionsView<'_>) -> Option<u64> {
     let policy = definitions.disease_exposure()?;
     Some(
-        ((f64::from(policy.check_interval_seconds) * f64::from(definitions.timing().fixed_hz))
-            .ceil() as u64)
+        ((f64::from(policy.check_interval_seconds)
+            / definitions
+                .simulation_timestep()
+                .expect("simulation timing is loaded")
+                .as_secs_f64())
+        .ceil() as u64)
             .max(1),
     )
 }
@@ -108,7 +112,10 @@ pub(super) fn expose_animals_to_authored_diseases(
         return;
     };
     let update_interval = (f64::from(policy.update_interval_seconds)
-        * f64::from(view.timing().fixed_hz))
+        / view
+            .simulation_timestep()
+            .expect("simulation timing is loaded")
+            .as_secs_f64())
     .ceil() as u64;
     let mut deadline = match deadline {
         Some(deadline) => Some(deadline),
@@ -119,10 +126,10 @@ pub(super) fn expose_animals_to_authored_diseases(
                 .unwrap_or_default()
                 .saturating_add(1)
                 .saturating_mul(interval);
-            commands
-                .entity(root)
-                .insert(DiseaseExposureDeadline(first_check));
             if immediate.0.is_none() {
+                commands
+                    .entity(root)
+                    .insert(DiseaseExposureDeadline(first_check));
                 return;
             }
             None
@@ -383,7 +390,10 @@ pub(super) fn expose_animals_to_authored_diseases(
         }
         if assigned {
             let cure_duration = (f64::from(policy.cure_timeout_seconds)
-                * f64::from(view.timing().fixed_hz))
+                / view
+                    .simulation_timestep()
+                    .expect("simulation timing is loaded")
+                    .as_secs_f64())
             .ceil() as u64;
             commands.entity(root).insert(ActiveZooDisease {
                 definition: disease.name,

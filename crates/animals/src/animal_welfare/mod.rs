@@ -11,7 +11,7 @@ use types::*;
 use bevy::prelude::*;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
-use openzt2_world_state::application_schedule::FixedGameSet;
+use openzt2_world_state::application_schedule::{FixedGameSet, ZooSlowTick};
 use openzt2_world_state::simulation_time::simulation_control_queries::simulation_is_running;
 
 pub struct AnimalWelfarePlugin;
@@ -42,7 +42,7 @@ impl Plugin for AnimalWelfarePlugin {
                 FixedUpdate,
                 (
                     systems::project_need_point_policy,
-                    systems::update_need_points.after(systems::project_need_point_policy),
+                    systems::update_need_points.after(systems::project_need_point_policy).in_set(ZooSlowTick),
                     systems::accumulate_need_points.after(systems::update_need_points),
                 )
                     .in_set(FixedGameSet::Act)

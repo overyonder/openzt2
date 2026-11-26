@@ -161,7 +161,17 @@ fn fixture() -> (App, Entity, Entity, Entity) {
         .add_message::<BehaviorViewEventEmitted>()
         .add_systems(Update, apply_guest_reactions);
     install_policy(&mut app, &policy_document());
-    let root = app.world_mut().spawn_empty().id();
+    let root = app
+        .world_mut()
+        .spawn(
+            openzt2_world_state::simulation_time::simulation_clock_types::ZooClock {
+                tick: 10,
+                absolute_day: 0,
+                tick_in_day: 10,
+                fractional_tick: Default::default(),
+            },
+        )
+        .id();
     let area = app.world_mut().spawn(WorldMember { root }).id();
     let subject = app
         .world_mut()

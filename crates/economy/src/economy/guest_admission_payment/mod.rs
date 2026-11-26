@@ -83,6 +83,7 @@ pub(super) fn request_guest_admission_payment_after_entrance_reached(
                 ))
                 .id();
             payments.write(TransactionRequest {
+                domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Simulation,
                 operation,
                 debit: Account::Entity(guest),
                 credit: Account::Zoo,
@@ -159,7 +160,7 @@ mod tests {
         let root = app
             .world_mut()
             .spawn((
-                AdmissionPrice::from_adult(Money(100)),
+                AdmissionPrice::from_adult(Money::from_cents(100)),
                 ZooAdmissionsOpen(true),
             ))
             .id();
@@ -168,7 +169,7 @@ mod tests {
             .spawn((
                 Guest,
                 GuestPhase::Arriving,
-                Wallet(Money(1000)),
+                Wallet(Money::from_cents(1000)),
                 WorldMember { root },
             ))
             .id();

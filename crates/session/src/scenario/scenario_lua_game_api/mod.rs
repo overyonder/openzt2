@@ -12,9 +12,6 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
     lua: &Lua,
     scope: &'scope Scope<'scope, 'env>,
     queries: ScenarioLuaQueryFacts<'env>,
-    economy: &'env RefCell<
-        Vec<openzt2_zoo_state::economy::scenario_economy_command_types::ScenarioEconomyOperation>,
-    >,
     award_points: &'env RefCell<Vec<i32>>,
     maximum_fame_percent: &'env RefCell<Option<f32>>,
     challenge_offers: &'env RefCell<Vec<String>>,
@@ -23,7 +20,6 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         Vec<openzt2_zoo_state::scenario::scenario_objective_types::ShowScenarioRuleRequest>,
     >,
     available_content: &'env RefCell<Vec<openzt2_game_data::AssetId>>,
-    current_photo_challenge_set: &'env RefCell<Option<openzt2_game_data::AssetId>>,
     persist_profile_variables: &'env std::cell::Cell<bool>,
     ui: &'env RefCell<Vec<super::scenario_lua_ui::ScenarioUiCommand>>,
     entity_operations: &'env super::scenario_lua_entity_commands::PendingEntityOperations,
@@ -69,11 +65,24 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         super::scenario_lua_snapshot_types::SCENARIO_GLOBAL_VARIABLES,
         state.clone(),
     )?;
+    let world_variables = queries.world.zip(queries.world_variable);
     globals.set(
         "getglobalvar",
         scope.create_function({
             let state = state.clone();
-            move |_, name: String| state.get::<Value>(name)
+            move |lua, name: String| {
+                let local = state.get::<Value>(name.as_str())?;
+                if matches!(local, Value::Nil | Value::String(_)) {
+                    if let Some((root, query)) = world_variables {
+                        if let Some(value) =
+                            query(root, openzt2_game_data::AssetId::from_key(&name), None)
+                        {
+                            return lua.create_string(value).map(Value::String);
+                        }
+                    }
+                }
+                Ok(local)
+            }
         })?,
     )?;
     globals.set(
@@ -90,16 +99,32 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
                         next,
                     ));
             }
+            if let Some((root, mutate)) = world_variables {
+                let key = openzt2_game_data::AssetId::from_key(&name);
+                match &value {
+                    Value::String(value) => {
+                        let value = value.to_str()?;
+                        mutate(root, key, Some(Some(value.as_ref())));
+                        if !name.eq("nextScenario") {
+                            return state.set(name, Value::Nil);
+                        }
+                    }
+                    Value::Nil => {
+                        mutate(root, key, Some(None));
+                    }
+                    _ => {}
+                }
+            }
             state.set(name, value)
         })?,
     )?;
     globals.set(
         "howMuchCash",
-        scope.create_function(move |_, ()| Ok(queries.zoo_cash.0 .0 / 100))?,
+        scope.create_function(move |_, ()| Ok(queries.zoo_economy(None)?.0.dollars()))?,
     )?;
     globals.set(
         "getAdmissionPrice",
-        scope.create_function(move |_, ()| Ok(queries.guest_admission_price.adult.0 / 100))?,
+        scope.create_function(move |_, ()| Ok(queries.zoo_economy(None)?.1.adult.dollars()))?,
     )?;
     globals.set(
         "getHalfStars",
@@ -239,14 +264,17 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         "ZT_GET_DONATIONBYANIMALTYPE",
         scope.create_function(move |_, (_, category): (Table, String)| {
             let category = openzt2_game_data::AssetId::from_key(&category);
-            let cents = queries
+            let amount = queries
                 .donation_totals
                 .iter()
-                .try_fold(0_i64, |sum, totals| {
-                    sum.checked_add(totals.aggregate_for_category(Some(category))?.amount.0)
-                })
+                .try_fold(
+                    openzt2_zoo_state::economy::money_types::Money::ZERO,
+                    |sum, totals| {
+                        sum.checked_add(totals.aggregate_for_category(Some(category))?.amount)
+                    },
+                )
                 .ok_or_else(|| mlua::Error::runtime("donation total exceeds currency range"))?;
-            Ok(cents as f64 / 100.0)
+            Ok(f64::from(amount.dollars()))
         })?,
     )?;
     // The shipped `awards` and `isFreeform` helpers ask these of ZTStatus.
@@ -265,7 +293,7 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
     status.set(
         "ZT_GET_ADMISSION_PRICE",
         scope.create_function(move |_, _: MultiValue| {
-            Ok(queries.guest_admission_price.adult.0 / 100)
+            Ok(queries.zoo_economy(None)?.1.adult.dollars())
         })?,
     )?;
     // The shipped `getIsTankInWorld` asks this; the first Marine Mania
@@ -318,7 +346,8 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
     )?;
     economy_manager.set(
         "ZT_GET_ZOO_CASH",
-        scope.create_function(move |_, _: MultiValue| Ok(queries.zoo_cash.0 .0 / 100))?,
+        scope
+            .create_function(move |_, _: MultiValue| Ok(queries.zoo_economy(None)?.0.dollars()))?,
     )?;
     status.set(
         "ZT_SET_TUTORIALRULE_ACTIVE",
@@ -345,10 +374,7 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         super::scenario_lua_ui::create_mode_adapter(lua, scope, ui, queries, entity_operations)?;
     let photo_challenges =
         super::scenario_lua_photo_challenge_queries::create_scenario_lua_photo_challenge_component(
-            lua,
-            scope,
-            queries,
-            current_photo_challenge_set,
+            lua, scope, queries,
         )?;
     let entity_manager = super::scenario_lua_entity_queries::create_scenario_lua_entity_manager(
         lua,
@@ -379,6 +405,29 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
             Ok(())
         })?,
     )?;
+    let puzzle_manager = lua.create_table()?;
+    let set_puzzle = scope.create_function(move |_, (_, name): (Table, Option<String>)| {
+        let puzzle = name.as_deref().filter(|name| !name.is_empty() && *name != "-")
+            .map(|name| openzt2_game_data::AssetId::from_key(
+                &openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(name),
+            ));
+        ui.borrow_mut().push(super::scenario_lua_ui::ScenarioUiCommand::FossilPuzzle(puzzle));
+        Ok(())
+    })?;
+    puzzle_manager.set("ZT_SET_PUZZLE_TO_FIND", set_puzzle.clone())?;
+    puzzle_manager.set(
+        "sendMessage",
+        scope.create_function(
+            move |_, (receiver, message, name): (Table, String, Option<String>)| {
+                if message != "ZT_SET_PUZZLE_TO_FIND" {
+                    return Err(mlua::Error::runtime(format!(
+                        "unknown puzzle operation {message}"
+                    )));
+                }
+                set_puzzle.call::<()>((receiver, name))
+            },
+        )?,
+    )?;
     globals.set(
         "queryObject",
         scope.create_function(move |_, name: String| match name.as_str() {
@@ -388,6 +437,7 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
             "ZTStatus" => Ok(Value::Table(status.clone())),
             "BFGManager" => Ok(Value::Table(entity_manager.clone())),
             "ZTWorldMgr" => Ok(Value::Table(world_manager.clone())),
+            "ZTPuzzleMgr" => Ok(Value::Table(puzzle_manager.clone())),
             "ZTTankMgr" => Ok(Value::Table(tank_manager.clone())),
             "UIRoot" => Ok(Value::Table(ui_root.clone())),
             "ZTMode" => Ok(Value::Table(mode.clone())),
@@ -413,33 +463,27 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
     globals.set(
         "giveCash",
         scope.create_function_mut(move |_, values: MultiValue| {
-            economy
-                .borrow_mut()
-                .push(ScenarioEconomyOperation::GrantCash(
-                    convert_lua_command_arguments_to_money(values)?,
-                ));
+            queries.zoo_economy(Some(ScenarioEconomyOperation::GrantCash(
+                convert_lua_command_arguments_to_money(values)?,
+            )))?;
             Ok(())
         })?,
     )?;
     globals.set(
         "takeCash",
         scope.create_function_mut(move |_, values: MultiValue| {
-            economy
-                .borrow_mut()
-                .push(ScenarioEconomyOperation::TakeCash(
-                    convert_lua_command_arguments_to_money(values)?,
-                ));
+            queries.zoo_economy(Some(ScenarioEconomyOperation::TakeCash(
+                convert_lua_command_arguments_to_money(values)?,
+            )))?;
             Ok(())
         })?,
     )?;
     globals.set(
         "setAdmissionPrice",
         scope.create_function_mut(move |_, values: MultiValue| {
-            economy
-                .borrow_mut()
-                .push(ScenarioEconomyOperation::SetAdmission(
-                    convert_lua_command_arguments_to_money(values)?,
-                ));
+            queries.zoo_economy(Some(ScenarioEconomyOperation::SetAdmission(
+                convert_lua_command_arguments_to_money(values)?,
+            )))?;
             Ok(())
         })?,
     )?;
@@ -473,11 +517,14 @@ fn convert_lua_command_arguments_to_money(
 ) -> mlua::Result<openzt2_zoo_state::economy::money_types::Money> {
     values
         .into_iter()
-        .filter_map(convert_integral_lua_number_to_i64)
+        .filter_map(|value| match value {
+            Value::Number(value) => Some(value as f32),
+            Value::Integer(value) => Some(value as f32),
+            _ => None,
+        })
         .next_back()
-        .and_then(|dollars| dollars.checked_mul(100))
-        .map(openzt2_zoo_state::economy::money_types::Money)
-        .ok_or_else(|| mlua::Error::runtime("money command requires whole dollars"))
+        .and_then(openzt2_zoo_state::economy::money_types::Money::from_dollars)
+        .ok_or_else(|| mlua::Error::runtime("money command requires finite dollars"))
 }
 
 fn convert_lua_command_arguments_to_i32(values: MultiValue) -> mlua::Result<i32> {
@@ -513,7 +560,9 @@ fn install_scenario_rule_visibility_command<'scope, 'env: 'scope>(
 }
 
 fn finance_value(queries: ScenarioLuaQueryFacts<'_>, request: &Table) -> mlua::Result<f64> {
-    use openzt2_zoo_state::economy::monthly_finance_types::{FinanceMetric, FinancePeriod};
+    use openzt2_zoo_state::economy::monthly_finance_types::{
+        FinanceMetric, FinancePeriod, FinanceValue,
+    };
     if request.get::<String>("_type")? != "ZTEconomyInfo" {
         return Err(mlua::Error::runtime("expected ZTEconomyInfo"));
     }
@@ -545,35 +594,41 @@ fn finance_value(queries: ScenarioLuaQueryFacts<'_>, request: &Table) -> mlua::R
                         _ => 0,
                     }))
                 }
-                "admissions_income" => (row.admission_income.0, 0),
-                "cash_grants" => (row.cash_grants.0, 0),
-                "donations_income" => (row.donation_income.0, 0),
-                "concessions_food_drink" => (row.food_drink_sales.0, 0),
-                "recycling" => (row.recycling_income.0, 0),
-                "concessions_gifts" => (row.gift_sales.0, 0),
-                "animal_adoption" => (0, row.animal_adoption.0),
-                "animal_upkeep" => (0, row.animal_upkeep.0),
-                "construction" => (0, row.construction.0),
-                "research" => (0, row.research.0),
-                "staff_salaries" => (0, row.staff_salaries.0),
-                "upkeep" => (0, row.upkeep.0),
-                "generalEconomyComponent" => (row.income.0, row.expenses.0),
-                _ => (0, 0),
+                "admissions_income" => (row.admission_income.dollars(), 0.0),
+                "cash_grants" => (row.cash_grants.dollars(), 0.0),
+                "donations_income" => (row.donation_income.dollars(), 0.0),
+                "concessions_food_drink" => (row.food_drink_sales.dollars(), 0.0),
+                "recycling" => (row.recycling_income.dollars(), 0.0),
+                "concessions_gifts" => (row.gift_sales.dollars(), 0.0),
+                "animal_adoption" => (0.0, row.animal_adoption.dollars()),
+                "animal_upkeep" => (0.0, row.animal_upkeep.dollars()),
+                "construction" => (0.0, row.construction.dollars()),
+                "research" => (0.0, row.research.dollars()),
+                "staff_salaries" => (0.0, row.staff_salaries.dollars()),
+                "upkeep" => (0.0, row.upkeep.dollars()),
+                "generalEconomyComponent" => (row.income.dollars(), row.expenses.dollars()),
+                _ => (0.0, 0.0),
             };
             match metric.as_str() {
                 "income" => income,
                 "expenses" => expenses,
-                "profit" => income.saturating_sub(expenses),
-                "cash" if category == "generalEconomyComponent" => row.closing_cash.0,
-                _ => 0,
+                "profit" => income - expenses,
+                "cash" if category == "generalEconomyComponent" => row.closing_cash.dollars(),
+                _ => 0.0,
             }
         }
         "lifetime" => {
             let metric = match (category.as_str(), metric.as_str()) {
                 ("admissions", "users" | "totalUsers") => {
-                    return Ok(history
-                        .finance_metric_value(FinanceMetric::TotalUsers, FinancePeriod::Lifetime)
-                        as f64);
+                    return Ok(
+                        match history.finance_metric_value(
+                            FinanceMetric::TotalUsers,
+                            FinancePeriod::Lifetime,
+                        ) {
+                            FinanceValue::Users(users) => users as f64,
+                            _ => 0.0,
+                        },
+                    );
                 }
                 ("donations_income", "income" | "profit") => FinanceMetric::DonationIncome,
                 ("generalEconomyComponent", "income") => FinanceMetric::Income,
@@ -581,9 +636,12 @@ fn finance_value(queries: ScenarioLuaQueryFacts<'_>, request: &Table) -> mlua::R
                 ("generalEconomyComponent", "profit") => FinanceMetric::Profit,
                 _ => return Ok(0.0),
             };
-            history.finance_metric_value(metric, FinancePeriod::Lifetime)
+            match history.finance_metric_value(metric, FinancePeriod::Lifetime) {
+                FinanceValue::Money(money) => money.dollars(),
+                FinanceValue::Users(_) => 0.0,
+            }
         }
         _ => return Ok(0.0),
     };
-    Ok(value as f64 / 100.0)
+    Ok(f64::from(value))
 }

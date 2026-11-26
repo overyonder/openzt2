@@ -23,14 +23,14 @@ use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
 use openzt2_world_state::world_spawn::world_entity_crating::{AnimalCrate, ScriptedCrating, UncratedWorldEntity};
 use openzt2_zoo_state::staff::staff_job_types::authored_staff_request_urgency;
 use openzt2_zoo_state::staff::staff_job_types::StaffJob;
-use openzt2_zoo_state::staff::staff_job_types::StaffJobRouting;
+use openzt2_zoo_state::staff::staff_job_types::{StaffJobRouting, StaffJobsAtTarget};
+use bevy::ecs::relationship::RelationshipTarget;
 use openzt2_zoo_state::staff::staff_lifecycle_messages::CancelStaffJobRequest;
 use openzt2_zoo_state::staff::staff_lifecycle_messages::StaffJobRequest;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
-use super::staff_request_state_types::StaffRequestControllerSample;
+use super::staff_request_fact_changes::{StaffRequestFactChanged, StaffRequestFactValue};
 use super::staff_request_state_types::StaffRequestRowIdentity;
 use super::staff_request_state_types::StaffRequestRuntimeState;
-use super::staff_request_state_types::StaffRequestThresholdState;
 use super::staff_request_state_types::StaffRequestRuntimeBinding;
 use super::staff_request_state_types::StaffRequestJobKey;
 use super::staff_request_state_types::StaffRequestJobEvent;
@@ -100,12 +100,12 @@ impl AnimalRequestAttribute {
             bool,
             bool,
         ),
-    ) -> Option<StaffRequestControllerSample> {
+    ) -> Option<StaffRequestFactValue> {
         let deprivation = |wellness: i32| {
             // Controllers use authored deprivation on 0..100, whereas the
             // welfare owner stores wellness on 0..1000 in Q16.
-            StaffRequestControllerSample::NumberQ16(
-                (MAX_NEED_Q16 - wellness.clamp(0, MAX_NEED_Q16)) / 10,
+            StaffRequestFactValue::Number(
+                (MAX_NEED_Q16 - wellness.clamp(0, MAX_NEED_Q16)) as f32 / 655_360.0,
             )
         };
         match self {
@@ -114,8 +114,8 @@ impl AnimalRequestAttribute {
             Self::Health => health.map(|need| deprivation(need.0)),
             Self::Hygiene => hygiene.map(|need| deprivation(need.0)),
             Self::Stimulation => stimulation.map(|need| deprivation(need.0)),
-            Self::Escaped => Some(StaffRequestControllerSample::Boolean(escaped)),
-            Self::Diseased => Some(StaffRequestControllerSample::Boolean(diseased)),
+            Self::Escaped => Some(StaffRequestFactValue::Boolean(escaped)),
+            Self::Diseased => Some(StaffRequestFactValue::Boolean(diseased)),
         }
     }
 }
@@ -149,6 +149,7 @@ fn bind_rows(
                     row_index,
                     job_kind: row.request.token.and_then(&kind_for_token),
                     previous: None,
+                    created: false,
                 };
                 *ordinal = ordinal.saturating_add(1);
                 Some(state)
@@ -166,10 +167,13 @@ fn reconcile_rows(
     bind_rows(definition, rows, kind_for_token)
         .into_iter()
         .map(|mut state| {
-            state.previous = previous
+            if let Some(old) = previous
                 .iter()
                 .find(|old| old.row == state.row && old.job_kind == state.job_kind)
-                .and_then(|old| old.previous);
+            {
+                state.previous = old.previous;
+                state.created = old.created;
+            }
             state
         })
         .collect()
@@ -185,23 +189,17 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
     mut removed_definitions: RemovedComponents<DefinitionId>,
     orphaned: Query<&StaffRequestRuntimeBinding, Without<DefinitionId>>,
     mut entities: Query<(&DefinitionId, Option<&mut StaffRequestRuntimeBinding>)>,
-    jobs: Query<(Entity, &StaffJob, Option<&StaffJobRouting>)>,
+    jobs: Query<(&StaffJob, Option<&StaffJobRouting>)>,
+    job_targets: Query<&StaffJobsAtTarget>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
 ) {
-    let mut cancellation_index = None;
     for entity in removed_definitions.read() {
         let Ok(binding) = orphaned.get(entity) else {
             continue;
         };
         for state in &binding.rows {
             if let Some(key) = state.job_key(entity) {
-                cancel_staff_jobs(
-                    key,
-                    Some(key.routing),
-                    &jobs,
-                    &mut cancellation_index,
-                    &mut cancellations,
-                );
+                cancel_staff_jobs(key, &jobs, &job_targets, &mut cancellations);
             }
         }
         commands
@@ -277,13 +275,7 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
                     continue;
                 }
                 if let Some(key) = old.job_key(entity) {
-                    cancel_staff_jobs(
-                        key,
-                        Some(key.routing),
-                        &jobs,
-                        &mut cancellation_index,
-                        &mut cancellations,
-                    );
+                    cancel_staff_jobs(key, &jobs, &job_targets, &mut cancellations);
                 }
             }
             if next.is_empty() {
@@ -396,7 +388,8 @@ pub(super) fn evaluate_staff_request_rows(
         Option<&MaintenanceScheduleIndex>,
     )>,
     animal_needs: Query<AnimalRequestFacts, (With<Animal>, Without<Dead>, UncratedWorldEntity)>,
-    jobs: Query<(Entity, &StaffJob, Option<&StaffJobRouting>)>,
+    jobs: Query<(&StaffJob, Option<&StaffJobRouting>)>,
+    job_targets: Query<&StaffJobsAtTarget>,
     mut requests: MessageWriter<StaffJobRequest>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
 ) {
@@ -422,7 +415,6 @@ pub(super) fn evaluate_staff_request_rows(
             .filter(|&entity| seen.insert(entity))
             .collect()
     };
-    let mut cancellation_index = None;
     for candidate in candidates {
         let Ok((
             entity,
@@ -452,27 +444,22 @@ pub(super) fn evaluate_staff_request_rows(
                 continue;
             };
             let sample = if row.attribute_key == Some(food_level_key()) {
-                sample.map(StaffRequestControllerSample::NumberQ16)
+                sample.map(|q16| StaffRequestFactValue::Number(q16 as f32 / 65_536.0))
             } else if row.attribute_key == Some(AssetId::from_key("f_trashlevel")) {
                 // The container's contained waste is its authored trash level.
                 waste.map(|waste| {
-                    StaffRequestControllerSample::NumberQ16(
-                        i32::from(waste.contained_waste_units) << 16,
-                    )
+                    StaffRequestFactValue::Number(f32::from(waste.contained_waste_units))
                 })
             } else if row.attribute_key == Some(AssetId::from_key("f_filterdirtylevel")) {
-                filter.map(|filter| {
-                    StaffRequestControllerSample::NumberQ16((filter.dirt_percent * 65536.0) as i32)
-                })
+                filter.map(|filter| StaffRequestFactValue::Number(filter.dirt_percent))
             } else if row.attribute_key.is_none() {
                 // A controller without an attribute raises on creation only.
                 if litter.is_some_and(|litter| litter.uncontained_waste_units == 0)
                     || animal_waste.is_some_and(|waste| !waste.is_valid())
                 {
-                    None
-                } else {
-                    Some(StaffRequestControllerSample::NoValue)
+                    continue;
                 }
+                None
             } else if let Some(attribute) = row.attribute_key.and_then(AnimalRequestAttribute::of) {
                 let Some(sample) = animal_needs
                     .get(entity)
@@ -483,13 +470,7 @@ pub(super) fn evaluate_staff_request_rows(
                     // care work. Resume with a fresh sample if it returns.
                     state.previous = None;
                     if let Some(key) = state.job_key(entity) {
-                        cancel_staff_jobs(
-                            key,
-                            None,
-                            &jobs,
-                            &mut cancellation_index,
-                            &mut cancellations,
-                        );
+                        cancel_staff_jobs(key, &jobs, &job_targets, &mut cancellations);
                     }
                     continue;
                 };
@@ -497,16 +478,10 @@ pub(super) fn evaluate_staff_request_rows(
             } else {
                 None
             };
-            let Some(sample) = sample else {
-                continue;
-            };
             let scheduled = filter.and_then(|filter| filter_schedule_row(row, filter, schedule));
-            if let Some(event) = evaluate_staff_request_row(
-                scheduled.as_ref().unwrap_or(row),
-                state,
-                entity,
-                Some(sample),
-            ) {
+            if let Some(event) =
+                evaluate_staff_request_row(scheduled.as_ref().unwrap_or(row), state, entity, sample)
+            {
                 match event {
                     StaffRequestJobEvent::Raised { key, urgency } => {
                         requests.write(StaffJobRequest {
@@ -518,13 +493,7 @@ pub(super) fn evaluate_staff_request_rows(
                         });
                     }
                     StaffRequestJobEvent::Cancelled { key } => {
-                        cancel_staff_jobs(
-                            key,
-                            None,
-                            &jobs,
-                            &mut cancellation_index,
-                            &mut cancellations,
-                        );
+                        cancel_staff_jobs(key, &jobs, &job_targets, &mut cancellations);
                     }
                 }
             }
@@ -562,33 +531,21 @@ impl StaffRequestRuntimeState {
     }
 }
 
-type CancellationIndex =
-    bevy::platform::collections::HashMap<(Entity, AssetId), Vec<(Entity, StaffJobRouting)>>;
-
 fn cancel_staff_jobs(
     key: StaffRequestJobKey,
-    required_routing: Option<StaffJobRouting>,
-    jobs: &Query<(Entity, &StaffJob, Option<&StaffJobRouting>)>,
-    index: &mut Option<CancellationIndex>,
+    jobs: &Query<(&StaffJob, Option<&StaffJobRouting>)>,
+    targets: &Query<&StaffJobsAtTarget>,
     cancellations: &mut MessageWriter<CancelStaffJobRequest>,
 ) {
-    let index = index.get_or_insert_with(|| {
-        let mut result = CancellationIndex::default();
-        for (entity, job, routing) in jobs.iter() {
-            if let Some(token) = job.token {
-                result
-                    .entry((job.target, token))
-                    .or_default()
-                    .push((entity, routing.copied().unwrap_or_default()));
-            }
-        }
-        result
-    });
-    if let Some(candidates) = index.get(&(key.target, key.token)) {
-        for &(job, routing) in candidates {
-            if required_routing.is_none_or(|required| routing == required) {
-                cancellations.write(CancelStaffJobRequest { job });
-            }
+    let Ok(candidates) = targets.get(key.target) else {
+        return;
+    };
+    for entity in candidates.iter() {
+        if jobs
+            .get(entity)
+            .is_ok_and(|(job, _)| job.token == Some(key.token))
+        {
+            cancellations.write(CancelStaffJobRequest { job: entity });
         }
     }
 }
@@ -597,29 +554,29 @@ fn evaluate_staff_request_row(
     row: &StaffRequestControllerDefinition,
     state: &mut StaffRequestRuntimeState,
     target: Entity,
-    current: Option<StaffRequestControllerSample>,
+    current: Option<StaffRequestFactValue>,
 ) -> Option<StaffRequestJobEvent> {
-    let current = current.map(|sample| StaffRequestThresholdState {
-        trigger: staff_threshold_matches(row.threshold_comparison, row.threshold, sample),
-        cancel: staff_threshold_matches(row.cancel_comparison, row.cancel_threshold, sample),
-    });
-    // Keep each result under the thresholds in effect when it was sampled.
+    let first = !state.created;
+    state.created = true;
     let previous = state.previous;
-    state.previous = current.or_else(|| {
-        row.attribute_key
-            .is_none()
-            .then(StaffRequestThresholdState::default)
-    });
-    let trigger_on_creation = previous.is_none() && row.trigger_on_creation;
-    let previous = previous.unwrap_or_default();
-    let current = current.unwrap_or_default();
-    let event = if trigger_on_creation || (current.trigger && !previous.trigger) {
-        true
-    } else if current.cancel && !previous.cancel {
-        false
-    } else {
-        return None;
+    if current.is_some() {
+        state.previous = current;
+    }
+    let crossed = |comparison, threshold| {
+        previous.zip(current).is_some_and(|(old, new)| {
+            old != new
+                && !staff_threshold_matches(comparison, threshold, old)
+                && staff_threshold_matches(comparison, threshold, new)
+        })
     };
+    let event =
+        if (first && row.trigger_on_creation) || crossed(row.threshold_comparison, row.threshold) {
+            true
+        } else if crossed(row.cancel_comparison, row.cancel_threshold) {
+            false
+        } else {
+            return None;
+        };
     let key = state.job_key(target)?;
     if event {
         Some(StaffRequestJobEvent::Raised {
@@ -628,6 +585,54 @@ fn evaluate_staff_request_row(
         })
     } else {
         Some(StaffRequestJobEvent::Cancelled { key })
+    }
+}
+
+pub(super) fn apply_staff_request_fact_changes(
+    active: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    mut facts: MessageReader<StaffRequestFactChanged>,
+    mut bindings: Query<(&DefinitionId, &mut StaffRequestRuntimeBinding)>,
+    jobs: Query<(&StaffJob, Option<&StaffJobRouting>)>,
+    job_targets: Query<&StaffJobsAtTarget>,
+    mut requests: MessageWriter<StaffJobRequest>,
+    mut cancellations: MessageWriter<CancelStaffJobRequest>,
+) {
+    let Some(definitions) = active.get(&assets) else {
+        facts.clear();
+        return;
+    };
+    for change in facts.read() {
+        let Ok((definition, mut binding)) = bindings.get_mut(change.owner) else {
+            continue;
+        };
+        let Some(rows) = definitions.staff_request_rows(definition.0) else {
+            continue;
+        };
+        for state in binding.bypass_change_detection().rows.iter_mut() {
+            if state.row.attribute_key != Some(change.key) {
+                continue;
+            }
+            let Some(row) = rows.get(state.row_index) else {
+                continue;
+            };
+            state.previous = Some(change.previous);
+            match evaluate_staff_request_row(row, state, change.owner, Some(change.current)) {
+                Some(StaffRequestJobEvent::Raised { key, urgency }) => {
+                    requests.write(StaffJobRequest {
+                        kind: state.job_kind,
+                        target: key.target,
+                        urgency,
+                        token: Some(key.token),
+                        routing: key.routing,
+                    });
+                }
+                Some(StaffRequestJobEvent::Cancelled { key }) => {
+                    cancel_staff_jobs(key, &jobs, &job_targets, &mut cancellations);
+                }
+                None => {}
+            }
+        }
     }
 }
 

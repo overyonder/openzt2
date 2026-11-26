@@ -5,7 +5,9 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     AuthoredRadiusViewEvent, AuthoredViewThought, RunBehaviorViewAnimals, RunBehaviorViewEvent,
     RunningBehaviorInstruction,
 };
+use openzt2_shows::shows::ShowAudienceFeedback;
 use openzt2_game_assets::localization::{
+    loaded_localization_queries::LoadedLocalizationView,
     localization_asset_types::LocalizationAsset, localization_precedence_index::LocalizationPrecedenceIndex,
 };
 use openzt2_game_data::{behavior::action::feedback::{BehaviorFeedbackAction, BehaviorFeedbackEntry}, localization::LocalizationFormatArgument};
@@ -72,15 +74,14 @@ pub(super) fn expire_view_thoughts(
     }
 }
 
-fn deliver_view_thoughts(
+pub(super) fn deliver_view_thoughts<'a>(
     commands: &mut Commands,
     guest: Entity,
     source: Entity,
     target: Option<Entity>,
     object: Option<Entity>,
-    feedback: Option<&BehaviorFeedbackAction>,
+    entries: impl IntoIterator<Item = &'a BehaviorFeedbackEntry>,
 ) {
-    let entries = feedback.into_iter().flat_map(|feedback| &feedback.entries);
     for entry in entries {
         let BehaviorFeedbackEntry::Thought {
             localization_key,
@@ -270,7 +271,10 @@ pub(super) fn emit_authored_view_events(
                                         source,
                                         task.target,
                                         task.object,
-                                        event.feedback.as_ref(),
+                                        event
+                                            .feedback
+                                            .iter()
+                                            .flat_map(|feedback| &feedback.entries),
                                     );
                                 }
                                 commands.trigger(AuthoredRadiusViewEvent {
@@ -310,49 +314,15 @@ pub(super) fn emit_authored_view_events(
                         .and_then(|(index, assets)| index.borrow_loaded_localization_view(assets)),
                 )
             {
-                for entry in &data.entries {
-                    let BehaviorFeedbackEntry::Message {
-                        localization_key,
-                        timeout_seconds,
-                        globally_visible,
-                        use_entity_name,
-                        use_target_name,
-                        ..
-                    } = entry
-                    else {
-                        continue;
-                    };
-                    if *globally_visible != Some(true) {
-                        continue;
-                    }
-                    let arguments = [
-                        use_entity_name.then_some(source),
-                        task.target.filter(|_| *use_target_name),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .map(|entity| {
-                        LocalizationFormatArgument::Text(
-                            names.get(entity).map_or("", |name| name.as_str()),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                    let mut text = String::new();
-                    if localization
-                        .write_localized_text_with_format_arguments(
-                            AssetId::from_key(&localization_key.to_ascii_lowercase()),
-                            &arguments,
-                            &mut text,
-                        )
-                        .is_ok()
-                    {
-                        messages.messages.push(ZooMessage {
-                            text,
-                            expires_at_seconds: real_time.elapsed_secs_f64()
-                                + f64::from(timeout_seconds.unwrap_or(10)),
-                        });
-                    }
-                }
+                deliver_view_messages(
+                    &data.entries,
+                    source,
+                    task.target,
+                    &names,
+                    localization,
+                    &mut messages,
+                    real_time.elapsed_secs_f64(),
+                );
             }
             feedback.write(BehaviorFeedbackDispatched {
                 actor: source,
@@ -363,6 +333,54 @@ pub(super) fn emit_authored_view_events(
             });
         }
         instruction.complete(source, clock.tick, &mut commands);
+    }
+}
+
+fn deliver_view_messages(
+    entries: &[BehaviorFeedbackEntry],
+    source: Entity,
+    target: Option<Entity>,
+    names: &Query<&Name>,
+    localization: LoadedLocalizationView<'_>,
+    messages: &mut ZooMessages,
+    now: f64,
+) {
+    for entry in entries {
+        let BehaviorFeedbackEntry::Message {
+            localization_key,
+            timeout_seconds,
+            globally_visible: Some(true),
+            use_entity_name,
+            use_target_name,
+            ..
+        } = entry
+        else {
+            continue;
+        };
+        let arguments = [
+            use_entity_name.then_some(source),
+            target.filter(|_| *use_target_name),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|entity| {
+            LocalizationFormatArgument::Text(names.get(entity).map_or("", |name| name.as_str()))
+        })
+        .collect::<Vec<_>>();
+        let mut text = String::new();
+        if localization
+            .write_localized_text_with_format_arguments(
+                AssetId::from_key(&localization_key.to_ascii_lowercase()),
+                &arguments,
+                &mut text,
+            )
+            .is_ok()
+        {
+            messages.messages.push(ZooMessage {
+                text,
+                expires_at_seconds: now + f64::from(timeout_seconds.unwrap_or(10)),
+            });
+        }
     }
 }
 
@@ -402,6 +420,7 @@ pub(crate) fn apply_guest_reactions(
     mut events: MessageReader<BehaviorViewEventEmitted>,
     mut reactions: MessageReader<GuestReaction>,
     mut applied_views: MessageWriter<AppliedAnimalView>,
+    clocks: Query<&ZooClock>,
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -461,6 +480,12 @@ pub(crate) fn apply_guest_reactions(
         let Some((_, definition)) = find_guest_definition(definitions, archetype.0) else {
             return false;
         };
+        let Ok((member, _)) = members.get(reaction.guest) else {
+            return false;
+        };
+        let Ok(clock) = clocks.get(member.root) else {
+            return false;
+        };
         let (wellness_delta, education_delta) = if reaction.kind == GuestMemoryKind::AnimalView {
             find_reaction(definition, GuestMemoryKind::AnimalView).map_or((0, 0), |policy| {
                 (policy.satisfaction_delta, policy.education_delta)
@@ -487,7 +512,7 @@ pub(crate) fn apply_guest_reactions(
                 subject: reaction.subject,
                 kind: reaction.kind,
                 value_permille: memory_value(reaction.kind, wellness_delta, education_delta),
-                age_ticks: 0,
+                created_tick: clock.tick,
             },
             definition.memory.replacement,
         );
@@ -569,7 +594,7 @@ pub(crate) fn apply_guest_reactions(
                     event.source,
                     event.source_target,
                     event.source_object,
-                    event.feedback.as_ref(),
+                    event.feedback.iter().flat_map(|feedback| &feedback.entries),
                 );
                 applied_views.write(AppliedAnimalView {
                     guest,
@@ -580,6 +605,55 @@ pub(crate) fn apply_guest_reactions(
                     donation_score: row.donation_score,
                 });
             }
+        }
+    }
+}
+
+pub(super) fn present_show_audience_feedback(
+    mut feedback: MessageReader<ShowAudienceFeedback>,
+    guests: Query<&WorldMember, With<Guest>>,
+    members: Query<&WorldMember>,
+    assets: Option<Res<Assets<LocalizationAsset>>>,
+    localization: Option<Res<LocalizationPrecedenceIndex>>,
+    names: Query<&Name>,
+    mut messages: Query<&mut ZooMessages>,
+    time: Res<Time<Real>>,
+    mut commands: Commands,
+) {
+    let localization = localization
+        .as_deref()
+        .zip(assets.as_deref())
+        .and_then(|(index, assets)| index.borrow_loaded_localization_view(assets));
+    for feedback in feedback.read() {
+        let Ok(guest) = guests.get(feedback.guest) else {
+            continue;
+        };
+        if !members
+            .get(feedback.stage)
+            .is_ok_and(|stage| stage.root == guest.root)
+        {
+            continue;
+        }
+        deliver_view_thoughts(
+            &mut commands,
+            feedback.guest,
+            feedback.stage,
+            None,
+            None,
+            feedback.entries.iter(),
+        );
+        if let Some((localization, mut messages)) =
+            localization.zip(messages.get_mut(guest.root).ok())
+        {
+            deliver_view_messages(
+                &feedback.entries,
+                feedback.guest,
+                Some(feedback.stage),
+                &names,
+                localization,
+                &mut messages,
+                time.elapsed_secs_f64(),
+            );
         }
     }
 }

@@ -17,7 +17,7 @@ use construction_transaction_preparation::{
     clear_submitted_construction, clear_submitted_preview, prepare_submitted_construction,
     ConstructionSubmissionSet,
 };
-mod construction_ui_action_routing;
+pub(crate) mod construction_ui_action_routing;
 mod cursor_money_fragment_lifecycle;
 mod cursor_money_presentation;
 mod cursor_money_types;
@@ -188,12 +188,14 @@ impl Plugin for ConstructionPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    prepare_submitted_construction,
-                    crate::construction::deletion_transaction_preparation::begin_deletion_transaction_preparation,
+                    (
+                        prepare_submitted_construction,
+                        crate::construction::deletion_transaction_preparation::begin_deletion_transaction_preparation,
+                    ).before(FixedConstructionTransactionMaterializationSet),
                     ApplyDeferred.in_set(FixedConstructionTransactionMaterializationSet),
-                    ApplyDeferred.in_set(FixedConstructionPreparedDomainEditMaterializationSet),
+                    ApplyDeferred.in_set(FixedConstructionPreparedDomainEditMaterializationSet)
+                        .after(FixedConstructionTransactionMaterializationSet),
                 )
-                    .chain()
                     .in_set(FixedConstructionSet::Prepare),
             )
             .configure_sets(

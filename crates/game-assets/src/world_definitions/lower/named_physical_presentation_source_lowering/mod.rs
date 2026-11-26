@@ -10,10 +10,10 @@ use crate::source_document::{
     },
 };
 use openzt2_game_data::{
+    AssetId,
     world_definitions::world_objects::{
         WorldObjectFadeRange, WorldObjectNamedPhysicalPresentationDefinition,
     },
-    AssetId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -456,7 +456,7 @@ mod tests {
                 &scenes,
                 "foodstand.xml",
                 [0, 0],
-                &mut None,
+                &mut Default::default(),
             )?
             .ok_or_else(|| std::io::Error::other("building source produced no document"))?;
         let object = document
@@ -506,8 +506,8 @@ mod tests {
     }
 
     #[test]
-    fn event_marker_shows_only_its_unfinished_binder_initially(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn event_marker_shows_only_its_unfinished_binder_initially()
+    -> Result<(), Box<dyn std::error::Error>> {
         let marker = parse_blue_fang_source_document(
             AssetPath::new("event_marker.xml"),
             br#"<BFTypedBinder binderType="gesture_event_marker">
@@ -534,7 +534,7 @@ mod tests {
                 &scenes,
                 "event_marker.xml",
                 [0, 0],
-                &mut None,
+                &mut Default::default(),
             )?
             .ok_or_else(|| std::io::Error::other("marker source produced no document"))?;
         let object = document
@@ -578,7 +578,7 @@ mod tests {
             &scenes,
             "object.xml",
             [0, 0],
-            &mut None,
+            &mut Default::default(),
         )?
         .and_then(|document| document.objects.into_iter().next())
         .ok_or_else(|| std::io::Error::other("source produced no object").into())
@@ -605,8 +605,8 @@ mod tests {
     }
 
     #[test]
-    fn feeder_fade_states_spawn_and_show_only_the_current_state(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn feeder_fade_states_spawn_and_show_only_the_current_state()
+    -> Result<(), Box<dyn std::error::Error>> {
         let object = lower_object(
             br#"<BFTypedBinder binderType="insects">
             <types><entity><food><insects/></food></entity></types>
@@ -635,8 +635,8 @@ mod tests {
     }
 
     #[test]
-    fn fade_states_beside_a_main_model_spawn_at_the_origin(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn fade_states_beside_a_main_model_spawn_at_the_origin()
+    -> Result<(), Box<dyn std::error::Error>> {
         let object = lower_object(
             br#"<BFTypedBinder binderType="bin">
             <types><entity><building><bin/></building></entity></types>
@@ -661,10 +661,12 @@ mod tests {
                 (AssetId::from_key("empty"), true, true, Some([-1.0, 1.0])),
             ]
         );
-        assert!(object
-            .named_physical_presentations
-            .iter()
-            .all(|presentation| presentation.attach_node.is_none()));
+        assert!(
+            object
+                .named_physical_presentations
+                .iter()
+                .all(|presentation| presentation.attach_node.is_none())
+        );
         Ok(())
     }
 }

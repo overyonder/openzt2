@@ -13,6 +13,7 @@ use super::world_definition_source_value_reading_and_conversion::{
 use crate::source_document::blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme;
 use crate::source_document::resolved_source_record_index::{BindError, RecordView};
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::object_placement::{
     EntranceDefinition, FootprintCell, FootprintCellFlags, PlaceableDefinition,
     PlacementConstraints,
@@ -23,7 +24,6 @@ use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectDestructionDefinition, WorldObjectEggDefinition, WorldObjectPropertyFlags,
     WorldObjectRealPhysicsWaterImpactDefinition, WorldObjectVirtualNode,
 };
-use openzt2_game_data::AssetId;
 
 #[cfg(test)]
 mod tests;
@@ -154,6 +154,8 @@ pub(crate) fn lower_authored_world_object_runtime(
 
     let mut morph_targets = std::collections::BTreeMap::new();
     let mut numeric_behavior_properties = std::collections::BTreeMap::new();
+    let mut string_behavior_properties = std::collections::BTreeMap::new();
+    let mut boolean_behavior_properties = std::collections::BTreeMap::new();
     let shared = authored_type_family_elements_named(record, "BFAIEntityDataShared");
     let clip = |attribute| {
         shared
@@ -192,40 +194,41 @@ pub(crate) fn lower_authored_world_object_runtime(
             }
         }
     }
-    for group in authored_type_family_elements_named(record, "BFAIEntityDataInstance") {
+    let instance = authored_type_family_elements_named(record, "BFAIEntityDataInstance");
+    for group in instance.into_iter().chain(shared) {
         for attribute in &group.attributes {
             let name = attribute.name();
-            if name.eq_ignore_ascii_case("f_ConstructionLevel")
-                || name.eq_ignore_ascii_case("f_Damage")
-            {
-                if let Some(value) = parse_blue_fang_source_numeric_lexeme::<f32>(attribute.value())
-                    .filter(|value| value.is_finite())
-                {
-                    numeric_behavior_properties.entry(id(name)).or_insert(value);
+            let Some(prefix) = name.get(..2) else {
+                continue;
+            };
+            let value = attribute.value();
+            match prefix.to_ascii_lowercase().as_str() {
+                "s_" => {
+                    string_behavior_properties
+                        .entry(id(name))
+                        .or_insert_with(|| value.to_owned());
+                    morph_targets.entry(id(name)).or_insert_with(|| id(value));
                 }
-            }
-        }
-    }
-    for group in shared {
-        for attribute in &group.attributes {
-            let name = attribute.name();
-            if name
-                .get(..2)
-                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("s_"))
-            {
-                morph_targets
-                    .entry(id(name))
-                    .or_insert_with(|| id(attribute.value()));
-            }
-            if name
-                .get(..2)
-                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("f_"))
-            {
-                if let Some(value) = parse_blue_fang_source_numeric_lexeme::<f32>(attribute.value())
-                    .filter(|value| value.is_finite())
-                {
-                    numeric_behavior_properties.entry(id(name)).or_insert(value);
+                "f_" => {
+                    if let Some(value) = parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                        .filter(|value| value.is_finite())
+                    {
+                        numeric_behavior_properties.entry(id(name)).or_insert(value);
+                    }
                 }
+                "b_" => {
+                    let authored = match value.trim().to_ascii_lowercase().as_str() {
+                        "true" | "yes" | "1" => Some(true),
+                        "false" | "no" | "0" => Some(false),
+                        _ => None,
+                    };
+                    if let Some(authored) = authored {
+                        boolean_behavior_properties
+                            .entry(id(name))
+                            .or_insert(authored);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -280,6 +283,9 @@ pub(crate) fn lower_authored_world_object_runtime(
         prop_rotation_offset_radians,
         morph_targets: morph_targets.into_iter().collect(),
         numeric_behavior_properties: numeric_behavior_properties.into_iter().collect(),
+        string_behavior_properties: string_behavior_properties.into_iter().collect(),
+        boolean_behavior_properties: boolean_behavior_properties.into_iter().collect(),
+        environment_map_swap: super::authored_presentation_physics_source_lowering::lower_authored_environment_map_swap(record),
         egg,
         fossil_assembly_surface,
     })
@@ -420,7 +426,7 @@ pub(super) fn bind_object(
     output.document.objects.push(WorldObjectDefinition {
         authored_runtime: lower_authored_world_object_runtime(record)?,
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
-        audio_stage_volumes: Vec::new(),
+        audio_stage_volumes: super::authored_placement_object_source_lowering::lower_authored_audio_stage_volumes(record)?,
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),
         detach_actions: super::object_detach_action_source_lowering::lower_object_detach_actions(record),
@@ -548,6 +554,8 @@ pub(super) fn bind_placeable(
         })
         .collect::<Result<Vec<_>, BindError>>()?;
     output.document.placeables.push(PlaceableDefinition {
+        minimum_object_detail:
+            super::authored_placement_footprint_lowering::authored_minimum_object_detail(record)?,
         id: id(record.key),
         surface_policy: super::authored_placement_footprint_lowering::authored_surface_policy(
             record,

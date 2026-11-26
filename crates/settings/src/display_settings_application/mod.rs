@@ -2,7 +2,6 @@ use bevy::{
     prelude::*,
     window::{MonitorSelection, PrimaryWindow, WindowMode},
 };
-use openzt2_interface_state::persistence::profile_types::ProfileSelected;
 
 use super::{
     display_settings_types::{
@@ -11,9 +10,6 @@ use super::{
     },
     display_settings_validation::validate_proposed_display_settings,
 };
-
-#[derive(Resource, Default, PartialEq)]
-pub(super) struct AcceptedDisplaySettingsReady(bool);
 
 pub(super) fn validate_selected_screen_resolution_and_request_display_settings_replacement(
     mut requests: MessageReader<SelectScreenResolutionRequest>,
@@ -36,7 +32,6 @@ pub(super) fn validate_selected_screen_resolution_and_request_display_settings_r
 pub(super) fn validate_and_accept_requested_display_settings(
     mut requests: MessageReader<ReplaceDisplaySettingsRequest>,
     mut current: ResMut<DisplaySettings>,
-    mut ready: ResMut<AcceptedDisplaySettingsReady>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
 ) {
     let primary_window_exists = primary_window.single().is_ok();
@@ -45,27 +40,17 @@ pub(super) fn validate_and_accept_requested_display_settings(
             continue;
         }
         current.set_if_neq(request.0);
-        ready.set_if_neq(AcceptedDisplaySettingsReady(true));
     }
 }
 
-pub(super) fn apply_ready_display_settings_to_primary_window(
-    mut selected_profiles: MessageReader<ProfileSelected>,
+pub(super) fn apply_display_settings_to_primary_window(
     settings: Res<DisplaySettings>,
-    mut ready: ResMut<AcceptedDisplaySettingsReady>,
-    mut primary_window: Query<(&mut Window, Ref<PrimaryWindow>), With<PrimaryWindow>>,
+    mut primary_window: Query<(&mut Window, Ref<PrimaryWindow>)>,
 ) {
-    let profile_selected = selected_profiles.read().last().is_some();
-    if profile_selected {
-        ready.set_if_neq(AcceptedDisplaySettingsReady(true));
-    }
-    if !ready.0 {
-        return;
-    }
     let Ok((mut window, primary)) = primary_window.single_mut() else {
         return;
     };
-    if !profile_selected && !ready.is_changed() && !settings.is_changed() && !primary.is_added() {
+    if !settings.is_changed() && !primary.is_changed() && !window.is_added() {
         return;
     }
 

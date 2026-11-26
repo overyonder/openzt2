@@ -35,9 +35,8 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskGeneration;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::economy::price_effect::BehaviorPriceEffectContext;
-use openzt2_zoo_state::animal_lifecycle::types::Animal;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::GuestVisitedTourStations;
 use openzt2_zoo_state::economy::service_types::ServiceReservation;
-use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
@@ -48,9 +47,14 @@ use openzt2_zoo_state::transport_tours::transport_rider_types::WaitingForTranspo
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
+use super::guest_viewing_area_sensor::{GuestViewingSensor, ViewingAreaSensors};
 use super::{
     guest_target_eligibility::satisfies_guest_target_fact,
     guest_task_need_facts::GuestTaskNeedFacts,
+};
+use openzt2_zoo_state::{
+    donations::donation_guest_decision_types::GuestDonationMeters,
+    guests::guest_simulation_types::GuestFavouriteAnimal,
 };
 
 use super::guest_simulation_types::{
@@ -58,24 +62,79 @@ use super::guest_simulation_types::{
 };
 use target_index::{GuestTarget, GuestTargetIndex};
 
-#[derive(Default)]
+#[derive(Resource, Default, PartialEq)]
 pub(super) struct GuestSubjectTaskIndex {
-    by_subject_types: HashMap<Vec<AssetId>, Vec<(Handle<BehaviorDocumentAsset>, usize)>>,
+    by_archetype: HashMap<AssetId, Vec<(Handle<BehaviorDocumentAsset>, usize)>>,
+}
+
+pub(super) fn refresh_guest_subject_tasks(
+    documents: Res<LoadedBehaviorDocumentCollection>,
+    assets: Res<Assets<BehaviorDocumentAsset>>,
+    world_assets: Res<Assets<WorldDefinitionAsset>>,
+    world_definitions: Res<WorldDefinitions>,
+    mut index: ResMut<GuestSubjectTaskIndex>,
+) {
+    if !(documents.is_changed()
+        || assets.is_changed()
+        || world_assets.is_changed()
+        || world_definitions.is_changed())
+    {
+        return;
+    }
+    let mut next = GuestSubjectTaskIndex::default();
+    if let (Some(view), Some(definitions)) = (
+        documents.create_declaration_index_view(&assets),
+        world_definitions.get(&world_assets),
+    ) {
+        for definition in definitions.guest_definitions() {
+            let subject_types = definition.behavior_subject_type_identifiers.as_slice();
+            let declarations: Vec<_> = view
+                .behavior_tasks()
+                .filter(|(_, _, task)| {
+                    (task.subjects.is_empty()
+                        || task
+                            .subjects
+                            .iter()
+                            .any(|subject| subject_types.contains(&AssetId::from_key(subject))))
+                        && candidate_requirements_are_satisfied(
+                            &task.candidate_eligibility_requirements,
+                            |role, required| {
+                                role != BehaviorCandidateRole::Subject
+                                    || subject_types.contains(&required)
+                            },
+                            |_, _| true,
+                        )
+                })
+                .map(|(document, declaration, _)| (document.clone(), declaration))
+                .collect();
+            next.by_archetype.insert(definition.id, declarations);
+        }
+    }
+    index.set_if_neq(next);
 }
 
 pub(super) fn select_idle_guest_tasks(
     target_retry_delays: BehaviorTargetRejections,
-    (documents, assets, mut subject_tasks): (
+    (documents, assets, subject_tasks): (
         Res<LoadedBehaviorDocumentCollection>,
         Res<Assets<BehaviorDocumentAsset>>,
-        Local<GuestSubjectTaskIndex>,
+        Res<GuestSubjectTaskIndex>,
     ),
-    world_assets: Res<Assets<WorldDefinitionAsset>>,
-    world_definitions: Res<WorldDefinitions>,
-    clock: Single<&ZooClock>,
-    fixed_time: Res<Time<Fixed>>,
+    (world_assets, world_definitions): (Res<Assets<WorldDefinitionAsset>>, Res<WorldDefinitions>),
+    (clock, fixed_time, mut shared_random): (
+        Single<&ZooClock>,
+        Res<Time<Fixed>>,
+        ResMut<openzt2_world_state::simulation_time::native_visual_random_stream::NativeVisualRandomStream>,
+    ),
+    (viewing_sensors, admissions): (
+        ViewingAreaSensors,
+        Query<&openzt2_zoo_state::economy::guest_admission_types::ZooAdmissionsOpen>,
+    ),
     (price_effect, biomes): (BehaviorPriceEffectContext, BehaviorTargetBiome),
-    mut behavior_generations: Query<&mut BehaviorTaskGeneration>,
+    (mut behavior_generations, mut effective_scores): (
+        Query<&mut BehaviorTaskGeneration>,
+        Query<&mut BehaviorTaskEffectiveScore>,
+    ),
     mut guests: Query<
         (
             Entity,
@@ -87,10 +146,12 @@ pub(super) fn select_idle_guest_tasks(
             Option<&GuestDeparturePoints>,
             Option<&GuestShowNeed>,
             (Option<&openzt2_zoo_state::guests::guest_simulation_types::GuestSpeciesViewCounts>,
-                Option<&openzt2_zoo_state::behavior_task_execution_types::running_actions::GuestTourDepartureGate>),
+                Option<&openzt2_zoo_state::behavior_task_execution_types::running_actions::GuestTourDepartureGate>,
+                Option<&GuestVisitedTourStations>),
             &GlobalTransform,
             &WorldMember,
             Option<&mut GuestTaskCooldowns>,
+            (&mut GuestViewingSensor, Option<&GuestFavouriteAnimal>, Option<&GuestDonationMeters>),
         ),
         (
             With<Guest>,
@@ -105,14 +166,16 @@ pub(super) fn select_idle_guest_tasks(
             Without<SynchronizedBehaviorParticipant>,
         ),
     >,
-    targets: Query<(
-        Entity,
-        &DefinitionId,
-        &GlobalTransform,
-        &WorldMember,
-        Option<&FacilityContainedWaste>,
-    )>,
-    held: Query<(&DefinitionId, Option<&FacilityContainedWaste>)>,
+    (targets, held): (
+        Query<(
+            Entity,
+            &DefinitionId,
+            &GlobalTransform,
+            &WorldMember,
+            Option<&FacilityContainedWaste>,
+        )>,
+        Query<(&DefinitionId, Option<&FacilityContainedWaste>)>,
+    ),
     (token_owners, tokens): (
         Query<&Children>,
         Query<(Entity, &BehaviorSelfToken), Without<ClaimedBehaviorSelfToken>>,
@@ -122,17 +185,8 @@ pub(super) fn select_idle_guest_tasks(
         Query<(&WorldMember, &ShowViewingLocations)>,
         Query<&ChildOf>,
     ),
-    (paths, viewable_animals, presentations, controllers, stations, circuits): (
+    (paths, presentations, controllers, stations, circuits): (
         Query<(Entity, &GlobalTransform, &WorldMember, &PathTile)>,
-        Query<
-            (
-                &GlobalTransform,
-                &Visibility,
-                &WorldMember,
-                &openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle,
-            ),
-            (With<Animal>, With<HabitatMember>),
-        >,
         Query<&AnimationPresentations>,
         Query<
             (),
@@ -157,12 +211,9 @@ pub(super) fn select_idle_guest_tasks(
     ),
     mut commands: Commands,
 ) {
-    if documents.is_changed() || assets.is_changed() {
-        subject_tasks.by_subject_types.clear();
-    }
-    let Some(view) = documents.create_declaration_index_view(&assets) else {
+    if documents.create_declaration_index_view(&assets).is_none() {
         return;
-    };
+    }
     let Some(definitions) = world_definitions.get(&world_assets) else {
         return;
     };
@@ -175,8 +226,7 @@ pub(super) fn select_idle_guest_tasks(
     if guests.is_empty() {
         return;
     }
-    // The original offers viewing tasks the paths its `viewanimals` sensor
-    // finds: path tiles with an animal in its habitat within viewing range.
+    // The animal-view sensor offers path tiles with a view from the path.
     let view_sensor = AssetId::from_key("viewanimals");
     let path_sensor = AssetId::from_key("path");
     let watch_sensor = AssetId::from_key("watchshow");
@@ -184,53 +234,6 @@ pub(super) fn select_idle_guest_tasks(
     let show_attribute = AssetId::from_key("show");
     let tour_attribute = AssetId::from_key("tour");
     let station_type = AssetId::from_key("station");
-    let viewing_paths = definitions
-        .guest_viewing()
-        .map(|viewing| {
-            let range_squared = viewing.ground_range_m * viewing.ground_range_m;
-            paths
-                .iter()
-                .filter(|(_, path, path_world, _)| {
-                    viewable_animals
-                        .iter()
-                        .any(|(animal, visibility, animal_world, _)| {
-                            animal_world.root == path_world.root
-                                && *visibility != Visibility::Hidden
-                                && animal
-                                    .translation()
-                                    .xz()
-                                    .distance_squared(path.translation().xz())
-                                    <= range_squared
-                        })
-                })
-                .map(|(path, transform, path_world, tile)| {
-                    let elevated = definitions
-                        .find_path(tile.definition)
-                        .is_some_and(|definition| definition.elevated);
-                    (path, transform.translation(), path_world.root, elevated)
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let mut viewable_species = bevy::ecs::entity::EntityHashMap::<
-        bevy::platform::collections::HashSet<AssetId>,
-    >::default();
-    if let Some(viewing) = definitions.guest_viewing() {
-        for (animal, visibility, member, species) in &viewable_animals {
-            if *visibility != Visibility::Hidden
-                && viewing_paths.iter().any(|(_, point, root, _)| {
-                    *root == member.root
-                        && point.xz().distance_squared(animal.translation().xz())
-                            <= viewing.ground_range_m.powi(2)
-                })
-            {
-                viewable_species
-                    .entry(member.root)
-                    .or_default()
-                    .insert(species.species);
-            }
-        }
-    }
     let mut target_index = None;
     let mut combined_targets = Vec::new();
     for (
@@ -242,10 +245,11 @@ pub(super) fn select_idle_guest_tasks(
         triggers,
         departure_points,
         show_need,
-        (species_seen, tour_gate),
+        (species_seen, tour_gate, visited_stations),
         transform,
         world,
         mut cooldowns,
+        (mut viewing_sensor, favourite, donation_history),
     ) in &mut guests
     {
         if let Some(cooldowns) = cooldowns.as_deref_mut() {
@@ -330,32 +334,27 @@ pub(super) fn select_idle_guest_tasks(
         }
         let mut ranking = BehaviorCandidateRanking::new(policy.minimum_score);
         let diagnostics = bevy::log::tracing::enabled!(bevy::log::Level::DEBUG);
-        let subject_types = definition.behavior_subject_type_identifiers.as_slice();
-        if !subject_tasks.by_subject_types.contains_key(subject_types) {
-            let declarations: Vec<_> = view
-                .behavior_tasks()
-                .filter(|(_, _, task)| {
-                    (task.subjects.is_empty()
-                        || task
-                            .subjects
-                            .iter()
-                            .any(|subject| subject_types.contains(&AssetId::from_key(subject))))
-                        && candidate_requirements_are_satisfied(
-                            &task.candidate_eligibility_requirements,
-                            |role, required| {
-                                role != BehaviorCandidateRole::Subject
-                                    || subject_types.contains(&required)
-                            },
-                            |_, _| true,
-                        )
-                })
-                .map(|(document, declaration, _)| (document.clone(), declaration))
-                .collect();
-            subject_tasks
-                .by_subject_types
-                .insert(subject_types.to_vec(), declarations);
+        let Some(declarations) = subject_tasks.by_archetype.get(&archetype.0) else {
+            continue;
+        };
+        if clock.tick >= viewing_sensor.next_capacity_refresh_tick {
+            if let Some(visible) = viewing_sensors
+                .worklists
+                .get(world.root)
+                .ok()
+                .and_then(|worklist| worklist.mode_one_visible_species_count)
+            {
+                viewing_sensor.num_to_see = visible;
+                if let Some(timestep) = definitions.simulation_timestep() {
+                    let interval = 5_000_000_000_u128.div_ceil(timestep.as_nanos());
+                    viewing_sensor.next_capacity_refresh_tick = clock
+                        .tick
+                        .saturating_add(u64::try_from(interval).unwrap_or(u64::MAX));
+                }
+            }
         }
-        for (document, declaration) in &subject_tasks.by_subject_types[subject_types] {
+        let mut viewing_candidates = None;
+        for (document, declaration) in declarations {
             let declaration = *declaration;
             let Some(task) = assets
                 .get(document)
@@ -369,18 +368,34 @@ pub(super) fn select_idle_guest_tasks(
                     openzt2_game_data::behavior::score::BehaviorScore::LeaveZooPressure
                 )
             });
-            if leaves_zoo && departure_points.is_some_and(|points| points.0 > 0) && {
-                let observed = species_seen.map_or(0, |views| {
-                    views.0.iter().filter(|(_, count)| *count != 0).count()
-                });
-                let required = viewable_species
-                    .get(&world.root)
-                    .map_or(0, |species| species.len());
-                observed < required
-                    || (required != 0 && tour_gate.is_some_and(|tour| tour.threshold < tour.need))
-            } {
-                continue;
-            }
+            let can_board_tour = |station, root, circuit| {
+                root == world.root
+                    && visited_stations.is_none_or(|visited| !visited.0.contains(&station))
+                    && circuits.get(circuit).is_ok_and(|(route, running)| {
+                        !route.closed && running.is_none_or(|running| running.0)
+                    })
+            };
+            let departure_capacity = if leaves_zoo {
+                let available_tour = tour_gate
+                    .filter(|_| {
+                        stations.iter().any(|(station, _, member, circuit)| {
+                            can_board_tour(station, member.root, circuit.0)
+                        })
+                    })
+                    .map(|tour| (tour.need, tour.threshold));
+                super::guest_behavior_departure_execution::departure_capacity_allows_score(
+                    admissions
+                        .get(world.root)
+                        .or_else(|_| admissions.single())
+                        .is_ok_and(|status| status.0),
+                    departure_points.map_or(0, |points| points.0),
+                    species_seen.map_or(0, |views| views.0.len()),
+                    viewing_sensor.num_to_see,
+                    available_tour,
+                )
+            } else {
+                false
+            };
             if cooldowns
                 .as_deref()
                 .is_some_and(|cooldowns| cooldowns.is_cooling(task.id))
@@ -494,7 +509,7 @@ pub(super) fn select_idle_guest_tasks(
                     }
                     return;
                 }
-                let score = if leaves_zoo {
+                let score = if departure_capacity {
                     Some(1_000_000_000.0)
                 } else {
                     score_supported_behavior_task(
@@ -638,11 +653,7 @@ pub(super) fn select_idle_guest_tasks(
                 };
             if task.sensor_tag == Some(tour_attribute) {
                 for (station, pose, member, circuit) in &stations {
-                    if member.root == world.root
-                        && circuits.get(circuit.0).is_ok_and(|(route, running)| {
-                            !route.closed && running.is_none_or(|running| running.0)
-                        })
-                    {
+                    if can_board_tour(station, member.root, circuit.0) {
                         let object = targets
                             .get(station)
                             .ok()
@@ -655,14 +666,53 @@ pub(super) fn select_idle_guest_tasks(
             if task.targets.iter().any(|target| target == "self") {
                 consider_with_held_items(guest, None, None, None, transform.translation());
             }
-            if task.targets.iter().any(|target| target == "path") {
-                if task.sensor_tag == Some(view_sensor) {
-                    for &(path, position, root, elevated) in &viewing_paths {
-                        if root == world.root {
-                            consider_with_held_items(path, None, Some(elevated), None, position);
+            if task.sensor_tag == Some(view_sensor) {
+                let candidates = viewing_candidates.get_or_insert_with(|| {
+                    viewing_sensors.candidates(
+                        world.root,
+                        transform.translation(),
+                        favourite.and_then(|favourite| favourite.0),
+                        donation_history,
+                        &mut viewing_sensor,
+                        || shared_random.next_u15(),
+                    )
+                });
+                for &candidate in candidates.iter() {
+                    if let Ok((_, pose, _, tile)) = paths.get(candidate) {
+                        if task.targets.iter().any(|target| target == "path") {
+                            let elevated = definitions
+                                .find_path(tile.definition)
+                                .is_some_and(|definition| definition.elevated);
+                            consider_with_held_items(
+                                candidate,
+                                None,
+                                Some(elevated),
+                                None,
+                                pose.translation(),
+                            );
+                        }
+                    } else if let Ok((_, definition, pose, _, waste)) = targets.get(candidate) {
+                        if let Some(object) = definitions.find_object(definition.0) {
+                            if task
+                                .targets
+                                .iter()
+                                .any(|target| matches_type(object, AssetId::from_key(target)))
+                            {
+                                consider_with_held_items(
+                                    candidate,
+                                    Some(object),
+                                    None,
+                                    waste.map(|waste| waste.contained_waste_units),
+                                    pose.translation(),
+                                );
+                            }
                         }
                     }
-                } else if task.sensor_tag == Some(path_sensor) {
+                }
+                continue;
+            }
+            if task.targets.iter().any(|target| target == "path") {
+                if task.sensor_tag == Some(path_sensor) {
                     // The `path` sensor, such as Trash.tsk's
                     // ThrowAwayTrashGround, offers the tile nearest the guest;
                     // scan a sensor radius if the native sensor offers more.
@@ -810,12 +860,17 @@ pub(super) fn select_idle_guest_tasks(
                 .entity(token)
                 .insert(ClaimedBehaviorSelfToken { execution_id });
         }
-        commands.entity(guest).insert(BehaviorTaskEffectiveScore {
+        let score = BehaviorTaskEffectiveScore {
             execution_id,
             template_score: Some(task.priority.unwrap_or_default()),
             linked_score: None,
             selected_candidate_score: Some(score),
-        });
+        };
+        if let Ok(mut current) = effective_scores.get_mut(guest) {
+            current.set_if_neq(score);
+        } else {
+            commands.entity(guest).insert(score);
+        }
         commands.entity(guest).insert(BehaviorTaskExecutionState {
             execution_id,
             program: task.id,

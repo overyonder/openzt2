@@ -42,7 +42,7 @@ use openzt2_zoo_state::{
     },
     habitat::{
         habitat_membership_and_containment::locate_habitat_at_world_position,
-        habitat_types::HabitatIndex,
+        habitat_types::{HabitatCellOf, HabitatIndex},
     },
     locomotion::locomotion_types::{
         ActiveTerrainDerivedNavigationGraph, Arrived, Destination, Docking, LocomotionCapacity,
@@ -143,6 +143,7 @@ pub(super) fn begin_staff_tank_gate_journeys(
         With<WorldRoot>,
     >,
     fence_crossing_index: FenceNavigationCrossingQueries,
+    cell_owners: Query<&HabitatCellOf>,
     fences: FenceNavigationPolicy,
     surfaces: DrySurfaceEligibility,
     gates: Query<(FenceSegment, &Gate)>,
@@ -167,6 +168,7 @@ pub(super) fn begin_staff_tank_gate_journeys(
             &mut Destination,
             &mut Route,
             Option<&Docking>,
+            Option<&super::authored_tank_gate_exit::AuthoredTankGateExit>,
         ),
         (
             With<Staff>,
@@ -177,8 +179,18 @@ pub(super) fn begin_staff_tank_gate_journeys(
     >,
     mut failures: MessageWriter<NavigationFailed>,
 ) {
-    for (actor, transform, agent, mode, (task, step), world, mut destination, mut route, docking) in
-        &mut actors
+    for (
+        actor,
+        transform,
+        agent,
+        mode,
+        (task, step),
+        world,
+        mut destination,
+        mut route,
+        docking,
+        authored,
+    ) in &mut actors
     {
         let Ok((graph, tank_water, capacity, habitats, grid, terrain_index)) =
             roots.get(world.root)
@@ -198,11 +210,13 @@ pub(super) fn begin_staff_tank_gate_journeys(
             continue;
         }
         let position = transform.translation();
-        let source_tank = locate_habitat_at_world_position(habitats, position.xz(), *grid)
-            .filter(|tank| tanks.contains(*tank));
-        let target_tank = locate_habitat_at_world_position(habitats, destination.world.xz(), *grid)
-            .filter(|tank| tanks.contains(*tank));
-        if source_tank == target_tank {
+        let source_tank =
+            locate_habitat_at_world_position(habitats, &cell_owners, position.xz(), *grid)
+                .filter(|tank| tanks.contains(*tank));
+        let target_tank =
+            locate_habitat_at_world_position(habitats, &cell_owners, destination.world.xz(), *grid)
+                .filter(|tank| tanks.contains(*tank));
+        if source_tank == target_tank && authored.is_none() {
             continue;
         }
         if !agent
@@ -219,7 +233,11 @@ pub(super) fn begin_staff_tank_gate_journeys(
             route.clear();
             continue;
         }
-        let Some(tank) = source_tank.or(target_tank) else {
+        let Some(tank) = authored
+            .map(|exit| exit.tank)
+            .or(source_tank)
+            .or(target_tank)
+        else {
             continue;
         };
         let Ok((geometry, tank_world)) = tanks.get(tank) else {
@@ -231,7 +249,12 @@ pub(super) fn begin_staff_tank_gate_journeys(
         let leaving = source_tank.is_some();
         let mut selected: Option<(Entity, Vec3, Vec3, f32)> = None;
 
-        for gate_entity in boundaries.fences(tank) {
+        let selected_gates = authored.map(|exit| exit.gate).into_iter().chain(
+            boundaries
+                .fences(tank)
+                .take(if authored.is_some() { 0 } else { usize::MAX }),
+        );
+        for gate_entity in selected_gates {
             let Ok((edge, gate)) = gates.get(gate_entity) else {
                 continue;
             };
@@ -251,40 +274,47 @@ pub(super) fn begin_staff_tank_gate_journeys(
             if !tank_gate {
                 continue;
             }
-            let (Ok(a), Ok(b)) = (nodes.get(edge.a()), nodes.get(edge.b())) else {
-                continue;
+            let (first, second) = if let Some(exit) = authored {
+                (exit.entry, exit.exit)
+            } else {
+                let (Ok(a), Ok(b)) = (nodes.get(edge.a()), nodes.get(edge.b())) else {
+                    continue;
+                };
+                let a = grid.cell_translation(a.cell);
+                let b = grid.cell_translation(b.cell);
+                let midpoint = (a + b) * 0.5;
+                let tangent = (b - a).xz().normalize_or_zero();
+                let normal = Vec2::new(-tangent.y, tangent.x);
+                if normal == Vec2::ZERO {
+                    continue;
+                }
+                let offset = normal * (agent.radius_m + grid.spacing_m * 0.5);
+                let mut first = midpoint + Vec3::new(offset.x, 0.0, offset.y);
+                let mut second = midpoint - Vec3::new(offset.x, 0.0, offset.y);
+                let first_inside =
+                    locate_habitat_at_world_position(habitats, &cell_owners, first.xz(), *grid)
+                        == Some(tank);
+                let second_inside =
+                    locate_habitat_at_world_position(habitats, &cell_owners, second.xz(), *grid)
+                        == Some(tank);
+                if first_inside == second_inside {
+                    continue;
+                }
+                if first_inside != leaving {
+                    std::mem::swap(&mut first, &mut second);
+                }
+                let height = |point: Vec3| {
+                    surfaces
+                        .water_surface_height(world.root, point.xz())
+                        .or_else(|| surfaces.ground_height(world.root, point.xz()))
+                };
+                let (Some(first_y), Some(second_y)) = (height(first), height(second)) else {
+                    continue;
+                };
+                first.y = first_y;
+                second.y = second_y;
+                (first, second)
             };
-            let a = grid.cell_translation(a.cell);
-            let b = grid.cell_translation(b.cell);
-            let midpoint = (a + b) * 0.5;
-            let tangent = (b - a).xz().normalize_or_zero();
-            let normal = Vec2::new(-tangent.y, tangent.x);
-            if normal == Vec2::ZERO {
-                continue;
-            }
-            let offset = normal * (agent.radius_m + grid.spacing_m * 0.5);
-            let mut first = midpoint + Vec3::new(offset.x, 0.0, offset.y);
-            let mut second = midpoint - Vec3::new(offset.x, 0.0, offset.y);
-            let first_inside =
-                locate_habitat_at_world_position(habitats, first.xz(), *grid) == Some(tank);
-            let second_inside =
-                locate_habitat_at_world_position(habitats, second.xz(), *grid) == Some(tank);
-            if first_inside == second_inside {
-                continue;
-            }
-            if first_inside != leaving {
-                std::mem::swap(&mut first, &mut second);
-            }
-            let height = |point: Vec3| {
-                surfaces
-                    .water_surface_height(world.root, point.xz())
-                    .or_else(|| surfaces.ground_height(world.root, point.xz()))
-            };
-            let (Some(first_y), Some(second_y)) = (height(first), height(second)) else {
-                continue;
-            };
-            first.y = first_y;
-            second.y = second_y;
             let distance = position.distance_squared(first);
             if selected
                 .as_ref()
@@ -743,18 +773,16 @@ pub(super) fn execute_staff_tank_gate_journeys(
             }
             let step = motion.translation().y.abs();
             let target = if up {
-                (journey.wall_height - 1.75)
-                    .min(journey.exit.y)
-                    .max(journey.entry.y)
+                journey.wall_height - 1.75
             } else {
                 journey.exit.y
             };
             transform.translation.y = if up {
-                (transform.translation.y + step).min(target)
+                transform.translation.y + step
             } else {
-                (transform.translation.y - step).max(target)
+                transform.translation.y - step
             };
-            if (transform.translation.y - target).abs() <= 0.001 {
+            if climb_crossed_threshold(up, transform.translation.y, target) {
                 if let Some(request_id) = journey.clip_request {
                     cancellations.write(CancelAnimationClipPlaybackRequest {
                         animation_subject_entity: actor,
@@ -773,5 +801,26 @@ pub(super) fn execute_staff_tank_gate_journeys(
             }
             break;
         }
+    }
+}
+
+fn climb_crossed_threshold(up: bool, height: f32, target: f32) -> bool {
+    if up {
+        height > target
+    } else {
+        height < target
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn climbing_remains_active_at_the_tank_height_threshold() {
+        assert!(!climb_crossed_threshold(true, 4.25, 6.0 - 1.75));
+        assert!(climb_crossed_threshold(true, 4.26, 6.0 - 1.75));
+        assert!(!climb_crossed_threshold(false, 2.0, 2.0));
+        assert!(climb_crossed_threshold(false, 1.99, 2.0));
     }
 }

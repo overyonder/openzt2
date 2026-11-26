@@ -320,6 +320,9 @@ fn positioned_audio_admission(
     (distance_squared < farthest).then_some(Some(index))
 }
 
+use openzt2_animals::animal_health::RampageAudioMix;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn execute_audio_cue_playback_requests(
     mut commands: Commands,
@@ -334,6 +337,9 @@ pub(super) fn execute_audio_cue_playback_requests(
     soundscapes: Query<(), With<super::audio_environment_types::AudioSoundscape>>,
     playing: Query<&AudioCueSelection>,
     listener: super::spatial_cue_distance::SpatialCueListener,
+    world_members: Query<&WorldMember>,
+    worlds: Query<Entity, With<WorldRoot>>,
+    rampages: Query<&RampageAudioMix>,
 ) {
     let Some(view) = audio_asset_index.get(&audio_assets) else {
         requests.clear();
@@ -421,6 +427,19 @@ pub(super) fn execute_audio_cue_playback_requests(
             spatial_scale: distance.map(|distance| distance.panning_scale(view.mixer())),
             ..default()
         };
+        let world = (usage != openzt2_game_data::audio::AudioUsage::Ui)
+            .then(|| {
+                cue.emitter
+                    .or(request.lifetime_owner)
+                    .and_then(|owner| world_members.get(owner).ok().map(|member| member.root))
+                    .or_else(|| {
+                        request
+                            .lifetime_owner
+                            .filter(|&owner| worlds.contains(owner))
+                    })
+                    .or_else(|| worlds.single().ok())
+            })
+            .flatten();
         let voice = spawn_audio_player_or_deferred_playback(
             &mut commands,
             clip,
@@ -439,6 +458,13 @@ pub(super) fn execute_audio_cue_playback_requests(
                 lifetime_owner: request.lifetime_owner,
                 distance,
                 distance_gain,
+                world,
+                rampage_gain: world.map(|root| {
+                    super::audio_player_spawning::rampage_voice_gain(
+                        rampages.get(root).ok(),
+                        cue.selection,
+                    )
+                }),
                 stage_acoustics: (!matches!(
                     usage,
                     openzt2_game_data::audio::AudioUsage::Ui

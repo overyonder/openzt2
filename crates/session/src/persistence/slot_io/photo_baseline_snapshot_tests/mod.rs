@@ -276,6 +276,7 @@ pub(crate) fn saved_photo_container_for_scenario(world: &mut World, scenario: As
             image_width_pixels: 1,
             image_height_pixels: 1,
             rgba8_pixel_bytes: vec![id as u8, 10, 20, 255],
+            caption: None,
             challenge_photo_file_identifiers: vec![],
         })
         .collect::<Vec<_>>();
@@ -284,19 +285,19 @@ pub(crate) fn saved_photo_container_for_scenario(world: &mut World, scenario: As
             challenge_definition_identifier: FIRST,
             completed: true,
             completed_by_photo_persistent_identifier: Some(PersistentId(41)),
-            rating_stars: 2,
+            rating_half_stars: 4,
         },
         PhotoChallengeProgressSnapshotRecord {
             challenge_definition_identifier: SECOND,
             completed: true,
             completed_by_photo_persistent_identifier: Some(PersistentId(42)),
-            rating_stars: 5,
+            rating_half_stars: 10,
         },
     ];
     let economy = EconomySnapshotRecords {
         unlimited_cash: Some(false),
-        zoo_cash: Money(5000),
-        admission_price: Money(250),
+        zoo_cash: Money::from_cents(5000),
+        admission_price: Money::from_cents(250),
         admissions_open: true,
         current_calendar_month: 0,
         lifetime_income: Money::ZERO,
@@ -699,7 +700,7 @@ fn loading_initializes_photo_receivers_before_snapshot_reference_validation_and_
     assert_eq!(app.world().get::<Name>(root).unwrap().as_str(), "restored");
     assert_eq!(
         app.world().get::<AdmissionPrice>(root).unwrap().adult,
-        Money(250)
+        Money::from_cents(250)
     );
     assert_eq!(
         app.world()
@@ -718,12 +719,12 @@ fn loading_initializes_photo_receivers_before_snapshot_reference_validation_and_
         .map(|(challenge, progress)| (challenge.id, *progress))
         .collect::<Vec<_>>();
     assert_eq!(challenges.len(), 2);
-    for (id, expected_photo, stars) in [(FIRST, 41, 2), (SECOND, 42, 5)] {
+    for (id, expected_photo, stars) in [(FIRST, 41, 4), (SECOND, 42, 10)] {
         let (_, progress) = challenges
             .iter()
             .find(|(challenge, ..)| *challenge == id)
             .unwrap();
-        assert_eq!(progress.rating_stars, stars);
+        assert_eq!(progress.rating_half_stars, stars);
         let photo = progress.completed_by.unwrap();
         assert!(progress.completed);
         assert_eq!(

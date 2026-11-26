@@ -39,6 +39,15 @@ pub(super) fn validate_progression_snapshot_record_invariants(
             .any(|fame_history_sample| {
                 fame_history_sample.half_stars > progression_snapshot_records.fame.maximum_reached
             })
+        || progression_snapshot_records
+            .award_presentation
+            .keys()
+            .any(|id| {
+                !progression_snapshot_records
+                    .earned_progression_awards
+                    .iter()
+                    .any(|award| award.persistent_identifier.0 == *id)
+            })
         || progression_snapshot_records.research_projects.iter().any(
             |research_project_snapshot_record| {
                 research_project_snapshot_record.required_simulation_ticks == 0

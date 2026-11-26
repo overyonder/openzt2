@@ -41,6 +41,8 @@ fn progression_snapshot_section_round_trips_bounded_native_facts() {
         unlocked_catalogue_definition_count: 65,
         unlocked_catalogue_definition_bit_words: vec![u64::MAX, 1],
         scenario_award_points: 12,
+        award_globals: Default::default(),
+        award_presentation: Default::default(),
         endangered_animal_birth_count: 7,
         animal_adoption_availability_policy: AnimalAdoptionAvailabilityPolicy::default(),
         fame_history_samples: vec![

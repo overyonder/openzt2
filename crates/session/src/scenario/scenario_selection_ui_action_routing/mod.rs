@@ -24,6 +24,11 @@ pub(super) fn route_scenario_selection_and_start_ui_actions(
     active_scenarios: Res<WorldScenarios>,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
     mut selection: ResMut<ShellSelection>,
+    (archives, asset_server, mut mode_document): (
+        Res<openzt2_game_assets::asset_source::AssetArchives>,
+        Res<AssetServer>,
+        Option<ResMut<crate::shell::shell_navigation_and_world_launch::SelectedModeDocument>>,
+    ),
     nodes: AuthoredScenarioUiActionDocumentQueries,
     parents: Query<&ChildOf>,
     values: Query<&UiValue>,
@@ -91,7 +96,15 @@ pub(super) fn route_scenario_selection_and_start_ui_actions(
                         );
                     }
                 }
-                UiScenarioAction::SelectionChanged => {
+                UiScenarioAction::SelectionChanged { scenario_path } => {
+                    if let (Some(path), Some(mode)) =
+                        (scenario_path.as_ref(), mode_document.as_mut())
+                    {
+                        let source = std::path::Path::new(path);
+                        mode.0 = archives
+                            .resolve_source_reference(source, path)
+                            .map(|resolved| asset_server.load(resolved));
+                    }
                     if let Ok((_, choice, _)) = choices.get(activation.node) {
                         shell.choose_world.write(ChooseWorld(choice.scenario));
                     }

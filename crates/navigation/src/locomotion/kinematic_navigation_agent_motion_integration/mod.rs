@@ -27,6 +27,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
 pub(super) fn integrate_non_physics_planned_navigation_motion(
     mut commands: Commands,
     animation_samples: LocomotionAnimationSamples,
+    clip_policy: super::animal_navigation_policy::ActiveLocomotionClipPolicy,
     time: Res<Time<Fixed>>,
     roots: Query<(
         &TerrainIndex,
@@ -144,8 +145,22 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
                 } else {
                     horizontal_velocity
                 };
-            local_transform.rotation =
-                Quat::from_rotation_y(direction.x.atan2(direction.y)) * sampled_rotation;
+            let desired = Quat::from_rotation_y(direction.x.atan2(direction.y)) * sampled_rotation;
+            let rotation = clip_policy
+                .get(
+                    navigation_agent_entity,
+                    animation_source.map(|source| source.controller),
+                )
+                .filter(|policy| policy.angular_speed_by_axis.iter().any(Option::is_some))
+                .map_or(desired, |policy| {
+                    super::animal_navigation_policy::advance_clip_turn(
+                        local_transform.rotation,
+                        desired,
+                        policy.angular_speed_by_axis,
+                        fixed_delta_seconds,
+                    )
+                });
+            local_transform.rotation = rotation;
         }
         if !local_transform.translation.is_finite() {
             local_transform.translation = previous_translation;

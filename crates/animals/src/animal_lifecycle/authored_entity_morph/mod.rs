@@ -34,11 +34,11 @@ use openzt2_zoo_state::{
     animal_health::types::{AnimalDied, Dead, DeathCause},
     animal_lifecycle::{animal_birth_and_release_contracts::AnimalBorn, types::Animal},
     behavior_task_execution_types::{
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
         running_actions::{
             BehaviorInstructionId, RunBehaviorMorphEntity, RunBehaviorTermination,
             RunningBehaviorInstruction,
         },
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     habitat::habitat_types::HabitatMember,
 };
@@ -183,11 +183,12 @@ pub(super) fn morph_authored_entities(
         let mut pending =
             pending.filter(|pending| pending.step == step.id() && pending.recipient == recipient);
         if !action.period.is_zero() && pending.is_none() {
-            let duration = action
-                .period
-                .as_nanos()
-                .saturating_mul(u128::from(catalogue_view.timing().fixed_hz))
-                .div_ceil(1_000_000_000);
+            let duration = action.period.as_nanos().div_ceil(
+                catalogue_view
+                    .simulation_timestep()
+                    .expect("simulation timing is loaded")
+                    .as_nanos(),
+            );
             let due = clock
                 .tick
                 .saturating_add(u64::try_from(duration).unwrap_or(u64::MAX));
@@ -235,7 +236,7 @@ pub(super) fn morph_authored_entities(
                 Some(variant.id),
                 None,
                 variant.life_stage,
-                catalogue_view.timing().ticks_per_day,
+                crate::zoo_day_cadence(catalogue_view).ticks_per_zoo_day(),
                 random,
             ) else {
                 mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);

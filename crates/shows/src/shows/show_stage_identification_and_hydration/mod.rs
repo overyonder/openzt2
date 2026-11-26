@@ -1,6 +1,6 @@
-use bevy::prelude::*;
+use bevy::{ecs::entity::EntityHashSet, platform::collections::HashSet, prelude::*};
 
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::{WorldDefinitions, WorldDefinitionSourcesPublished};
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
@@ -25,6 +25,7 @@ pub(super) fn hydrate_show_stages_from_active_world_definitions(
     changed_objects: Query<Entity, Changed<DefinitionId>>,
     mut removed_definitions: RemovedComponents<DefinitionId>,
     retired_stages: Query<Option<&DonationOpportunity>, (With<ShowStage>, Without<DefinitionId>)>,
+    publication: Option<MessageReader<WorldDefinitionSourcesPublished>>,
 ) {
     let Some(definitions) = active_definitions.get(&assets) else {
         return;
@@ -40,12 +41,22 @@ pub(super) fn hydrate_show_stages_from_active_world_definitions(
             entity.try_remove::<DonationOpportunity>();
         }
     }
-    let refresh_all = active_definitions.is_changed();
-    let dirty = if refresh_all {
-        stages.iter().map(|(entity, ..)| entity).collect::<Vec<_>>()
-    } else {
-        changed_objects.iter().collect::<Vec<_>>()
-    };
+    let refresh_without_publisher = publication.is_none() && active_definitions.is_changed();
+    let changed: HashSet<_> = publication
+        .into_iter()
+        .flat_map(|mut publications| {
+            publications
+                .read()
+                .flat_map(|event| event.changed_objects.iter().copied())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mut dirty: EntityHashSet = changed_objects.iter().collect();
+    if refresh_without_publisher || !changed.is_empty() {
+        dirty.extend(stages.iter().filter_map(|(entity, definition, ..)| {
+            (refresh_without_publisher || changed.contains(&definition.0)).then_some(entity)
+        }));
+    }
     let mut stages = stages.iter_many_mut(dirty);
     while let Some(row) = stages.fetch_next() {
         let Ok((entity, definition_id, stage, has_open_state, donation)) = row else {

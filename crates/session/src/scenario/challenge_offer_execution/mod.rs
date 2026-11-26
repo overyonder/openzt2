@@ -190,3 +190,35 @@ pub(super) fn validate_and_apply_requested_challenge_responses(
         }
     }
 }
+
+pub(super) fn project_award_program_suspension(
+    mut commands: Commands,
+    worlds: Query<
+        (
+            Entity,
+            Has<openzt2_progression::progression::AwardProgramSuspended>,
+        ),
+        With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
+    >,
+    offers: Query<&WorldMember, With<ScenarioChallengeOffer>>,
+    results: Query<
+        &InheritedVisibility,
+        With<super::scenario_lua_ui::presentation::ChallengeResultPanel>,
+    >,
+) {
+    use openzt2_progression::progression::AwardProgramSuspended;
+    let photo_or_scenario_result_visible = results.iter().any(|visibility| visibility.get());
+    for (root, suspended) in &worlds {
+        let needed =
+            photo_or_scenario_result_visible || offers.iter().any(|offer| offer.root == root);
+        match (suspended, needed) {
+            (false, true) => {
+                commands.entity(root).insert(AwardProgramSuspended);
+            }
+            (true, false) => {
+                commands.entity(root).remove::<AwardProgramSuspended>();
+            }
+            _ => {}
+        }
+    }
+}

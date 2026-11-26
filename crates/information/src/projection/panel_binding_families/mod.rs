@@ -33,6 +33,7 @@ macro_rules! binding_family {
 binding_family!(AnimalNeedFieldOf, AnimalNeedFields);
 binding_family!(AnimalHealthValueFieldOf, AnimalHealthValueFields);
 binding_family!(AnimalHandlingFieldOf, AnimalHandlingFields);
+binding_family!(AnimalSummaryFieldOf, AnimalSummaryFields);
 binding_family!(FacilityFieldOf, FacilityFields);
 binding_family!(GuestFieldOf, GuestFields);
 binding_family!(HabitatFieldOf, HabitatFields);
@@ -234,10 +235,7 @@ pub(crate) fn bind_information_panel_fields(
     );
     work.extend(new_panels.iter().flat_map(RelationshipTarget::iter));
     for node in work {
-        let fields = nodes
-            .get(node)
-            .ok()
-            .filter(|(owner, ..)| panels.contains(owner.0));
+        let fields = nodes.get(node).ok();
         if fields.is_none() && commands.get_entity(node).is_err() {
             continue;
         }
@@ -263,9 +261,41 @@ pub(crate) fn bind_information_panel_fields(
         entity.remove::<(StaffDutyFieldOf,)>();
         entity.remove::<(IdentityTextFieldOf, IdentityIconFieldOf)>();
         entity.remove::<AnimalHandlingFieldOf>();
+        entity.remove::<AnimalSummaryFieldOf>();
         let Some((owner, value, visible, selected, text, image, enabled)) = fields else {
             continue;
         };
+        let panel = panels.contains(owner.0);
+        let health = |binding: &Boolean| {
+            matches!(
+                binding,
+                Boolean::AnimalDiseased
+                    | Boolean::AnimalUnderTreatment
+                    | Boolean::AnimalTranquilized
+                    | Boolean::AnimalEscaped
+                    | Boolean::AnimalRampaging
+                    | Boolean::AnimalDead
+            )
+        };
+        if text.is_some_and(|text| {
+            matches!(
+                text.0,
+                UiTextPropertyBindingSource::AnimalDiseaseName
+                    | UiTextPropertyBindingSource::AnimalTreatmentName
+            ) || !panel
+                && matches!(
+                    text.0,
+                    UiTextPropertyBindingSource::SelectedEntityName
+                        | UiTextPropertyBindingSource::SelectedEntityDefinitionName
+                )
+        }) || enabled.is_some_and(|enabled| health(&enabled.0))
+            || (!panel && visible.is_some_and(|visible| health(&visible.0)))
+        {
+            entity.insert(AnimalSummaryFieldOf(owner.0));
+        }
+        if !panel {
+            continue;
+        }
         if value.is_some_and(|value| matches!(value.0, Integer::AnimalConservationStatus))
             || text.is_some_and(|text| {
                 matches!(

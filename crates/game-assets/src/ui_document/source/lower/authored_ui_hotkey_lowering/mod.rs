@@ -124,7 +124,7 @@ pub(super) fn control_state(
 /// Maps a `<char>` character code to the virtual key that types it. Control
 /// characters 1-26 are Ctrl+A to Ctrl+Z, except Backspace, Tab and Enter when
 /// the binding does not require Ctrl. A `<char key>` binding has no code.
-fn character_code_virtual_key(
+pub(in crate::ui_document::source) fn character_code_virtual_key(
     code: Option<u32>,
     control_state: UiDocumentHotkeyControlState,
 ) -> (u32, UiDocumentHotkeyControlState) {

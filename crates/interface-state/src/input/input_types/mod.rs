@@ -152,12 +152,12 @@ impl Default for GameActionInputBindings {
                 },
                 GameActionInputBinding {
                     action: ZoomIn,
-                    primary: KeyPair(KeyCode::Equal, KeyCode::NumpadAdd),
+                    primary: Unbound,
                     alternate: Some(Gamepad(Pad::DPadUp)),
                 },
                 GameActionInputBinding {
                     action: ZoomOut,
-                    primary: KeyPair(KeyCode::Minus, KeyCode::NumpadSubtract),
+                    primary: Unbound,
                     alternate: Some(Gamepad(Pad::DPadDown)),
                 },
                 GameActionInputBinding {

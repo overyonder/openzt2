@@ -1,6 +1,6 @@
+use super::fence_topology_snapshot_section::SavedTopology;
 use bevy::prelude::Component;
 use openzt2_game_data::AssetId;
-use openzt2_zoo_state::topology::topology_edit_types::TopologySnapshot;
 
 use super::super::{
     persistence_failure_types::WorldSnapshotPersistenceFailure as Failure,
@@ -51,7 +51,7 @@ pub(super) struct DecodedSnapshot {
 
 pub(super) struct SnapshotRestoreSections {
     pub(super) runtime: Option<RuntimeContinuationSnapshot>,
-    pub(super) topology: Option<Vec<TopologySnapshot>>,
+    pub(super) topology: Option<SavedTopology>,
     pub(super) maintenance: MaintenanceSnapshot,
     pub(super) animals: Vec<AnimalSnapshotRecord>,
     pub(super) staff: Vec<StaffSnapshotRecord>,

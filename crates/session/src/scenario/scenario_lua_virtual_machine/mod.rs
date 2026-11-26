@@ -100,13 +100,11 @@ impl ScenarioLuaVirtualMachine {
         scenario_lua_query_facts: ScenarioLuaQueryFacts<'_>,
         authored_arguments: Option<&[&str]>,
     ) -> mlua::Result<ScenarioLuaScriptResult> {
-        let requested_economy_operations = RefCell::new(Vec::new());
         let requested_award_point_adjustments = RefCell::new(Vec::new());
         let maximum_fame_percent = RefCell::new(None);
         let requested_challenge_offer_source_paths = RefCell::new(Vec::new());
         let shown_rules = RefCell::new(Vec::new());
         let available_content = RefCell::new(Vec::new());
-        let current_photo_challenge_set = RefCell::new(None);
         let ui = RefCell::new(Vec::new());
         let entity_operations =
             RefCell::new(super::scenario_lua_entity_commands::EntityOperations::default());
@@ -147,14 +145,12 @@ impl ScenarioLuaVirtualMachine {
                     &self.lua_virtual_machine,
                     lua_scope,
                     scenario_lua_query_facts,
-                    &requested_economy_operations,
                     &requested_award_point_adjustments,
                     &maximum_fame_percent,
                     &requested_challenge_offer_source_paths,
                     scenario_script_binding.scenario,
                     &shown_rules,
                     &available_content,
-                    &current_photo_challenge_set,
                     &persist_profile_variables,
                     &ui,
                     &entity_operations,
@@ -212,16 +208,11 @@ impl ScenarioLuaVirtualMachine {
                 persist_profile_variables: persist_profile_variables.get(),
                 ui: ui.borrow_mut().drain(..).collect(),
                 failure,
-                current_photo_challenge_set: current_photo_challenge_set.borrow_mut().take(),
                 maximum_fame_percent: maximum_fame_percent.borrow_mut().take(),
                 available_content: available_content.borrow_mut().drain(..).collect(),
                 condition_status,
                 shown_rules: shown_rules.borrow_mut().drain(..).collect(),
                 challenge_panel,
-                economy_operations: requested_economy_operations
-                    .borrow_mut()
-                    .drain(..)
-                    .collect(),
                 award_point_adjustments: requested_award_point_adjustments
                     .borrow_mut()
                     .drain(..)

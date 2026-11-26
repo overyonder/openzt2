@@ -1,6 +1,4 @@
 use bevy::prelude::*;
-use openzt2_game_data::AssetId;
-use std::collections::BTreeMap;
 
 #[derive(Component, Default, PartialEq, Eq)]
 pub(super) struct AnimalWelfareRating(pub(super) u16);
@@ -16,17 +14,6 @@ pub(super) struct GuestRatingFacts {
     pub(super) count: u32,
     pub(super) satisfaction: u16,
     pub(super) education: u16,
-}
-
-#[derive(Component, Default, PartialEq)]
-pub(super) struct GuestSpeciesSeen(pub(super) BTreeMap<AssetId, SeenSpecies>);
-
-#[derive(Default, PartialEq)]
-pub(super) struct SeenSpecies {
-    pub(super) guests: u32,
-    pub(super) events: u32,
-    pub(super) entertainment: f32,
-    pub(super) donation: f32,
 }
 
 #[derive(Component, Default, PartialEq, Eq)]

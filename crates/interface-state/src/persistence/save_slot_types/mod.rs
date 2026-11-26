@@ -1,4 +1,4 @@
-use bevy::prelude::{Message, Resource};
+use bevy::prelude::{Component, Message, Resource};
 use openzt2_game_data::AssetId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -59,3 +59,7 @@ pub struct LoadSaveSlotCatalogue;
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SaveSlotCatalogueReady;
+
+/// Present for the lifetime of a save, load, or delete operation.
+#[derive(Component)]
+pub struct PersistenceBusy;

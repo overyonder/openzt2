@@ -11,7 +11,7 @@ pub(super) fn calculate_eligible_donation_amount(
     wallet: Money,
     observation: DonationObservation,
 ) -> Option<Money> {
-    (observation.amount.0 > 0 && wallet.0 >= observation.amount.0).then_some(observation.amount)
+    (observation.amount.is_positive() && wallet >= observation.amount).then_some(observation.amount)
 }
 
 pub(super) fn create_donation_candidate_from_observation(

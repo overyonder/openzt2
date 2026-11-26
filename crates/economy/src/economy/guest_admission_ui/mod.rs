@@ -86,7 +86,7 @@ pub(super) fn project_zoo_admission_price_into_authored_ui_text(
             continue;
         }
         text.0.clear();
-        let cents = admission_price.adult.0.unsigned_abs();
+        let cents = super::display_currency_cents(admission_price.adult).unsigned_abs();
         let _ = write!(text.0, "${}.{:02}", cents / 100, cents % 100);
     }
 }
@@ -266,8 +266,9 @@ pub(super) fn apply_zoo_admission_policy_changes_from_authored_ui_actions(
                         .ok()
                         .and_then(|band_index| price_bands.get(band_index).copied())
                     {
-                        admission_price
-                            .set_if_neq(AdmissionPrice::from_adult(Money(i64::from(price))));
+                        admission_price.set_if_neq(AdmissionPrice::from_adult(Money::from_cents(
+                            i64::from(price),
+                        )));
                     }
                 }
                 UiEconomyAction::SetZooAdmissionsOpen { open } => {

@@ -54,15 +54,11 @@ pub(super) fn apply_simulation_control_requests(
 }
 
 pub(super) fn simulation_speed_inputs_changed(
-    definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     tiers: Query<(), (With<WorldRoot>, Changed<SimulationSpeedTier>)>,
     speed_override: Res<SimulationSpeedOverride>,
 ) -> bool {
-    active_definitions.is_changed()
-        || definitions.is_changed()
-        || speed_override.is_changed()
-        || !tiers.is_empty()
+    active_definitions.is_changed() || speed_override.is_changed() || !tiers.is_empty()
 }
 
 pub(super) fn project_simulation_speed(

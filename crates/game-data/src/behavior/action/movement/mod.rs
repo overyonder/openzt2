@@ -7,6 +7,10 @@ pub struct BehaviorMoveAction {
     pub target_node_name: Option<String>,
     /// Arrival tolerance in centimetres; the native default is 2.0 metres.
     pub move_radius_cm: u32,
+    #[serde(default)]
+    pub depth_below_surface_m: Option<f32>,
+    #[serde(default)]
+    pub height_above_floor_m: Option<f32>,
 }
 
 /// Native `BFBehPursuit`: route toward the task target, then steer straight at

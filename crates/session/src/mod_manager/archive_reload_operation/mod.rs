@@ -113,7 +113,7 @@ pub(super) fn register_archive_reload_tracking(app: &mut App) {
         InteractiveTextureMetadataAsset,
         LocalizationAsset,
         LuaScriptAsset,
-        crate::shell::main_mode_cash::MainModeCash,
+        openzt2_world::world_spawn::challenge_economy_initialization::ChallengeEconomyInitializer,
         MaterialAsset,
         ParticleEffectDocumentAsset,
         PathPlacementHighlightAsset,

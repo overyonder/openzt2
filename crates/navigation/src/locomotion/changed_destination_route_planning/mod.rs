@@ -120,7 +120,10 @@ pub(super) fn admit_waiting_route_searches(
     mut commands: Commands,
     roots: Query<(&ActiveTerrainDerivedNavigationGraph, &LocomotionCapacity)>,
     active: Query<(), With<ActiveRouteSearch>>,
-    waiting: Query<(Entity, &WorldMember, &Destination), With<WaitingRouteSearch>>,
+    waiting: Query<
+        (Entity, &WorldMember, &Destination),
+        (With<WaitingRouteSearch>, Without<ActiveRouteSearch>),
+    >,
     mut reusable: ResMut<ReusableRouteSearchScratch>,
 ) {
     let free = MAX_ACTIVE_ROUTE_SEARCHES.saturating_sub(active.iter().count());

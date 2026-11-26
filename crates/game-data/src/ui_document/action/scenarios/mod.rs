@@ -1,4 +1,4 @@
-//! Scenario objectives, challenges, campaigns, earthquakes, awards, maps, and tutorials.
+//! Scenario objectives, challenges, campaigns, awards, maps, and tutorials.
 
 use super::UiTrigger;
 use crate::AssetId;
@@ -15,14 +15,12 @@ pub enum UiScenarioAction {
     SetObjectiveStatusFilter { filter: ObjectiveStatusFilter },
     AcceptChallenge,
     DeclineChallenge,
-    TriggerEarthquake,
-    RefreshEarthquake,
     MarkAwardsSeen,
     IncrementDiseaseHint,
     PopulateScenarioSelection,
     PopulateCampaignSelection,
     PlayNextScenario,
-    SelectionChanged,
+    SelectionChanged { scenario_path: Option<String> },
     ClearSelection,
     SetStartingCash,
     PlayTutorial,

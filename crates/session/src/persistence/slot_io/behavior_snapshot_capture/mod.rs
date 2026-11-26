@@ -1,5 +1,10 @@
+use bevy::animation::transition::AnimationTransitions;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use openzt2_world_state::{
+    animation_graph::animation_presentation_relationship_types::AnimationPresentations,
+    animation_playback::animation_playback_controller_types::AnimationPlaybackController,
+};
 use openzt2_zoo_state::{
     animal_behavior::behavior_natural_water_target_types::NaturalWaterTargetKind,
     animal_behavior::behavior_synchronized_set_types::{
@@ -25,6 +30,16 @@ pub(in crate::persistence) struct BehaviorSnapshotCapture<'w, 's> {
     entities: BehaviorSnapshotEntities<'w, 's>,
     arrivals: Res<'w, Messages<openzt2_zoo_state::locomotion::locomotion_types::Arrived>>,
     failures: Res<'w, Messages<openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed>>,
+    animation_presentations: Query<'w, 's, &'static AnimationPresentations>,
+    animation_players: Query<
+        'w,
+        's,
+        (
+            &'static AnimationPlaybackController,
+            &'static AnimationPlayer,
+            Option<&'static AnimationTransitions>,
+        ),
+    >,
     memberships: InteractionContainerMemberships<'w, 's>,
     synchronizations: Query<
         'w,
@@ -72,6 +87,39 @@ impl BehaviorSnapshotCapture<'_, '_> {
             let actor = *identities
                 .get(&record.persistent_identifier)
                 .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+            let entity = self
+                .entities
+                .get(actor)
+                .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+            if let Some(splash) = entity.splash.filter(|splash| {
+                entity
+                    .instruction
+                    .is_some_and(|instruction| instruction.id() == splash.step)
+            }) {
+                let presentations = self.animation_presentations.get(actor).ok();
+                let seek_seconds = AnimationPresentations::for_subject(actor, presentations)
+                    .filter_map(|presentation| self.animation_players.get(presentation).ok())
+                    .filter(|(controller, _, _)| {
+                        controller.explicit_clip_request_id == Some(splash.request)
+                    })
+                    .find_map(|(_, player, transitions)| {
+                        if let Some(main) =
+                            transitions.and_then(AnimationTransitions::get_main_animation)
+                        {
+                            return player
+                                .animation(main)
+                                .map(|animation| animation.seek_time());
+                        }
+                        let mut playing = player.playing_animations();
+                        let (_, animation) = playing.next()?;
+                        playing.next().is_none().then(|| animation.seek_time())
+                    })
+                    .unwrap_or_default();
+                record.splash = Some(super::behavior_snapshot_types::BehaviorSplashSnapshot {
+                    seek_seconds,
+                    emitted: splash.emitted,
+                });
+            }
             if let Some(nav) = record.navigation.as_mut() {
                 let owns = |request| {
                     nav.move_completion
@@ -143,7 +191,7 @@ impl BehaviorSnapshotCapture<'_, '_> {
                 }
             }
         }
-        for actor in self.entities.iter().filter(|actor| !actor.guest) {
+        for actor in &self.entities {
             let Some(id) = actor.persistent_id else {
                 continue;
             };
@@ -153,9 +201,6 @@ impl BehaviorSnapshotCapture<'_, '_> {
                 .filter_map(|(target, failures, remaining_updates)| {
                     // Only persist timers for targets restored with this zoo.
                     let target = self.entities.get(target).ok()?;
-                    if target.guest {
-                        return None;
-                    }
                     Some(BehaviorTargetRetrySnapshot {
                         target: capture_behavior_entity_reference(target.entity, &self.entities)
                             .ok()?,
@@ -244,11 +289,6 @@ fn capture_behavior_actor_snapshots(
     let mut records = Vec::new();
     let reference = |entity| capture_behavior_entity_reference(entity, entities);
     for actor in entities {
-        // Guests are not saved (#118), so their tasks would reference actors
-        // that a load never restores.
-        if actor.guest {
-            continue;
-        }
         let Some(task) = actor.behavior_task_execution_state else {
             continue;
         };
@@ -334,7 +374,7 @@ fn capture_behavior_actor_snapshots(
             })
             .transpose()?;
         records.push(BehaviorActorSnapshot::Task(BehaviorTaskActorSnapshot {
-            persistent_identifier: id.0, task: task_snapshot, navigation, water_target, staff_job,
+            persistent_identifier: id.0, task: task_snapshot, navigation, water_target, staff_job, splash: None,
             transaction: actor.pending_behavior_transaction.map(|pending| -> Result<_, WorldSnapshotPersistenceFailure> {
                 if pending.payment.is_some() {
                     return Err(WorldSnapshotPersistenceFailure::SnapshotTransactionInFlight);
@@ -477,6 +517,7 @@ fn capture_owned_navigation(
                 target: reference(state.target)?,
                 phase: state.phase,
                 owns_disabled_collider: state.owns_disabled_collider,
+                retry_seconds: actor.spline_retry.map(|retry| retry.0.remaining_secs()),
             })
         })
         .transpose()?;

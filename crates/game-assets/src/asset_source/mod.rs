@@ -15,10 +15,7 @@ use bevy::{
         AssetReader, AssetReaderError, AssetSourceBuilder, AssetSourceEvent, AssetWatcher,
         PathStream, Reader, VecReader,
     },
-    prelude::{
-        resource_changed, App, DetectChangesMut, First, IntoScheduleConfigs, Message,
-        MessageWriter, Plugin, ResMut, Resource,
-    },
+    prelude::{App, Message, Plugin, Resource},
     tasks::futures_lite::stream,
 };
 
@@ -75,7 +72,7 @@ pub fn create_bevy_asset_source_for_enabled_z2f_archives(
         resolved,
         shared_source_byte_cache,
         live_model_replacements: Arc::default(),
-        pending_overlay_changes: Vec::new(),
+        overlay_generation: Arc::default(),
     };
     archives.refresh_archive_discovery(None);
     let reader_archives = archives.clone();
@@ -101,7 +98,7 @@ pub struct AssetArchives {
     installation_root: PathBuf,
     events: Arc<Mutex<Option<async_channel::Sender<AssetSourceEvent>>>>,
     resolved: Arc<RwLock<ResolvedArchiveDiscovery>>,
-    pending_overlay_changes: Vec<z2f::ResolvedAssetChange>,
+    overlay_generation: Arc<Mutex<u64>>,
     shared_source_byte_cache: Arc<RwLock<SharedSourceByteCache>>,
     /// glTF models sent from an editor while the game runs, by the native
     /// model path they replace. They last until restored or the game exits.
@@ -176,36 +173,47 @@ fn archive_entry_order(entry: &z2f::ResolvedArchiveEntry) -> (usize, usize) {
     (entry.archive_priority_index, entry.zip_entry_ordinal)
 }
 
-#[derive(Message)]
+#[derive(Clone, Message)]
 pub struct ArchiveOverlayChanged {
+    pub generation: u64,
     pub changes: Vec<z2f::ResolvedAssetChange>,
+    winners: BTreeMap<PathBuf, z2f::ResolvedArchiveEntry>,
 }
 
-pub(super) struct ArchiveOverlayPublicationPlugin;
-
-impl Plugin for ArchiveOverlayPublicationPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_message::<ArchiveOverlayChanged>().add_systems(
-            First,
-            publish_archive_overlay_changes.run_if(resource_changed::<AssetArchives>),
-        );
+impl ArchiveOverlayChanged {
+    /// A distinct Bevy load identity for the winning entry in this change.
+    pub fn reload_entry_path(&self, path: &Path) -> Option<PathBuf> {
+        let path = z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(path);
+        let winner = self.winners.get(&path)?;
+        Some(archive_entry_asset_path::definition_archive_entry_asset_path(winner, self.generation))
     }
 }
 
-fn publish_archive_overlay_changes(
-    mut archives: ResMut<AssetArchives>,
-    mut changes: MessageWriter<ArchiveOverlayChanged>,
-) {
-    if !archives.pending_overlay_changes.is_empty() {
-        changes.write(ArchiveOverlayChanged {
-            changes: std::mem::take(
-                &mut archives.bypass_change_detection().pending_overlay_changes,
-            ),
-        });
+pub fn archive_reload_generation_for_path(path: &Path) -> Option<u64> {
+    archive_entry_asset_path::archive_reload_generation_for_path(path)
+}
+
+pub struct ArchiveOverlayEdit {
+    pub changed_asset_paths: Vec<PathBuf>,
+    pub publication: Option<ArchiveOverlayChanged>,
+}
+
+pub(super) struct ArchiveOverlayPlugin;
+
+impl Plugin for ArchiveOverlayPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_message::<ArchiveOverlayChanged>();
     }
 }
 
 impl AssetArchives {
+    pub fn overlay_generation(&self) -> u64 {
+        *self
+            .overlay_generation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub fn read_source(&self, path: &Path) -> std::io::Result<Vec<u8>> {
         let path = z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(path);
         #[cfg(feature = "tracing")]
@@ -814,13 +822,32 @@ impl AssetArchives {
         &mut self,
         archive: usize,
         enabled: bool,
-    ) -> std::io::Result<Vec<PathBuf>> {
+    ) -> std::io::Result<ArchiveOverlayEdit> {
+        let mut generation = self
+            .overlay_generation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let changed = self.files.set_archive_enabled(archive, enabled)?;
-        if !changed.is_empty() {
+        let publication = if changed.is_empty() {
+            None
+        } else {
             self.refresh_archive_discovery(Some(&changed));
-            self.pending_overlay_changes.extend(changed.iter().cloned());
-        }
-        let changed_bevy_asset_paths = changed
+            *generation += 1;
+            let winners = changed
+                .iter()
+                .filter_map(|change| {
+                    let path = &change.normalized_asset_path;
+                    let entry = self.resolved_winning_entry(path)?;
+                    (entry.normalized_asset_path == *path).then(|| (path.clone(), entry))
+                })
+                .collect();
+            Some(ArchiveOverlayChanged {
+                generation: *generation,
+                changes: changed.clone(),
+                winners,
+            })
+        };
+        let changed_asset_paths = changed
             .iter()
             .flat_map(|change| {
                 asset_paths_reading_source_path(&change.normalized_asset_path)
@@ -836,38 +863,47 @@ impl AssetArchives {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         if let Some(sender) = sender {
-            for change in &changed {
-                for replaced_native_model_path in
-                    native_model_asset_paths_replaced_by_source_path(&change.normalized_asset_path)
-                {
-                    sender
-                        .try_send(AssetSourceEvent::ModifiedAsset(replaced_native_model_path))
-                        .map_err(std::io::Error::other)?;
-                }
-                for changed_bevy_asset_path in
-                    asset_paths_reading_source_path(&change.normalized_asset_path)
-                {
-                    let event = match change.change_kind {
-                        z2f::ResolvedAssetChangeKind::Added => {
-                            AssetSourceEvent::AddedAsset(changed_bevy_asset_path)
-                        }
-                        z2f::ResolvedAssetChangeKind::Modified => {
-                            AssetSourceEvent::ModifiedAsset(changed_bevy_asset_path)
-                        }
-                        z2f::ResolvedAssetChangeKind::Removed => {
-                            sender
-                                .try_send(AssetSourceEvent::RemovedAsset(
+            let send_changes = || -> Result<(), async_channel::TrySendError<AssetSourceEvent>> {
+                for change in &changed {
+                    for replaced_native_model_path in
+                        native_model_asset_paths_replaced_by_source_path(
+                            &change.normalized_asset_path,
+                        )
+                    {
+                        sender.try_send(AssetSourceEvent::ModifiedAsset(
+                            replaced_native_model_path,
+                        ))?;
+                    }
+                    for changed_bevy_asset_path in
+                        asset_paths_reading_source_path(&change.normalized_asset_path)
+                    {
+                        let event = match change.change_kind {
+                            z2f::ResolvedAssetChangeKind::Added => {
+                                AssetSourceEvent::AddedAsset(changed_bevy_asset_path)
+                            }
+                            z2f::ResolvedAssetChangeKind::Modified => {
+                                AssetSourceEvent::ModifiedAsset(changed_bevy_asset_path)
+                            }
+                            z2f::ResolvedAssetChangeKind::Removed => {
+                                sender.try_send(AssetSourceEvent::RemovedAsset(
                                     changed_bevy_asset_path.clone(),
-                                ))
-                                .map_err(std::io::Error::other)?;
-                            AssetSourceEvent::ModifiedAsset(changed_bevy_asset_path)
-                        }
-                    };
-                    sender.try_send(event).map_err(std::io::Error::other)?;
+                                ))?;
+                                AssetSourceEvent::ModifiedAsset(changed_bevy_asset_path)
+                            }
+                        };
+                        sender.try_send(event)?;
+                    }
                 }
+                Ok(())
+            };
+            if let Err(error) = send_changes() {
+                bevy::log::warn!(%error, "could not notify the archive asset watcher");
             }
         }
-        Ok(changed_bevy_asset_paths)
+        Ok(ArchiveOverlayEdit {
+            changed_asset_paths,
+            publication,
+        })
     }
 }
 
@@ -996,15 +1032,15 @@ pub(crate) mod tests {
     use bevy::{
         app::TaskPoolPlugin,
         asset::{
-            io::{AssetReader, AssetSourceId, Reader},
             Asset, AssetApp, AssetLoader, AssetPlugin, AssetServer, Assets, Handle, LoadContext,
+            io::{AssetReader, AssetSourceId, Reader},
         },
         prelude::{App, TypePath},
     };
-    use zip::{write::SimpleFileOptions, ZipWriter};
+    use zip::{ZipWriter, write::SimpleFileOptions};
 
     use super::{
-        archive_entry_asset_path, create_bevy_asset_source_for_enabled_z2f_archives, Z2fAssetReader,
+        Z2fAssetReader, archive_entry_asset_path, create_bevy_asset_source_for_enabled_z2f_archives,
     };
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -1151,8 +1187,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn ui_references_prefer_exact_loose_paths_before_archive_basename_fallbacks(
-    ) -> std::io::Result<()> {
+    fn ui_references_prefer_exact_loose_paths_before_archive_basename_fallbacks()
+    -> std::io::Result<()> {
         let directory = TestDirectory::new()?;
         let base = directory.archive(
             "x300_000.z2f",
@@ -1230,8 +1266,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn archive_toggle_reloads_compatible_image_handle_when_physical_dds_winner_changes(
-    ) -> std::io::Result<()> {
+    fn archive_toggle_reloads_compatible_image_handle_when_physical_dds_winner_changes()
+    -> std::io::Result<()> {
         let directory = TestDirectory::new()?;
         let base = directory.archive("x300_000.z2f", &[("image.dds", b"base")])?;
         let modification = directory.archive("mod.z2f", &[("image.dds", b"mod")])?;
@@ -1257,13 +1293,13 @@ pub(crate) mod tests {
         update_until_compatible_image_source_contains_expected_bytes(&mut app, &handle, b"mod")?;
         let disabled_paths = archives.set_archive_enabled(1, false)?;
         assert_eq!(
-            disabled_paths,
+            disabled_paths.changed_asset_paths,
             [PathBuf::from("image.dds"), PathBuf::from("image.z2dds")]
         );
         update_until_compatible_image_source_contains_expected_bytes(&mut app, &handle, b"base")?;
         let restored_paths = archives.set_archive_enabled(1, true)?;
         assert_eq!(
-            restored_paths,
+            restored_paths.changed_asset_paths,
             [PathBuf::from("image.dds"), PathBuf::from("image.z2dds")]
         );
         update_until_compatible_image_source_contains_expected_bytes(&mut app, &handle, b"mod")
@@ -1285,17 +1321,32 @@ pub(crate) mod tests {
             archives: archives.clone(),
         };
 
+        let disabled = archives.set_archive_enabled(1, false)?.publication.unwrap();
+        let base_path = disabled.reload_entry_path(path).unwrap();
+        assert_eq!(
+            super::archive_reload_generation_for_path(&base_path),
+            Some(disabled.generation)
+        );
+        let restored = archives.set_archive_enabled(1, true)?.publication.unwrap();
+        let mod_path = restored.reload_entry_path(path).unwrap();
+        assert_eq!(
+            super::archive_reload_generation_for_path(&mod_path),
+            Some(restored.generation)
+        );
+        assert_eq!(restored.generation, disabled.generation + 1);
+        assert_ne!(base_path, mod_path);
         archives.set_archive_enabled(1, false)?;
         assert_eq!(archives.read_source(path)?, b"base");
         bevy::tasks::block_on(async {
-            for _ in 0..2 {
-                let mut input = reader
-                    .read(&old_path)
-                    .await
-                    .map_err(std::io::Error::other)?;
+            for (path, expected) in [
+                (&old_path, b"mod".as_slice()),
+                (&base_path, b"base".as_slice()),
+                (&mod_path, b"mod".as_slice()),
+            ] {
+                let mut input = reader.read(path).await.map_err(std::io::Error::other)?;
                 let mut bytes = Vec::new();
                 input.read_to_end(&mut bytes).await?;
-                assert_eq!(bytes, b"mod");
+                assert_eq!(bytes, expected);
             }
             Ok::<(), std::io::Error>(())
         })?;

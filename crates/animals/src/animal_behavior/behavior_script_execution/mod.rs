@@ -16,12 +16,12 @@ use openzt2_game_data::AssetId;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationOperation;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest;
+use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
+use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorScript, RunningBehaviorInstruction,
 };
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
-use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
@@ -29,11 +29,12 @@ use std::{
 
 pub(super) mod script_particles;
 mod world_access;
-pub(super) use world_access::remove_settled_behavior_script_transactions;
 pub use world_access::BreedingCenterEndangeredBirths;
+pub(super) use world_access::remove_settled_behavior_script_transactions;
 use world_access::{
-    need_distress, BehaviorScriptEffect, BehaviorScriptPlacement, BehaviorScriptStructuralEdits,
+    BehaviorScriptEffect, BehaviorScriptPlacement, BehaviorScriptStructuralEdits,
     BehaviorScriptWorldAccess, DiseaseAttribute, ScriptFloatAttribute, ScriptPlacedObject,
+    need_distress,
 };
 
 #[derive(Default)]
@@ -570,13 +571,7 @@ pub(super) fn execute_authored_behavior_script_actions(
                         "BFG_GET_ATTR_BOOLEAN",
                         scope.create_function(move |_, (subject, name): (Table, String)| {
                             let entity = subject_entity(&subject)?;
-                            match name.as_str() {
-                                "b_Adult" => Ok(world_view.borrow().is_adult(entity)),
-                                "b_Male" => Ok(world_view.borrow().is_male(entity)),
-                                _ => Err(mlua::Error::runtime(format!(
-                                    "unmapped behavior boolean attribute {name}"
-                                ))),
-                            }
+                            Ok(world_view.borrow().boolean(entity, &name))
                         })?,
                     )?;
                     table.set(

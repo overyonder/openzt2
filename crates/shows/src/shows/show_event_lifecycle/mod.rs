@@ -7,7 +7,7 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::{behavior::action::watch_show::ShowEventScoring, AssetId};
+use openzt2_game_data::{AssetId, behavior::action::watch_show::ShowEventScoring};
 use openzt2_world_state::{
     simulation_time::simulation_clock_types::ZooClock,
     world_spawn::world_membership_types::WorldMember,
@@ -19,8 +19,8 @@ use openzt2_zoo_state::{
     },
     animal_lifecycle::types::{Animal, SpeciesHandle},
     behavior_task_execution_types::{
-        running_actions::{RunBehaviorWatchShow, RunningBehaviorInstruction, SelectedBehaviorSet},
         BehaviorTaskExecutionPhase, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+        running_actions::{RunBehaviorWatchShow, RunningBehaviorInstruction, SelectedBehaviorSet},
     },
     guests::{
         guest_simulation_types::{GuestArchetype, GuestFavouriteAnimal, GuestRng},
@@ -70,6 +70,7 @@ pub(super) struct PendingShowReaction;
 pub(super) fn schedule_authored_animal_show_events(
     mut commands: Commands,
     clock: Single<&ZooClock>,
+    time: Res<Time<Fixed>>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     events: Query<(Entity, &AuthoredAnimalShowEvent), Without<ShowEventWindow>>,
@@ -88,9 +89,8 @@ pub(super) fn schedule_authored_animal_show_events(
     let Some(definitions) = definitions.get(&assets) else {
         return;
     };
-    let ticks = |seconds: f32| {
-        (f64::from(seconds) * f64::from(definitions.timing().fixed_hz)).ceil() as u64
-    };
+    let ticks =
+        |seconds| super::show_timing_operations::fixed_ticks_for_seconds(seconds, time.timestep());
     for (entity, event) in &events {
         let Ok(active) = performers.get(event.performer) else {
             commands.entity(entity).try_despawn();

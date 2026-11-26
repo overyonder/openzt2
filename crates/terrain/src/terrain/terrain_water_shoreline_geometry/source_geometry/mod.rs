@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use bevy::prelude::{Entity, IVec2, UVec2, Vec2};
+use bevy::prelude::{Entity, IVec2, Quat, Transform, UVec2, Vec2};
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_data::terrain::TerrainSample;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
@@ -84,6 +84,7 @@ pub(super) fn construct_source_region_shoreline_patches(
     membership: &TerrainWaterMembershipIndex,
     owner: Entity,
     source: &TerrainWaterRegionView<'_>,
+    ripple_slots: &mut Vec<Transform>,
 ) -> Option<Vec<(UVec2, TerrainShorelinePatch)>> {
     if membership.terrain() != source.terrain().id() {
         return None;
@@ -196,6 +197,7 @@ pub(super) fn construct_source_region_shoreline_patches(
         }
         let mut accumulated = BTreeMap::<u32, (Vec2, u32)>::new();
         let mut included = Vec::new();
+        let mut active_segments = BTreeSet::new();
         for (&(y, x), indices) in &tile_profiles {
             let tile = UVec2::new(x, y);
             if !membership
@@ -227,6 +229,20 @@ pub(super) fn construct_source_region_shoreline_patches(
                 }
             }
             included.push(tile);
+            active_segments.extend(indices.iter().copied());
+        }
+        for segment in active_segments {
+            let (start, start_wet) = crossings[segment];
+            let (end, end_wet) = crossings[(segment + 1) % crossings.len()];
+            let position = (start + end) * 0.5;
+            let wet = (start_wet + end_wet) * 0.5 - position;
+            if let Some(wet) = wet.try_normalize() {
+                let rotation = Quat::from_rotation_y((-wet.x).atan2(wet.y));
+                ripple_slots.push(
+                    Transform::from_xyz(position.x, terrain.plane, -position.y)
+                        .with_rotation(rotation),
+                );
+            }
         }
         for tile in included {
             let mut patch = TerrainShorelinePatch {

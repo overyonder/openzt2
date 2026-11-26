@@ -33,6 +33,12 @@ pub(super) fn update_visible_authored_graph_drawings(
     active_localization: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,
     documents: Res<Assets<UiDocumentAsset>>,
+    roots: Query<
+        &openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot,
+    >,
+    owners: Query<
+        &openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner,
+    >,
     mut label_instances: Query<&mut super::graph_tick_projection::UiGraphTickLabel>,
     graphs: Query<(
         Entity,
@@ -87,7 +93,14 @@ pub(super) fn update_visible_authored_graph_drawings(
         };
         let handle = selection
             .as_ref()
-            .and_then(|selection| selection.label_document.as_ref());
+            .and_then(|selection| selection.label_document)
+            .and_then(|label| {
+                let owner = owners.get(entity).ok()?;
+                let root = roots.get(owner.0).ok()?;
+                documents
+                    .get(&root.document)?
+                    .nested_ui_document_handle(label)
+            });
         let plot_left = handle
             .and_then(|handle| documents.get(handle))
             .and_then(|document| document.canonical_ui_document().nodes.first())

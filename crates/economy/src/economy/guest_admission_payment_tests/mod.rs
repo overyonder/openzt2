@@ -56,7 +56,7 @@ fn create_application_with_guest_admission_payment(admission_price: Money) -> Ap
         },
         AdmissionPrice::from_adult(admission_price),
         ZooAdmissionsOpen(true),
-        ZooCash(Money(1_000)),
+        ZooCash(Money::from_cents(1_000)),
     ));
     application
 }
@@ -85,8 +85,8 @@ fn spawn_arriving_guest_with_wallet(application: &mut App, wallet: Money) -> Ent
 
 #[test]
 fn repeated_paid_gate_arrivals_enter_visiting_after_one_atomic_payment() {
-    let mut application = create_application_with_guest_admission_payment(Money(125));
-    let guest = spawn_arriving_guest_with_wallet(&mut application, Money(500));
+    let mut application = create_application_with_guest_admission_payment(Money::from_cents(125));
+    let guest = spawn_arriving_guest_with_wallet(&mut application, Money::from_cents(500));
     application
         .world_mut()
         .write_message(GuestReachedEntrance { guest });
@@ -102,7 +102,7 @@ fn repeated_paid_gate_arrivals_enter_visiting_after_one_atomic_payment() {
     );
     assert_eq!(
         application.world().get::<Wallet>(guest),
-        Some(&Wallet(Money(375)))
+        Some(&Wallet(Money::from_cents(375)))
     );
     assert_eq!(
         application
@@ -110,7 +110,7 @@ fn repeated_paid_gate_arrivals_enter_visiting_after_one_atomic_payment() {
             .get::<ZooCash>(zoo_root(&application))
             .unwrap()
             .0,
-        Money(1_125)
+        Money::from_cents(1_125)
     );
     assert_eq!(
         application
@@ -123,14 +123,14 @@ fn repeated_paid_gate_arrivals_enter_visiting_after_one_atomic_payment() {
 
 #[test]
 fn closed_admissions_turn_gate_arrival_away_without_payment() {
-    let mut application = create_application_with_guest_admission_payment(Money(125));
+    let mut application = create_application_with_guest_admission_payment(Money::from_cents(125));
     let root = zoo_root(&application);
     application
         .world_mut()
         .get_mut::<ZooAdmissionsOpen>(root)
         .unwrap()
         .0 = false;
-    let guest = spawn_arriving_guest_with_wallet(&mut application, Money(500));
+    let guest = spawn_arriving_guest_with_wallet(&mut application, Money::from_cents(500));
     application
         .world_mut()
         .write_message(GuestReachedEntrance { guest });
@@ -143,7 +143,7 @@ fn closed_admissions_turn_gate_arrival_away_without_payment() {
     );
     assert_eq!(
         application.world().get::<Wallet>(guest),
-        Some(&Wallet(Money(500)))
+        Some(&Wallet(Money::from_cents(500)))
     );
     assert_eq!(
         application
@@ -151,18 +151,20 @@ fn closed_admissions_turn_gate_arrival_away_without_payment() {
             .get::<ZooCash>(zoo_root(&application))
             .unwrap()
             .0,
-        Money(1_000)
+        Money::from_cents(1_000)
     );
-    assert!(application
-        .world()
-        .resource::<Messages<GuestArrived>>()
-        .is_empty());
+    assert!(
+        application
+            .world()
+            .resource::<Messages<GuestArrived>>()
+            .is_empty()
+    );
 }
 
 #[test]
 fn unaffordable_admission_preserves_balances_and_routes_guest_out() {
-    let mut application = create_application_with_guest_admission_payment(Money(125));
-    let guest = spawn_arriving_guest_with_wallet(&mut application, Money(100));
+    let mut application = create_application_with_guest_admission_payment(Money::from_cents(125));
+    let guest = spawn_arriving_guest_with_wallet(&mut application, Money::from_cents(100));
     application
         .world_mut()
         .write_message(GuestReachedEntrance { guest });
@@ -175,7 +177,7 @@ fn unaffordable_admission_preserves_balances_and_routes_guest_out() {
     );
     assert_eq!(
         application.world().get::<Wallet>(guest),
-        Some(&Wallet(Money(100)))
+        Some(&Wallet(Money::from_cents(100)))
     );
     assert_eq!(
         application
@@ -183,10 +185,12 @@ fn unaffordable_admission_preserves_balances_and_routes_guest_out() {
             .get::<ZooCash>(zoo_root(&application))
             .unwrap()
             .0,
-        Money(1_000)
+        Money::from_cents(1_000)
     );
-    assert!(application
-        .world()
-        .resource::<Messages<GuestArrived>>()
-        .is_empty());
+    assert!(
+        application
+            .world()
+            .resource::<Messages<GuestArrived>>()
+            .is_empty()
+    );
 }

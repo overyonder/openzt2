@@ -35,8 +35,8 @@ pub(super) fn capture_sorted_transport_snapshot_records_from_live_world(
         {
             transport_snapshot_records
                 .graph
-                .fares
-                .push((persistent_identifier.0, price.0 .0));
+                .fares_dollars
+                .push((persistent_identifier.0, price.0.dollars()));
         }
         transport_snapshot_records
             .circuit_records
@@ -87,6 +87,21 @@ pub(super) fn capture_sorted_transport_snapshot_records_from_live_world(
                 .graph
                 .poses
                 .push((persistent_identifier.0, *pose));
+        }
+        if let Ok(crossing) = world_snapshot_capture_queries
+            .sky_station_crossings
+            .get(entity)
+        {
+            let next_route = entity_persistent_identifier(crossing.next_track)
+                .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+            transport_snapshot_records.graph.sky_station_crossings.push(
+                super::transport_snapshot_types::SkyStationCrossingSnapshot {
+                    vehicle: persistent_identifier.0,
+                    next_route: next_route.0,
+                    reverse: crossing.reverse,
+                    distance: crossing.distance,
+                },
+            );
         }
         transport_snapshot_records
             .vehicle_records
@@ -140,7 +155,10 @@ pub(super) fn capture_sorted_transport_snapshot_records_from_live_world(
             length: route.length,
         });
     }
-    graph.fares.sort_unstable_by_key(|(id, _)| *id);
+    graph.fares_dollars.sort_unstable_by_key(|(id, _)| *id);
+    graph
+        .sky_station_crossings
+        .sort_unstable_by_key(|crossing| crossing.vehicle);
     graph.poses.sort_unstable_by_key(|(id, _)| *id);
     graph.junctions.sort_unstable_by_key(|(id, _)| *id);
     graph.routes.sort_unstable_by_key(|route| route.pieces[0]);

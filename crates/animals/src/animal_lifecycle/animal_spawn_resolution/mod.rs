@@ -1,6 +1,6 @@
 use openzt2_game_data::{
-    species::{LifeStage, Sex, Species, SpeciesVariant},
     AssetId,
+    species::{LifeStage, Sex, Species, SpeciesVariant},
 };
 use openzt2_zoo_state::placement::placement_surface_site::PlacementSiteQueries;
 
@@ -45,7 +45,7 @@ pub(super) fn resolve_animal_spawn_request_to_identifiers_and_components(
     let (variant, sex) = if let Some(id) = request.variant {
         let variant = find_species_variant_by_identifier(species_index, request.species, id)
             .ok_or(AnimalSpawnFailure::InvalidVariant)?;
-        let sex = resolve_exact_variant_sex(variant, request.sex, variant.life_stage)
+        let sex = resolve_exact_variant_sex(variant, request.sex, variant.life_stage, &mut rng)
             .ok_or(AnimalSpawnFailure::InvalidVariant)?;
         (variant, sex)
     } else {
@@ -72,7 +72,7 @@ pub(super) fn resolve_animal_spawn_request_to_identifiers_and_components(
         variant,
         sex,
         variant.life_stage,
-        definitions.timing().ticks_per_day,
+        crate::zoo_day_cadence(definitions).ticks_per_zoo_day(),
         &mut rng,
     )
     .ok_or(if request.variant.is_some() {
@@ -92,7 +92,7 @@ pub(super) fn resolve_species_and_variant_to_animal_spawn_components(
     requested_variant: Option<AssetId>,
     requested_sex: Option<Sex>,
     stage: LifeStage,
-    ticks_per_day: u32,
+    ticks_per_day: f64,
     rng: &mut DeterministicRng,
 ) -> Option<ResolvedAnimalSpawnComponents> {
     let (variant, sex) = select_species_spawn_variant(
@@ -123,7 +123,7 @@ pub(super) fn select_species_spawn_variant<'a>(
 ) -> Option<(&'a SpeciesVariant, Sex)> {
     if let Some(id) = requested_variant {
         let variant = find_species_variant_by_identifier(species_index, species.id, id)?;
-        let sex = resolve_exact_variant_sex(variant, requested_sex, stage)?;
+        let sex = resolve_exact_variant_sex(variant, requested_sex, stage, rng)?;
         return Some((variant, sex));
     }
 
@@ -157,12 +157,20 @@ fn resolve_exact_variant_sex(
     variant: &SpeciesVariant,
     requested_sex: Option<Sex>,
     stage: LifeStage,
+    rng: &mut DeterministicRng,
 ) -> Option<Sex> {
-    let sex = requested_sex.unwrap_or(variant.sex);
-    (variant.probability != 0
-        && sex != Sex::Any
-        && species_variant_matches_sex_and_life_stage(variant, sex, stage))
-    .then_some(sex)
+    let sex = requested_sex.unwrap_or_else(|| match variant.sex {
+        Sex::Any => {
+            if rng.next_u32() & 1 == 0 {
+                Sex::Male
+            } else {
+                Sex::Female
+            }
+        }
+        sex => sex,
+    });
+    (sex != Sex::Any && species_variant_matches_sex_and_life_stage(variant, sex, stage))
+        .then_some(sex)
 }
 
 pub fn lower_species_and_variant_to_animal_spawn_components(
@@ -170,11 +178,16 @@ pub fn lower_species_and_variant_to_animal_spawn_components(
     variant: &SpeciesVariant,
     sex: Sex,
     stage: LifeStage,
-    ticks_per_day: u32,
+    ticks_per_day: impl Into<f64>,
     rng: &mut DeterministicRng,
 ) -> Option<ResolvedAnimalSpawnComponents> {
-    let [juvenile_start_days, young_start_days, adult_start_days, elder_start_days] =
-        species.stage_start_days;
+    let ticks_per_day = ticks_per_day.into();
+    let [
+        juvenile_start_days,
+        young_start_days,
+        adult_start_days,
+        elder_start_days,
+    ] = species.stage_start_days;
     let stage_start_ticks = [
         ticks_from_days(juvenile_start_days, ticks_per_day)?,
         ticks_from_days(young_start_days, ticks_per_day)?,
@@ -209,8 +222,8 @@ pub fn lower_species_and_variant_to_animal_spawn_components(
     })
 }
 
-fn ticks_from_days(days: f64, ticks_per_day: u32) -> Option<u64> {
-    let ticks = days * f64::from(ticks_per_day);
+fn ticks_from_days(days: f64, ticks_per_day: f64) -> Option<u64> {
+    let ticks = days * ticks_per_day;
     (days.is_finite() && days >= 0.0 && ticks <= u64::MAX as f64).then(|| ticks.round() as u64)
 }
 

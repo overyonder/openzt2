@@ -50,6 +50,35 @@ use openzt2_zoo_state::{
 };
 use std::collections::{BTreeMap, VecDeque};
 
+#[derive(Component)]
+pub(in crate::scenario) struct ChallengeResultPanel;
+
+pub(super) fn bind_challenge_result_panels(
+    mut commands: Commands,
+    nodes: Query<(Entity, &UiNodeId, &UiDocumentOwner), Added<UiNodeId>>,
+    roots: Query<&UiDocumentRoot>,
+    documents: Res<Assets<UiDocumentAsset>>,
+) {
+    for (entity, node, owner) in &nodes {
+        let Some(document) = roots
+            .get(owner.0)
+            .ok()
+            .and_then(|root| documents.get(&root.document))
+        else {
+            continue;
+        };
+        let authored = document.canonical_ui_document();
+        let Some(node) = authored.nodes.get(node.index as usize) else {
+            continue;
+        };
+        if ["Challenge Won Layout", "Scenario Win  Layout", "Scenario Failed Layout"].iter().any(|name| {
+            openzt2_game_assets::source_document::source_document_semantic_name::source_document_names_are_semantically_equal(&node.name, name)
+        }) {
+            commands.entity(entity).insert(ChallengeResultPanel);
+        }
+    }
+}
+
 #[derive(Component, Default)]
 pub(in crate::scenario) struct ScenarioUiState {
     nodes: VecDeque<(Vec<String>, NodeOperation)>,

@@ -1,7 +1,7 @@
 use std::{io, path::PathBuf};
 
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     platform::collections::{HashMap, HashSet},
     prelude::*,
 };
@@ -17,7 +17,7 @@ use openzt2_game_assets::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
     },
 };
-use openzt2_game_data::{animation::animation_text_key::AuthoredAnimationTextAction, AssetId};
+use openzt2_game_data::{AssetId, animation::animation_text_key::AuthoredAnimationTextAction};
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::BehaviorTargetBiome;
 use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
@@ -247,8 +247,8 @@ fn play_script_particle(
             continue;
         };
         let ground = world
-            .and_then(|world| surface.on_land_at_position(world.root, target_pose.translation()))
-            .map(|land| AssetId::from_key(if land { "dirt" } else { "water" }));
+            .and_then(|world| surface.dictionary_ground(world.root, target_pose.translation()))
+            .map(|context| context.ground.dictionary_key());
         let graphics = settings
             .as_ref()
             .map_or(ThreeLevelGraphicsDetail::High, |settings| {

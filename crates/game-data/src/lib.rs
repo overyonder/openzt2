@@ -27,3 +27,19 @@ pub mod world_scenario;
 )]
 #[serde(transparent)]
 pub struct AssetId(pub [u8; 16]);
+
+/// Effective locomotion multipliers from an entity definition.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct CaffeineFactors {
+    pub caffeinated: f32,
+    pub decaffeinated: f32,
+}
+
+impl Default for CaffeineFactors {
+    fn default() -> Self {
+        Self {
+            caffeinated: 1.0,
+            decaffeinated: 1.0,
+        }
+    }
+}

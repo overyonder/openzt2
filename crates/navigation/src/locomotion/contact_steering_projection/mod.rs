@@ -12,6 +12,7 @@ pub(super) struct ContactRecovery(Timer);
 pub(super) fn project_avian_contacts_into_navigation_steering(
     time: Res<Time<Fixed>>,
     collisions: Collisions,
+    clip_policy: super::animal_navigation_policy::ActiveLocomotionClipPolicy,
     mut agents: Query<(Entity, &mut ContactSteering, &mut ContactRecovery), With<NavAgent>>,
 ) {
     let mut directions = EntityHashMap::<Vec3>::default();
@@ -22,6 +23,13 @@ pub(super) fn project_avian_contacts_into_navigation_steering(
         let first_colliding_entity = collision_pair.body1.unwrap_or(collision_pair.collider1);
         let second_colliding_entity = collision_pair.body2.unwrap_or(collision_pair.collider2);
         if first_colliding_entity == second_colliding_entity {
+            continue;
+        }
+        if agents.contains(first_colliding_entity)
+            && agents.contains(second_colliding_entity)
+            && (!clip_policy.resolves_unit_contacts(first_colliding_entity)
+                || !clip_policy.resolves_unit_contacts(second_colliding_entity))
+        {
             continue;
         }
         for contact_manifold in collision_pair

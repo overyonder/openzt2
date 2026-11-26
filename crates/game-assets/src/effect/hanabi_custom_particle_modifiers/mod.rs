@@ -123,6 +123,7 @@ pub(super) struct PlaneCollisionParticleUpdateModifier {
     pub(super) half_height: f32,
     pub(super) velocity_rebound: f32,
     pub(super) kill_after_contact: bool,
+    pub(super) request_spawn_after_contact: bool,
 }
 
 impl Modifier for PlaneCollisionParticleUpdateModifier {
@@ -159,6 +160,11 @@ impl Modifier for PlaneCollisionParticleUpdateModifier {
         } else {
             ""
         };
+        let request_spawn = if self.request_spawn_after_contact {
+            "legacy_spawn_triggers += 1u;"
+        } else {
+            ""
+        };
         shader_writer.main_code += &format!(
             r#"
 if is_alive {{
@@ -173,6 +179,7 @@ if is_alive {{
         if abs(dot(offset, {x_axis})) <= {half_width} && abs(dot(offset, {y_axis})) <= {half_height} {{
             particle.velocity = reflect(particle.velocity, normal) * {bounce};
             particle.position = contact + particle.velocity * effect_delta_time * (1.0 - fraction);
+            {request_spawn}
             {kill}
         }}
     }}

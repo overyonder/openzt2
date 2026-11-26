@@ -138,7 +138,11 @@ fn execute_current_wander_actions(
             Option<&mut StaffSubmergedDepth>,
         ),
         (
-            Or<(With<Animal>, With<Staff>)>,
+            Or<(
+                With<Animal>,
+                With<Staff>,
+                With<super::behavior_set_start_request_types::AmbientBehaviorSubject>,
+            )>,
             Or<(With<RunBehaviorWander>, With<BehaviorWanderNavigation>)>,
         ),
     >,
@@ -235,7 +239,9 @@ fn execute_current_wander_actions(
                 let until_tick = draw_wander_until_tick(
                     action,
                     &mut random,
-                    definitions.timing().fixed_hz,
+                    definitions
+                        .simulation_timestep()
+                        .expect("simulation timing is loaded"),
                     clock.tick,
                 );
                 commands.entity(actor).insert(BehaviorWanderNavigation {
@@ -417,7 +423,9 @@ fn execute_current_wander_actions(
             let until_tick = draw_wander_until_tick(
                 action,
                 &mut random,
-                definitions.timing().fixed_hz,
+                definitions
+                    .simulation_timestep()
+                    .expect("simulation timing is loaded"),
                 clock.tick,
             );
             commands.entity(actor).insert(BehaviorWanderNavigation {
@@ -432,16 +440,13 @@ fn execute_current_wander_actions(
 fn draw_wander_until_tick(
     action: &BehaviorWanderAction,
     random: &mut BehaviorRandomStream,
-    fixed_hz: u16,
+    step: std::time::Duration,
     now: u64,
 ) -> u64 {
     let duration = action.minimum_duration
         + (action.maximum_duration - action.minimum_duration)
             .mul_f64(f64::from(random.0.unit_f32()));
-    let ticks = duration
-        .as_nanos()
-        .saturating_mul(u128::from(fixed_hz))
-        .div_ceil(1_000_000_000);
+    let ticks = duration.as_nanos().div_ceil(step.as_nanos());
     now.saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX))
 }
 
@@ -474,7 +479,11 @@ fn execute_current_evasion_actions(
             Has<Dead>,
         ),
         (
-            Or<(With<Animal>, With<Staff>)>,
+            Or<(
+                With<Animal>,
+                With<Staff>,
+                With<super::behavior_set_start_request_types::AmbientBehaviorSubject>,
+            )>,
             Or<(
                 With<RunBehaviorEvasion>,
                 With<BehaviorEvasionNavigation>,
@@ -654,11 +663,12 @@ fn execute_current_evasion_actions(
             }
         }
         if current.is_none() {
-            let ticks = action
-                .maximum_duration
-                .as_nanos()
-                .saturating_mul(u128::from(definitions.timing().fixed_hz))
-                .div_ceil(1_000_000_000);
+            let ticks = action.maximum_duration.as_nanos().div_ceil(
+                definitions
+                    .simulation_timestep()
+                    .expect("simulation timing is loaded")
+                    .as_nanos(),
+            );
             commands.entity(actor).insert(BehaviorEvasionNavigation {
                 instruction: instruction.id(),
                 until_tick: clock

@@ -21,10 +21,6 @@ pub(super) struct ArrivalPopulation {
 }
 
 impl ArrivalPopulation {
-    pub(super) fn species(&self) -> u32 {
-        u32::try_from(self.live_species.len()).unwrap_or(u32::MAX)
-    }
-
     fn add(&mut self, member: ArrivalPopulationMember) {
         self.guests += u32::from(member.guest);
         if let Some(species) = member.species {

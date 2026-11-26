@@ -2,9 +2,11 @@
 
 use bevy::{audio::AudioSource, prelude::*};
 use openzt2_game_data::{
-    ui_document::{document::UiDocument, node::MoneyTextFormat, widget::UiWidgetRecord},
+    ui_document::{document::UiDocument, widget::UiWidgetRecord},
     AssetId,
 };
+
+pub use openzt2_game_data::ui_document::node::MoneyTextFormat as GraphMoneyTextFormat;
 
 use crate::{
     lua_script::lua_script_asset_loading::LuaScriptAsset, scene_prefab::ScenePrefabAsset,
@@ -21,46 +23,71 @@ pub struct UiDocumentAsset {
     pub(in crate::ui_document) nested_ui_document_handles:
         Box<[(AssetId, Handle<UiDocumentAsset>)]>,
     pub(in crate::ui_document) audio_source_handles: Box<[(AssetId, Handle<AudioSource>)]>,
+    pub(in crate::ui_document) first_person_hotkeys: Vec<FirstPersonModeHotkeys>,
+    #[dependency]
     pub(in crate::ui_document) fame_stars: Option<FameStarDisplay>,
     pub(in crate::ui_document) script_handles: Box<[(AssetId, Handle<LuaScriptAsset>)]>,
 }
 
 #[derive(Clone, Debug)]
+pub struct FirstPersonModeHotkeys {
+    pub mode: AssetId,
+    pub bindings: Vec<openzt2_game_data::ui_document::hotkey::UiDocumentHotkeyDefinition>,
+}
+
+#[derive(Clone, Debug, bevy::asset::VisitAssetDependencies)]
 pub struct FameStarDisplay {
     pub wells_node_index: u32,
     pub well_transforms: Vec<Transform>,
     pub viewport_transform: Transform,
     pub viewport_size_m: Vec2,
     pub animation_delay_seconds: f32,
+    #[dependency]
     pub full: FameStarModel,
+    #[dependency]
     pub half: FameStarModel,
+    #[dependency]
     pub appear: FameStarModel,
+    #[dependency]
     pub disappear: FameStarModel,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, bevy::asset::VisitAssetDependencies)]
 pub struct FameStarModel {
+    #[dependency]
     pub model: Handle<ScenePrefabAsset>,
     pub scale: f32,
     pub duration_seconds: f32,
     pub auto_start: bool,
     pub looping: bool,
+    #[dependency]
     pub effects: Vec<FameStarEffect>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, bevy::asset::VisitAssetDependencies)]
 pub struct FameStarEffect {
-    pub prefab: Handle<ScenePrefabAsset>,
-    pub duration_seconds: Option<f32>,
+    #[dependency]
+    pub effect: Handle<crate::effect::ParticleEffectDocumentAsset>,
+    pub duration_seconds: f32,
 }
 
 pub struct GraphLabelText {
     pub format: AssetId,
     pub color: [u8; 4],
-    pub money: Option<MoneyTextFormat>,
+    pub money: Option<GraphMoneyTextFormat>,
 }
 
 impl UiDocumentAsset {
+    pub fn first_person_hotkeys(
+        &self,
+        mode: AssetId,
+    ) -> &[openzt2_game_data::ui_document::hotkey::UiDocumentHotkeyDefinition] {
+        self.first_person_hotkeys
+            .iter()
+            .find(|profile| profile.mode == mode)
+            .map_or(&[], |profile| profile.bindings.as_slice())
+    }
+
     pub fn fame_star_display(&self) -> Option<&FameStarDisplay> {
         self.fame_stars.as_ref()
     }
@@ -71,7 +98,8 @@ impl UiDocumentAsset {
 
     pub fn graph_label_text_node(&self, index: u32) -> Option<GraphLabelText> {
         let node = self.canonical_ui_document.nodes.get(index as usize)?;
-        if !matches!(node.widget, UiWidgetRecord::Text(_)) || node.text_format == AssetId::default()
+        if !matches!(node.widget, UiWidgetRecord::Text(_))
+            || (node.text_format == AssetId::default() && node.money_text_format.is_none())
         {
             return None;
         }

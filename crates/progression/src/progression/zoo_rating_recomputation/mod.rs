@@ -14,13 +14,9 @@ use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::{Animal, SpeciesHandle};
 use openzt2_zoo_state::animal_welfare::types::AnimalWelfare;
 use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
-use openzt2_zoo_state::guests::{
-    guest_simulation_types::{Guest, GuestEducation, GuestSatisfaction, GuestSpeciesViewCounts},
-    guest_survey_types::GuestSurveyExperience,
-};
+use openzt2_zoo_state::guests::guest_simulation_types::{Guest, GuestEducation, GuestSatisfaction};
 use openzt2_zoo_state::maintenance::maintenance_types::ZooCleanlinessPermille;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
-use openzt2_zoo_state::progression::fame_types::GuestSpeciesFameViews;
 
 use super::{
     award_and_progression_fact_types::ProgressionFactChanged,
@@ -30,8 +26,8 @@ use super::{
         select_zoo_rating_input, smooth_zoo_rating_toward_target,
     },
     zoo_rating_input_types::{
-        AnimalWelfareRating, GuestRatingFacts, GuestSpeciesSeen, LivingAnimalPopulation,
-        ZooFinanceRating, ZooOverallRatingTarget, ZooSceneryRating,
+        AnimalWelfareRating, GuestRatingFacts, LivingAnimalPopulation, ZooFinanceRating,
+        ZooOverallRatingTarget, ZooSceneryRating,
     },
 };
 
@@ -276,105 +272,6 @@ pub(super) fn publish_guest_rating_means(
     }
 }
 
-pub(super) fn aggregate_changed_guest_species_views(
-    guests: Query<
-        (
-            Option<&GuestSpeciesViewCounts>,
-            Option<&GuestSurveyExperience>,
-            Option<&GuestSpeciesFameViews>,
-        ),
-        With<Guest>,
-    >,
-    changed: Query<
-        &WorldMember,
-        (
-            With<Guest>,
-            Or<(
-                Added<Guest>,
-                Changed<WorldMember>,
-                Changed<GuestSpeciesViewCounts>,
-                Changed<GuestSurveyExperience>,
-                Changed<GuestSpeciesFameViews>,
-            )>,
-        ),
-    >,
-    mut removed: (
-        RemovedComponents<Guest>,
-        RemovedComponents<GuestSpeciesViewCounts>,
-        RemovedComponents<GuestSurveyExperience>,
-        RemovedComponents<GuestSpeciesFameViews>,
-    ),
-    memberships: Query<&WorldMember>,
-    mut emptied: RemovedComponents<WorldMembers>,
-    mut worlds: Query<(Entity, Option<Ref<WorldMembers>>, &mut GuestSpeciesSeen), With<WorldRoot>>,
-) {
-    let affected: EntityHashSet = changed
-        .iter()
-        .map(|member| member.root)
-        .chain(
-            memberships
-                .iter_many(
-                    removed
-                        .0
-                        .read()
-                        .chain(removed.1.read())
-                        .chain(removed.2.read())
-                        .chain(removed.3.read()),
-                )
-                .flatten()
-                .map(|member| member.root),
-        )
-        .chain(emptied.read())
-        .collect();
-    for (root, members, mut facts) in &mut worlds {
-        if !facts.is_added()
-            && !affected.contains(&root)
-            && !members.as_ref().is_some_and(Ref::is_changed)
-        {
-            continue;
-        }
-        let mut next = GuestSpeciesSeen::default();
-        for (species_counts, survey, typed_views) in guests
-            .iter_many(
-                members
-                    .as_deref()
-                    .into_iter()
-                    .flat_map(RelationshipTarget::iter),
-            )
-            .flatten()
-        {
-            if let Some(typed_views) = typed_views {
-                for (&species, facts) in &typed_views.0 {
-                    let total = next.0.entry(species).or_default();
-                    total.guests = total.guests.saturating_add(u32::from(facts.events != 0));
-                    total.events = total.events.saturating_add(facts.events);
-                    total.entertainment += facts.entertainment;
-                    total.donation += facts.donation;
-                }
-            } else {
-                if let Some(counts) = species_counts {
-                    for &(species, count) in &counts.0 {
-                        if count != 0 {
-                            let total = next.0.entry(species).or_default();
-                            total.guests = total.guests.saturating_add(1);
-                        }
-                    }
-                }
-                if let Some(survey) = survey {
-                    let total = next
-                        .0
-                        .entry(openzt2_game_data::AssetId::default())
-                        .or_default();
-                    total.events = total.events.saturating_add(survey.entertainment_views);
-                    total.entertainment += survey.entertainment_sum;
-                }
-            }
-        }
-
-        facts.set_if_neq(next);
-    }
-}
-
 pub(super) fn recompute_scenery_rating(
     mut removed_objects: RemovedComponents<PlacedObjectDefinitionReference>,
     mut removed_members: RemovedComponents<WorldMember>,
@@ -441,7 +338,11 @@ pub(super) fn recompute_finance_rating(
     for (world, mut rating) in &mut worlds {
         let balance = cash.as_deref().filter(|_| active_world == Some(world));
         rating.set_if_neq(ZooFinanceRating(balance.map(|cash| {
-            normalize_zoo_rating_input_for_kind(definitions, &RatingInputKind::Finance, cash.0 .0)
+            normalize_zoo_rating_input_for_kind(
+                definitions,
+                &RatingInputKind::Finance,
+                (f64::from(cash.0.dollars()) * 100.0).round() as i64,
+            )
         })));
     }
 }

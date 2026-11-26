@@ -3,7 +3,11 @@ use bevy::{
     ecs::{query::QueryData, system::SystemParam},
     prelude::*,
 };
+use openzt2_progression::progression::{
+    AuthoredAwardName, AuthoredAwardPoints, AwardGlobalVariables,
+};
 use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
+use openzt2_zoo_state::progression::award_and_progression_fact_types::ProgressionAwardPresentationAcknowledged;
 
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
@@ -12,8 +16,6 @@ use openzt2_zoo_state::progression::adoption_and_content_availability_types::{
     AnimalAdoptionAvailabilityPolicy, SpeciesAdoptionChanceMultiplier,
 };
 use openzt2_zoo_state::progression::award_and_progression_fact_types::EarnedProgressionAward;
-use openzt2_zoo_state::progression::award_and_progression_fact_types::ProgressionAwardConditionDurationProgress;
-use openzt2_zoo_state::progression::award_and_progression_fact_types::ScenarioAwardPointTotal;
 use openzt2_zoo_state::progression::fame_history_types::FameHistory;
 use openzt2_zoo_state::progression::fame_types::Fame;
 use openzt2_zoo_state::progression::profile_challenge_types::TotalEndangeredAnimalBirthCount;
@@ -33,6 +35,7 @@ use super::{
 
 #[derive(SystemParam)]
 pub(super) struct ProgressionSnapshotApplicationParameters<'w, 's> {
+    fixed_time: Res<'w, Time<Fixed>>,
     world_progression: Query<
         'w,
         's,
@@ -40,7 +43,8 @@ pub(super) struct ProgressionSnapshotApplicationParameters<'w, 's> {
             &'static mut Fame,
             &'static mut ZooRating,
             &'static mut UnlockedCatalogueDefinitionSet,
-            &'static mut ScenarioAwardPointTotal,
+            Option<&'static mut AuthoredAwardPoints>,
+            Option<&'static mut AwardGlobalVariables>,
             &'static mut TotalEndangeredAnimalBirthCount,
             &'static mut FameHistory,
         ),
@@ -60,7 +64,6 @@ pub(super) struct ProgressionSnapshotApplicationParameters<'w, 's> {
 
 type ProgressionValueFilter = Or<(
     With<EarnedProgressionAward>,
-    With<ProgressionAwardConditionDurationProgress>,
     With<ResearchProjectAvailability>,
     With<SpeciesAdoptionChanceMultiplier>,
 )>;
@@ -71,7 +74,8 @@ struct ProgressionEntityValues {
     entity: Entity,
     id: &'static PersistentId,
     award: Option<&'static mut EarnedProgressionAward>,
-    duration: Option<&'static mut ProgressionAwardConditionDurationProgress>,
+    award_name: Option<&'static mut AuthoredAwardName>,
+    award_seen: Has<ProgressionAwardPresentationAcknowledged>,
     availability: Option<&'static mut ResearchProjectAvailability>,
     unlock_countdown: Option<&'static mut ResearchAvailabilityUnlockCountdown>,
     adoption_chance: Option<&'static mut SpeciesAdoptionChanceMultiplier>,
@@ -107,17 +111,27 @@ pub(super) fn apply_progression_snapshot_records_to_live_world(
     identities: &PersistentIdIndex,
     progression_snapshot_application_parameters: &mut ProgressionSnapshotApplicationParameters,
 ) -> Result<SavedResearchProjects, WorldSnapshotPersistenceFailure> {
+    let step = progression_snapshot_application_parameters
+        .fixed_time
+        .timestep();
     let mut snapshot_progression_persistent_identifiers = progression_snapshot_records
         .persistent_identifiers()
         .collect::<Vec<_>>();
     snapshot_progression_persistent_identifiers
         .sort_unstable_by_key(|persistent_identifier| persistent_identifier.0);
 
-    let (mut fame, mut rating, mut unlocked, mut award_points, mut birth_count, mut history) =
-        progression_snapshot_application_parameters
-            .world_progression
-            .get_mut(world_root_entity)
-            .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
+    let (
+        mut fame,
+        mut rating,
+        mut unlocked,
+        award_points,
+        award_globals,
+        mut birth_count,
+        mut history,
+    ) = progression_snapshot_application_parameters
+        .world_progression
+        .get_mut(world_root_entity)
+        .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
     if !history.replace_saved(progression_snapshot_records.fame_history_samples) {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
@@ -127,9 +141,25 @@ pub(super) fn apply_progression_snapshot_records_to_live_world(
         definition_count: progression_snapshot_records.unlocked_catalogue_definition_count,
         words: progression_snapshot_records.unlocked_catalogue_definition_bit_words,
     });
-    award_points.set_if_neq(ScenarioAwardPointTotal(
-        progression_snapshot_records.scenario_award_points,
-    ));
+    let mut root = commands.entity(world_root_entity);
+    if let Some(mut points) = award_points {
+        if points.0 != progression_snapshot_records.scenario_award_points {
+            points.0 = progression_snapshot_records.scenario_award_points;
+        }
+    } else {
+        root.insert(AuthoredAwardPoints(
+            progression_snapshot_records.scenario_award_points,
+        ));
+    }
+    if let Some(mut globals) = award_globals {
+        if globals.0 != progression_snapshot_records.award_globals {
+            globals.0 = progression_snapshot_records.award_globals;
+        }
+    } else if !progression_snapshot_records.award_globals.is_empty() {
+        root.insert(AwardGlobalVariables(
+            progression_snapshot_records.award_globals,
+        ));
+    }
     birth_count.set_if_neq(TotalEndangeredAnimalBirthCount(
         progression_snapshot_records.endangered_animal_birth_count,
     ));
@@ -164,45 +194,33 @@ pub(super) fn apply_progression_snapshot_records_to_live_world(
                 .progression_entities_with_persistent_identifiers,
             earned_award_snapshot_record.persistent_identifier,
         )?;
-        let existing = progression_snapshot_application_parameters
+        let (name, seen) = progression_snapshot_records
+            .award_presentation
+            .get(&earned_award_snapshot_record.persistent_identifier.0)
+            .copied()
+            .unwrap_or_default();
+        let (existing, existing_name, existing_seen) = progression_snapshot_application_parameters
             .progression_entities_with_persistent_identifiers
             .get_mut(earned_award_entity)
-            .ok()
-            .and_then(|row| row.award);
+            .map(|row| (row.award, row.award_name, row.award_seen))
+            .unwrap_or_default();
+        let mut award = commands.entity(earned_award_entity);
+        restore_optional_component(&mut award, existing_name, name.map(AuthoredAwardName), true);
+        match (existing_seen, seen) {
+            (false, true) => {
+                award.insert(ProgressionAwardPresentationAcknowledged);
+            }
+            (true, false) => {
+                award.remove::<ProgressionAwardPresentationAcknowledged>();
+            }
+            _ => {}
+        }
         restore_optional_component(
             &mut commands.entity(earned_award_entity),
             existing,
             Some(EarnedProgressionAward {
                 definition: earned_award_snapshot_record.definition_identifier,
                 earned_tick: earned_award_snapshot_record.earned_simulation_tick,
-            }),
-            false,
-        );
-    }
-    for award_duration_snapshot_record in
-        progression_snapshot_records.award_condition_duration_progress
-    {
-        let award_duration_entity = find_existing_or_spawn_progression_snapshot_entity(
-            commands,
-            world_root_entity,
-            persistent_identifier_allocator,
-            identities,
-            &progression_snapshot_application_parameters
-                .progression_entities_with_persistent_identifiers,
-            award_duration_snapshot_record.persistent_identifier,
-        )?;
-        let existing = progression_snapshot_application_parameters
-            .progression_entities_with_persistent_identifiers
-            .get_mut(award_duration_entity)
-            .ok()
-            .and_then(|row| row.duration);
-        restore_optional_component(
-            &mut commands.entity(award_duration_entity),
-            existing,
-            Some(ProgressionAwardConditionDurationProgress {
-                award: award_duration_snapshot_record.award_definition_identifier,
-                condition_index: award_duration_snapshot_record.award_condition_index,
-                satisfied_ticks: award_duration_snapshot_record.satisfied_simulation_ticks,
             }),
             false,
         );
@@ -253,7 +271,7 @@ pub(super) fn apply_progression_snapshot_records_to_live_world(
             .remaining_unlock_ticks
             .map(|remaining_ticks| ResearchAvailabilityUnlockCountdown {
                 item: definition,
-                remaining_ticks,
+                timer: Timer::new(duration_for_ticks(step, remaining_ticks), TimerMode::Once),
             });
         restore_optional_component(&mut entity, countdown, saved_countdown, true);
     }
@@ -299,6 +317,7 @@ pub(super) fn restore_saved_research_projects(
     persistent_identifier_allocator: &mut PersistentIdAllocator,
     research_items: &Query<&WorldResearchItems>,
     active_research: &mut Query<(&mut ResearchProjectPersistentId, &mut ResearchProject)>,
+    step: std::time::Duration,
 ) -> Result<(), WorldSnapshotPersistenceFailure> {
     for project in std::mem::take(&mut saved.projects) {
         let definition = project.definition_identifier;
@@ -335,11 +354,12 @@ pub(super) fn restore_saved_research_projects(
                 .id()
         };
         let current = active_research.get_mut(item).ok();
-        let progress = ResearchProject {
-            definition,
-            elapsed_ticks: project.elapsed_simulation_ticks,
-            required_ticks: project.required_simulation_ticks,
-        };
+        let mut timer = Timer::new(
+            duration_for_ticks(step, project.required_simulation_ticks),
+            TimerMode::Once,
+        );
+        timer.set_elapsed(duration_for_ticks(step, project.elapsed_simulation_ticks));
+        let progress = ResearchProject { definition, timer };
         let mut entity = commands.entity(item);
         if let Some((mut id, mut state)) = current {
             state.set_if_neq(progress);
@@ -369,6 +389,14 @@ pub(super) fn restore_saved_research_projects(
         }
     }
     Ok(())
+}
+
+fn duration_for_ticks(step: std::time::Duration, ticks: u64) -> std::time::Duration {
+    let ns = step.as_nanos().saturating_mul(u128::from(ticks));
+    std::time::Duration::new(
+        u64::try_from(ns / 1_000_000_000).unwrap_or(u64::MAX),
+        (ns % 1_000_000_000) as u32,
+    )
 }
 
 fn find_existing_or_spawn_progression_snapshot_entity(

@@ -1,25 +1,23 @@
-//! Authored animal viewing: a docked guest watches the nearest animal in view.
+//! Authored animal viewing through the current viewpoint and its live subjects.
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorViewingProgress;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     BehaviorTaskReplaced, RunBehaviorViewAnimals, RunningBehaviorInstruction, SelectedBehaviorSet,
 };
 
+use crate::donations::{
+    authored_view_donation_tokens::offer_view_donations,
+    donation_opportunity_observation::SpeciesDonationCandidateLifetimes,
+};
 use bevy::prelude::*;
 use openzt2_game_assets::behavior::behavior_asset_types::{
     BehaviorDocumentAsset, LoadedBehaviorDocumentCollection,
 };
-use openzt2_game_data::{
-    world_definitions::guest_simulation_definitions::GuestEducationDonationPolicy, AssetId,
-};
+use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
-use openzt2_zoo_state::topology::topology_graph_types::PathTile;
 use openzt2_zoo_state::{
-    animal_behavior::behavior_token_types::{
-        BehaviorSelfToken, BehaviorTokenEconomyTerms, EducationDonationBonus,
-    },
+    animal_behavior::behavior_token_types::EducationDonationBonus,
     donations::donation_guest_decision_types::GuestDonationMeters,
-    economy::facility_economy_types::Wallet,
-    guests::guest_simulation_types::GuestSatisfaction,
+    economy::facility_economy_types::Wallet, guests::guest_simulation_types::GuestSatisfaction,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -32,7 +30,7 @@ use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
-use super::guest_simulation_types::{Guest, GuestArchetype, GuestPhase, GuestRng, Viewing};
+use super::guest_simulation_types::{Guest, GuestArchetype, GuestPhase, Viewing};
 
 pub(super) fn retire_finished_view_meter(
     removed: On<Remove<BehaviorTaskExecutionState>>,
@@ -58,7 +56,7 @@ pub(super) fn retire_replaced_view_meter(
     }
 }
 
-/// Starts, holds and ends the native observation for the running view action.
+/// Starts, holds and ends observation for the running view action.
 /// The observation's area is the task's target, the path viewed from.
 pub(super) fn watch_animals_for_current_view_actions(
     activation: In<Option<Entity>>,
@@ -68,6 +66,11 @@ pub(super) fn watch_animals_for_current_view_actions(
     world_definitions: Res<WorldDefinitions>,
     documents: Res<LoadedBehaviorDocumentCollection>,
     behaviors: Res<Assets<BehaviorDocumentAsset>>,
+    active_species: Res<SpeciesAssets>,
+    species_assets: Res<Assets<SpeciesAsset>>,
+    mut random: ResMut<
+        openzt2_world_state::simulation_time::native_visual_random_stream::NativeVisualRandomStream,
+    >,
     mut guests: Query<
         (
             Entity,
@@ -81,10 +84,10 @@ pub(super) fn watch_animals_for_current_view_actions(
             &GuestPhase,
             Option<&Viewing>,
             &GuestArchetype,
-            &mut GuestRng,
             Option<&mut BehaviorViewingProgress>,
             Option<(
                 &mut GuestDonationMeters,
+                &mut SpeciesDonationCandidateLifetimes,
                 &Wallet,
                 &GuestSatisfaction,
                 Has<EducationDonationBonus>,
@@ -96,7 +99,12 @@ pub(super) fn watch_animals_for_current_view_actions(
         (Entity, &GlobalTransform, &Visibility, &WorldMember),
         (With<Animal>, With<HabitatMember>),
     >,
-    paths: Query<(Entity, &GlobalTransform, &WorldMember), With<PathTile>>,
+    viewpoints: Query<(
+        Entity,
+        &GlobalTransform,
+        &WorldMember,
+        &super::guest_viewing_area_sensor::GuestViewpointSupports,
+    )>,
     mut commands: Commands,
 ) {
     let Some(definitions) = world_definitions.get(&world_assets) else {
@@ -116,7 +124,6 @@ pub(super) fn watch_animals_for_current_view_actions(
         phase,
         viewing,
         archetype,
-        mut random,
         meter,
         donation,
     ) in behavior_action_actors(&mut guests, activation.0)
@@ -171,22 +178,19 @@ pub(super) fn watch_animals_for_current_view_actions(
         let viewing = viewing.filter(|viewing| {
             viewing.area == task.target() && viewing.task_execution_id == Some(task.execution_id)
         });
-        let nearest_visible_animal = || {
-            animals
-                .iter()
-                .filter(|(animal, ..)| in_view(*animal))
-                .min_by(|(_, left, ..), (_, right, ..)| {
-                    left.translation()
-                        .xz()
-                        .distance_squared(origin)
-                        .total_cmp(&right.translation().xz().distance_squared(origin))
+        let viewpoint = task.target();
+        let assigned_subject = || {
+            viewpoint
+                .and_then(|point| viewpoints.get(point).ok())
+                .and_then(|(_, _, _, supports)| {
+                    supports.0.iter().copied().find(|&subject| {
+                        in_view(subject) && viewing.is_none_or(|viewing| viewing.subject != subject)
+                    })
                 })
-                .map(|(animal, ..)| animal)
         };
         match viewing {
             None => {
-                let (Some(subject), GuestPhase::Visiting) = (nearest_visible_animal(), phase)
-                else {
+                let (Some(subject), GuestPhase::Visiting) = (assigned_subject(), phase) else {
                     mark_behavior_task_for_failure_and_stop_navigation(guest, &mut commands);
                     continue;
                 };
@@ -216,17 +220,18 @@ pub(super) fn watch_animals_for_current_view_actions(
                         .zip(target)
                         .map(|((set, chance), target)| (set, chance, target))
                     {
-                        if ((random.0.next_u32() % 100) as f32) < chance {
+                        if f32::from(random.next_u15() % 100) < chance {
                             let [min, max] = policy.viewpoint_swap_distance;
                             let current_distance = origin.distance_squared(target);
-                            let next = paths
+                            let next = viewpoints
                                 .iter()
-                                .filter_map(|(path, pose, member)| {
+                                .filter_map(|(path, pose, member, supports)| {
                                     let point = pose.translation().xz();
                                     let from_here = point.distance_squared(origin);
                                     let from_subject = point.distance_squared(target);
                                     (member.root == world.root
                                         && Some(path) != task.target()
+                                        && supports.0.contains(&viewing.subject)
                                         && min * min < from_here
                                         && from_here < max * max
                                         && from_subject < current_distance
@@ -264,7 +269,7 @@ pub(super) fn watch_animals_for_current_view_actions(
                     }
                 }
                 if !watched && !subject_visible && action.retarget == Some(true) {
-                    if let Some(subject) = nearest_visible_animal() {
+                    if let Some(subject) = assigned_subject() {
                         commands.entity(guest).insert(Viewing {
                             subject,
                             started_tick: clock.tick,
@@ -274,18 +279,28 @@ pub(super) fn watch_animals_for_current_view_actions(
                     }
                 }
                 if watched || !subject_visible {
-                    if let (Some(policy), Some((mut meters, wallet, happiness, bonus))) =
-                        (definition.view_scoring.education_donation, donation)
-                    {
-                        issue_education_donation_token(
+                    if let (
+                        true,
+                        Some(policy),
+                        Some((mut meters, mut candidates, wallet, happiness, bonus)),
+                        Some(timestep),
+                    ) = (
+                        watched,
+                        definition.view_scoring.education_donation,
+                        donation,
+                        definitions.simulation_timestep(),
+                    ) {
+                        offer_view_donations(
                             guest,
                             policy,
                             &mut meters,
+                            &mut candidates,
+                            active_species.get(&species_assets),
                             wallet,
                             happiness,
                             bonus,
                             clock.tick,
-                            definitions.timing().fixed_hz,
+                            timestep,
                             &mut commands,
                         );
                     }
@@ -299,25 +314,13 @@ pub(super) fn watch_animals_for_current_view_actions(
         }
         if meter.is_none() {
             let [minimum, maximum] = action.view_meter_start_range;
-            let start = if minimum > 0.0 && maximum > minimum {
-                #[allow(
-                    clippy::cast_possible_truncation,
-                    clippy::cast_sign_loss,
-                    reason = "positive authored view-meter ranges are sampled in whole units"
-                )]
-                let width = (maximum - minimum) as u32;
-                let Some(upper) = width.checked_add(1) else {
-                    mark_behavior_task_for_failure_and_stop_navigation(guest, &mut commands);
-                    continue;
-                };
-                #[allow(
-                    clippy::cast_precision_loss,
-                    reason = "the authored meter uses float values for its whole-unit random samples"
-                )]
-                let offset = random.0.range_u32(upper).unwrap_or_default() as f32;
-                minimum + offset
-            } else {
+            let start = if minimum >= 0.0 && maximum >= minimum {
+                let width = ((maximum - minimum) as u32).saturating_add(1);
+                minimum + (u32::from(random.next_u15()) % width) as f32
+            } else if action.view_meter_start > 0.0 {
                 action.view_meter_start
+            } else {
+                60.0
             };
             commands.entity(guest).insert(BehaviorViewingProgress {
                 instruction: instruction.id(),
@@ -330,68 +333,4 @@ pub(super) fn watch_animals_for_current_view_actions(
             });
         }
     }
-}
-
-fn issue_education_donation_token(
-    guest: Entity,
-    policy: GuestEducationDonationPolicy,
-    meters: &mut GuestDonationMeters,
-    wallet: &Wallet,
-    happiness: &GuestSatisfaction,
-    bonus: bool,
-    tick: u64,
-    fixed_hz: u16,
-    commands: &mut Commands,
-) {
-    let tracker = AssetId::from_key("donate_education");
-    let Some(points) = meters.0.get_mut(&tracker) else {
-        return;
-    };
-    let mut amount = *points / policy.divisor;
-    if amount < policy.minimum {
-        return;
-    }
-    if let Some(maximum) = policy.maximum {
-        amount = amount.min(maximum);
-    }
-    let deprivation = happiness.source_q16() as f32 / 65_536.0;
-    if policy
-        .happiness_threshold
-        .is_some_and(|threshold| deprivation > threshold)
-    {
-        amount *= (100.0 - deprivation) / 100.0;
-    }
-    if amount <= 0.0 {
-        return;
-    }
-    *points = 0.0;
-    if bonus {
-        amount *= policy.bonus_factor;
-        commands
-            .entity(guest)
-            .try_remove::<EducationDonationBonus>();
-    }
-    if f64::from(amount) * 100.0 > wallet.0 .0 as f64 {
-        return;
-    }
-    let seconds = policy.timeout.unwrap_or(60.0);
-    let expires_at = if seconds < 0.0 {
-        u64::MAX
-    } else {
-        tick.saturating_add((f64::from(seconds) * f64::from(fixed_hz)).ceil() as u64)
-    };
-    commands.spawn((
-        ChildOf(guest),
-        BehaviorSelfToken {
-            name: AssetId::from_key("t_donateed"),
-            available_at: tick,
-            expires_at,
-            payload: None,
-            retain_on_failure: false,
-        },
-        BehaviorTokenEconomyTerms {
-            cost_override: amount,
-            tracker,
-        },
-    ));
 }

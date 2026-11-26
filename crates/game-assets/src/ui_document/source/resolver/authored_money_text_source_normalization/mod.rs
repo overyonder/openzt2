@@ -13,7 +13,7 @@ pub(super) fn normalize_authored_money_text_widget(
     let authored_attribute = |attribute_name: &str| {
         attributes
             .iter()
-            .find(|attribute| attribute.name() == attribute_name)
+            .find(|attribute| attribute.name().eq_ignore_ascii_case(attribute_name))
             .map(|attribute| attribute.value().to_owned())
     };
     let positive_format = authored_attribute("posformat").unwrap_or_default();
@@ -29,10 +29,9 @@ pub(super) fn normalize_authored_money_text_widget(
     );
 
     attributes.retain(|attribute| {
-        !matches!(
-            attribute.name(),
-            "posformat" | "negformat" | "nocents" | "nominus"
-        )
+        !["posformat", "negformat", "nocents", "nominus"]
+            .iter()
+            .any(|name| attribute.name().eq_ignore_ascii_case(name))
     });
     let mut normalized_children = children.items().to_vec();
     normalized_children.insert(

@@ -62,5 +62,18 @@ pub struct PurchaseChoice {
 pub struct CatalogueTypeListRowProjection;
 
 /// Catalogue entries a scenario script has disabled.
-#[derive(Component, Clone, Debug, Default, PartialEq, Eq)]
-pub struct ScenarioDisabledCatalogueDefinitions(pub std::collections::BTreeSet<AssetId>);
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScenarioCatalogueRestriction {
+    /// None applies to all lists in the owning world.
+    pub list: Option<AssetId>,
+    pub definition: AssetId,
+    pub enabled: bool,
+}
+
+#[derive(Component)]
+#[relationship(relationship_target = ScenarioCatalogueRestrictions)]
+pub struct ScenarioCatalogueRestrictionOf(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = ScenarioCatalogueRestrictionOf, linked_spawn)]
+pub struct ScenarioCatalogueRestrictions(Vec<Entity>);

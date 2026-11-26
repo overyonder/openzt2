@@ -3,6 +3,7 @@
 mod behavior_artifact_execution;
 mod extinct_animal_world_hydration;
 mod fossil_assembly;
+pub use fossil_assembly::{FossilAssemblyPiecePose, UpdateFossilAssemblyPiecePose};
 mod fossil_definition_index;
 mod fossil_dig_target_geometry;
 mod fossil_discovery;
@@ -34,6 +35,7 @@ impl Plugin for ExtinctAnimalsPlugin {
         app.init_resource::<fossil_definition_index::FossilDefinitionIndex>()
             .add_message::<DiscoverFossilAtSiteRequest>()
             .add_message::<PlaceFossilPieceInAssemblyRequest>()
+            .add_message::<UpdateFossilAssemblyPiecePose>()
             .add_message::<ActivateFossilSiteMarkersRequest>()
             .add_message::<CompletedFossilSetAssembly>()
             .add_message::<crate::fossil_site_types::SetFossilPuzzleToFind>()
@@ -44,6 +46,14 @@ impl Plugin for ExtinctAnimalsPlugin {
                 (
                     extinct_animal_world_hydration::hydrate_extinct_animal_world_state_from_loaded_definitions,
                     fossil_definition_index::index_winning_fossil_definitions,
+                    fossil_definition_index::bind_fossil_piece_pictures
+                        .after(fossil_assembly::place_requested_fossil_pieces)
+                        .after(fossil_assembly::update_fossil_assembly_piece_poses),
+                    fossil_assembly::update_fossil_assembly_piece_poses
+                        .after(fossil_definition_index::index_winning_fossil_definitions)
+                        .after(extinct_animal_world_hydration::hydrate_extinct_animal_world_state_from_loaded_definitions)
+                        .after(fossil_world_objects::reset_requested_fossil_search)
+                        .run_if(on_message::<UpdateFossilAssemblyPiecePose>),
                     fossil_world_objects::bind_live_fossil_assembly_tables
                         .before(extinct_animal_world_hydration::hydrate_extinct_animal_world_state_from_loaded_definitions),
                     fossil_world_objects::spawn_world_fossil_recovery_sites
@@ -52,6 +62,7 @@ impl Plugin for ExtinctAnimalsPlugin {
                     fossil_world_objects::reset_requested_fossil_search
                         .run_if(on_message::<crate::fossil_site_types::SetFossilPuzzleToFind>),
                     fossil_assembly::place_requested_fossil_pieces
+                        .after(fossil_assembly::update_fossil_assembly_piece_poses)
                         .after(fossil_definition_index::index_winning_fossil_definitions)
                         .after(fossil_world_objects::reset_requested_fossil_search)
                         .after(extinct_animal_world_hydration::hydrate_extinct_animal_world_state_from_loaded_definitions)

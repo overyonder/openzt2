@@ -20,15 +20,15 @@ use openzt2_zoo_state::{
         behavior_token_types::{BehaviorSelfToken, ClaimedBehaviorSelfToken},
     },
     behavior_task_execution_types::{
-        running_actions::{RunBehaviorWatchShow, RunningBehaviorInstruction},
         BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+        running_actions::{RunBehaviorWatchShow, RunningBehaviorInstruction},
     },
     economy::{
         authored_transaction_amount::authored_currency_to_money,
         experience_donation::ExperienceDonation, facility_economy_types::Wallet,
         service_types::ServiceReservation,
     },
-    guests::guest_simulation_types::{Guest, GuestPhase, GuestRng},
+    guests::guest_simulation_types::{Guest, GuestNeedAdjustmentDue, GuestPhase, GuestRng},
     locomotion::locomotion_types::{Destination, SpatialGrid, SpatialGridMembership},
     shows::{
         running_show_types::{
@@ -39,6 +39,50 @@ use openzt2_zoo_state::{
         show_stage_types::{ShowStage, ShowStageOpenState},
     },
 };
+
+pub(super) fn reconcile_guest_show_needs(
+    mut due: MessageReader<GuestNeedAdjustmentDue>,
+    source: Res<AuthoredShowRewardsSource>,
+    rewards: Res<Assets<AuthoredShowRewards>>,
+    mut existing: Query<&mut GuestShowNeed, With<Guest>>,
+    mut added: Query<(Entity, &mut GuestRng), (With<Guest>, Without<GuestShowNeed>)>,
+    mut commands: Commands,
+) {
+    let Some(policy) = rewards
+        .get(&source.0)
+        .and_then(|rewards| rewards.audience_need.as_ref())
+    else {
+        due.clear();
+        return;
+    };
+    let mut initialize_due = bevy::ecs::entity::EntityHashSet::default();
+    for event in due.read() {
+        if let Ok(mut need) = existing.get_mut(event.0) {
+            need.adjust(policy.adjustment);
+        } else {
+            initialize_due.insert(event.0);
+        }
+    }
+    for (entity, mut random) in &mut added {
+        let [minimum, maximum] = policy.initial;
+        let value = if minimum == maximum {
+            minimum
+        } else {
+            minimum + (maximum - minimum) * random.0.unit_f32()
+        };
+        let mut need = GuestShowNeed {
+            value,
+            triggered: value >= policy.trigger,
+            minimum: policy.cessation,
+            cessation: policy.cessation,
+            trigger: policy.trigger,
+        };
+        if initialize_due.contains(&entity) {
+            need.adjust(policy.adjustment);
+        }
+        commands.entity(entity).insert(need);
+    }
+}
 
 pub(super) fn invite_guests_to_starting_shows(
     runs: Query<(&RunningShow, &RunningShowOnStage, &RunningShowFromRow), Added<RunningShow>>,
@@ -59,6 +103,7 @@ pub(super) fn invite_guests_to_starting_shows(
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     clock: Single<&ZooClock>,
+    time: Res<Time<Fixed>>,
     grids: Query<&SpatialGrid>,
     spatial_membership: SpatialGridMembership,
     mut commands: Commands,
@@ -73,11 +118,11 @@ pub(super) fn invite_guests_to_starting_shows(
         return;
     };
     let available_ns = timing.pre_show_ns.min(timing.maximum_admitting_ns);
-    let duration = (u128::from(available_ns) * u128::from(definitions.timing().fixed_hz))
-        .div_ceil(1_000_000_000);
-    let expires_at = clock
-        .tick
-        .saturating_add(u64::try_from(duration).unwrap_or(u64::MAX));
+    let duration = super::show_timing_operations::fixed_ticks(
+        std::time::Duration::from_nanos(available_ns),
+        time.timestep(),
+    );
+    let expires_at = clock.tick.saturating_add(duration);
     let radius = timing.maximum_travel_cm_per_second as f64 * available_ns as f64 * 1.0e-11;
     let radius_squared = (radius * radius) as f32;
     let invite = AssetId::from_key("t_watchshow");
@@ -365,6 +410,7 @@ pub(super) fn complete_watch_actions_after_show(
     clock: Single<&ZooClock>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    time: Res<Time<Fixed>>,
     rewards_source: Res<AuthoredShowRewardsSource>,
     rewards: Res<Assets<AuthoredShowRewards>>,
     runs: Query<&RunningShow>,
@@ -379,9 +425,10 @@ pub(super) fn complete_watch_actions_after_show(
         } else {
             timing.donation_token_timeout_ns
         };
-        let ticks =
-            (u128::from(nanos) * u128::from(definitions.timing().fixed_hz)).div_ceil(1_000_000_000);
-        u64::try_from(ticks).ok()
+        Some(super::show_timing_operations::fixed_ticks(
+            std::time::Duration::from_nanos(nanos),
+            time.timestep(),
+        ))
     });
     let outcomes = finished
         .read()

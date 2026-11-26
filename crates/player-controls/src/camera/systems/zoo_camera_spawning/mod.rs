@@ -56,8 +56,12 @@ pub(crate) fn spawn_zoo_camera(
         (With<WorldRoot>, Without<WorldZooCameras>),
     >,
     mut released_camera_worlds: RemovedComponents<WorldZooCameras>,
+    mut removed_documents: RemovedComponents<SelectedWorldDocumentHandles>,
 ) {
-    let released: bevy::ecs::entity::EntityHashSet = released_camera_worlds.read().collect();
+    let dirty: bevy::ecs::entity::EntityHashSet = released_camera_worlds
+        .read()
+        .chain(removed_documents.read())
+        .collect();
     if roots.is_empty() {
         return;
     }
@@ -66,21 +70,24 @@ pub(crate) fn spawn_zoo_camera(
         || definitions.is_changed()
         || active_definitions.is_changed()
         || graphics.is_changed();
-    let Some(scenario_catalogue) = active_scenarios.get(&scenarios) else {
-        return;
-    };
-    let Some(definitions) = active_definitions.get(&definitions) else {
-        return;
-    };
+    let mut catalogues = None;
     for (root, selection, world_bounds, pending, documents) in &mut roots {
         if !assets_changed
             && !selection.is_changed()
             && !world_bounds.is_changed()
             && !documents.as_ref().is_some_and(DetectChanges::is_changed)
-            && !released.contains(&root)
+            && !dirty.contains(&root)
         {
             continue;
         }
+        let Some((scenario_catalogue, definitions)) = *catalogues.get_or_insert_with(|| {
+            Some((
+                active_scenarios.get(&scenarios)?,
+                active_definitions.get(&definitions)?,
+            ))
+        }) else {
+            return;
+        };
         let documents = documents.as_deref();
         let scoped_catalogue = match documents {
             Some(documents) => scenario_catalogue
@@ -100,15 +107,7 @@ pub(crate) fn spawn_zoo_camera(
             );
             continue;
         };
-        let start = match documents {
-            Some(documents) => scenarios
-                .get(&documents.start)
-                .and_then(|document| document.document.find_starting_zoo(selection.start)),
-            None => scenarios
-                .iter()
-                .find_map(|(_, document)| document.document.find_starting_zoo(selection.start)),
-        };
-        let Some(start) = start else {
+        let Some(start) = scoped_catalogue.start(selection.start) else {
             set_zoo_camera_spawn_pending_reason(
                 &mut commands,
                 root,

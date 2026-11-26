@@ -52,6 +52,8 @@ pub(super) struct ProgressionSnapshotRecords {
     pub(super) unlocked_catalogue_definition_count: u32,
     pub(super) unlocked_catalogue_definition_bit_words: Vec<u64>,
     pub(super) scenario_award_points: u32,
+    pub(super) award_globals: std::collections::BTreeMap<AssetId, String>,
+    pub(super) award_presentation: std::collections::BTreeMap<u64, (Option<AssetId>, bool)>,
     pub(super) endangered_animal_birth_count: u32,
     pub(super) animal_adoption_availability_policy: AnimalAdoptionAvailabilityPolicy,
     pub(super) fame_history_samples: Vec<FameHistorySample>,

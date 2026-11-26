@@ -18,8 +18,8 @@ use openzt2_zoo_state::{
     },
     behavior_task_execution_types::{
         running_actions::{
-            FollowingEntity, RunningBehaviorEconomyTransaction, RunningBehaviorInstruction,
-            SplineDockMotion, SplineDockPhase,
+            FollowingEntity, RestoredSplashAnimation, RunningBehaviorEconomyTransaction,
+            RunningBehaviorInstruction, SplineDockMotion, SplineDockPhase, SplineDockRetry,
         },
         BehaviorTaskExecutionState, PendingBehaviorDockingCompletion,
         PendingBehaviorMoveCompletion, PendingBehaviorTaskFailure,
@@ -29,7 +29,7 @@ use openzt2_zoo_state::{
         Steering,
     },
     staff::staff_job_types::{
-        JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask, StaffJobRouting,
+        JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask, StaffJobRouting, StaffJobTarget,
     },
 };
 use std::collections::BTreeMap;
@@ -41,7 +41,7 @@ pub(in crate::persistence) struct RestoredBehaviorInstructionState {
     movement: Option<u64>,
     docking: Option<(u64, Entity)>,
     following: Option<(Entity, u64, u64)>,
-    spline: Option<(Entity, SplineDockPhase, bool)>,
+    spline: Option<(Entity, SplineDockPhase, bool, Option<f32>)>,
 }
 
 struct RestoredBehaviorEconomyTransaction {
@@ -165,13 +165,7 @@ pub(super) fn apply_prepared_behavior_actor(
         } else {
             entity.insert(generation);
         }
-        let mut route = Route::with_capacity(
-            application
-                .capacity
-                .get(root)
-                .expect("validated navigation capacity")
-                .max_route_points,
-        );
+        let mut route = Route::with_capacity(nav.route.points.len());
         route.points.extend_from_slice(&nav.route.points);
         route.cursor = nav.route.cursor;
         let mut actors = application.actors.p1();
@@ -279,6 +273,7 @@ pub(super) fn apply_prepared_behavior_actor(
                 resolve(&pending.target),
                 phase,
                 pending.owns_disabled_collider,
+                pending.retry_seconds,
             )
         });
         for result in &nav.pending_results {
@@ -304,6 +299,12 @@ pub(super) fn apply_prepared_behavior_actor(
                 }
             }
         }
+    }
+    if let Some(splash) = record.splash {
+        entity.insert(RestoredSplashAnimation {
+            seek_seconds: splash.seek_seconds,
+            emitted: splash.emitted,
+        });
     }
     entity.insert(task);
     if instruction_state.pursuit.is_some()
@@ -338,6 +339,7 @@ pub(super) fn apply_prepared_behavior_actor(
                     urgency: job.urgency,
                     token: job.token,
                 },
+                StaffJobTarget(resolve(&job.target)),
                 StaffJobRouting {
                     subject_type: job.subject_type,
                     recipient: job.recipient,
@@ -359,13 +361,17 @@ pub(super) fn apply_prepared_behavior_actor(
 
 pub(in crate::persistence) fn bind_restored_behavior_instruction_state(
     mut commands: Commands,
-    actors: Query<(
+    mut actors: Query<(
         Entity,
         &RestoredBehaviorInstructionState,
         Option<&RunningBehaviorInstruction>,
+        Option<&mut RunningBehaviorEconomyTransaction>,
+        Option<&mut FollowingEntity>,
+        Option<&mut SplineDockMotion>,
+        Option<&mut SplineDockRetry>,
     )>,
 ) {
-    for (entity, saved, instruction) in &actors {
+    for (entity, saved, instruction, economy, following, spline, retry) in &mut actors {
         let mut actor = commands.entity(entity);
         actor.remove::<RestoredBehaviorInstructionState>();
         let Some(instruction) = instruction.map(RunningBehaviorInstruction::id) else {
@@ -378,15 +384,20 @@ pub(in crate::persistence) fn bind_restored_behavior_instruction_state(
             ));
         }
         if let Some(saved) = &saved.economy {
-            actor.insert(RunningBehaviorEconomyTransaction {
-                instruction,
-                facility: saved.facility,
-                target: saved.target,
-                transaction: saved.transaction,
-                cost_override: saved.cost_override,
-                payment: None,
-                next_transaction: saved.next_transaction,
-            });
+            restore_optional_component(
+                &mut actor,
+                economy,
+                Some(RunningBehaviorEconomyTransaction {
+                    instruction,
+                    facility: saved.facility,
+                    target: saved.target,
+                    transaction: saved.transaction,
+                    cost_override: saved.cost_override,
+                    payment: None,
+                    next_transaction: saved.next_transaction,
+                }),
+                false,
+            );
         }
         if let Some(request_id) = saved.movement {
             actor.insert(PendingBehaviorMoveCompletion {
@@ -395,20 +406,37 @@ pub(in crate::persistence) fn bind_restored_behavior_instruction_state(
             });
         }
         if let Some((target, until_tick, request_id)) = saved.following {
-            actor.insert(FollowingEntity {
-                instruction,
-                target,
-                until_tick,
-                request_id,
-            });
+            restore_optional_component(
+                &mut actor,
+                following,
+                Some(FollowingEntity {
+                    instruction,
+                    target,
+                    until_tick,
+                    request_id,
+                }),
+                false,
+            );
         }
-        if let Some((target, phase, owns_disabled_collider)) = saved.spline {
-            actor.insert(SplineDockMotion {
-                instruction,
-                target,
-                phase,
-                owns_disabled_collider,
-            });
+        if let Some((target, phase, owns_disabled_collider, retry_seconds)) = saved.spline {
+            restore_optional_component(
+                &mut actor,
+                spline,
+                Some(SplineDockMotion {
+                    instruction,
+                    target,
+                    phase,
+                    owns_disabled_collider,
+                }),
+                false,
+            );
+            restore_optional_component(
+                &mut actor,
+                retry,
+                retry_seconds
+                    .map(|seconds| SplineDockRetry(Timer::from_seconds(seconds, TimerMode::Once))),
+                true,
+            );
         }
         if let Some((request_id, target)) = saved.docking {
             actor.insert(PendingBehaviorDockingCompletion {

@@ -1,4 +1,4 @@
-use crate::source_document::ui::model::SourceUiEvent;
+use crate::source_document::{path::AssetPath, ui::model::SourceUiEvent};
 use crate::ui_document::source::lower::authored_ui_document_lowering::AuthoredUiDocument;
 use crate::ui_document::source::lower::authored_ui_event_collection_lowering::objective_status_filter;
 use crate::ui_document::source::lower::canonical_source_value_resolution;
@@ -49,7 +49,10 @@ pub(super) fn lower_scenario_command(
         })),
         "ZT_SCENARIO_SELECTION_CHANGED" => Ok(UiActionRecord::Scenario(UiScenarioActionRecord {
             trigger,
-            action: UiScenarioAction::SelectionChanged,
+            action: UiScenarioAction::SelectionChanged {
+                scenario_path: event.string.as_deref().or(event.value.as_deref()).map(str::trim).filter(|path| !path.is_empty())
+                    .map(|path| AssetPath::new(path).key()),
+            },
         })),
         "ZT_POPULATE_CAMPAIGN_UI" => Ok(UiActionRecord::Scenario(UiScenarioActionRecord {
             trigger,

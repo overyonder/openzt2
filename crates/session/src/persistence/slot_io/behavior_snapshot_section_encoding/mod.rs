@@ -192,6 +192,12 @@ pub(super) fn validate_behavior_actor_snapshots(
                 return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
             }
         }
+        if record
+            .splash
+            .is_some_and(|splash| !splash.seek_seconds.is_finite() || splash.seek_seconds < 0.0)
+        {
+            return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+        }
         if let Some(pending) = &record.transaction {
             if pending.execution_id != task.execution_id
                 || pending.stack_depth != task.stack.len()
@@ -280,6 +286,7 @@ pub(super) fn validate_behavior_actor_snapshots(
         }) || nav.spline.as_ref().is_some_and(|pending| {
             use openzt2_zoo_state::behavior_task_execution_types::running_actions::SplineDockPhase;
             !valid_reference(&pending.target) || task.target.as_ref() != Some(&pending.target)
+                || pending.retry_seconds.is_some_and(|seconds| !seconds.is_finite() || seconds < 0.0)
                 || matches!(pending.phase, SplineDockPhase::Curve { start, advanced }
                     if !start.translation.is_finite() || !start.rotation.is_finite() || !start.scale.is_finite()
                         || !advanced.is_finite() || advanced < 0.0)

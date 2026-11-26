@@ -18,6 +18,7 @@ pub(super) fn calculate_route_following_and_separation_steering(
     spatial_grids: Query<&SpatialGrid>,
     spatial_membership: SpatialGridMembership,
     cell_indices: Query<&SpatialCellIndex>,
+    clip_policy: super::animal_navigation_policy::ActiveLocomotionClipPolicy,
     mut route_following_navigation_agents: Query<
         (
             Entity,
@@ -69,6 +70,7 @@ pub(super) fn calculate_route_following_and_separation_steering(
                     let grid = spatial_grids.get(world.root).ok()?;
                     Some((grid, grid.cell_xy(index.0)?))
                 })
+                .filter(|_| clip_policy.resolves_unit_contacts(navigation_agent_entity))
             {
                 'neighboring_cells: for neighboring_cell_z in
                     spatial_cell_coordinates.y.saturating_sub(1)
@@ -82,7 +84,9 @@ pub(super) fn calculate_route_following_and_separation_steering(
                         for neighboring_agent_entity in
                             spatial_membership.members(world.root, neighboring_cell_index)
                         {
-                            if neighboring_agent_entity == navigation_agent_entity {
+                            if neighboring_agent_entity == navigation_agent_entity
+                                || !clip_policy.resolves_unit_contacts(neighboring_agent_entity)
+                            {
                                 continue;
                             }
                             let Ok((neighboring_global_transform, neighboring_navigation_agent)) =

@@ -11,8 +11,8 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
-    localization::LocalizationFormatArgument,
-    ui_document::node_property_binding::UiTextPropertyBindingSource, AssetId,
+    AssetId, localization::LocalizationFormatArgument,
+    ui_document::node_property_binding::UiTextPropertyBindingSource,
 };
 use openzt2_interface_state::information::entity_selection_types::SelectionChanged;
 use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
@@ -99,7 +99,7 @@ pub(super) fn project_selected_object_sale_confirmation(
             } => {
                 let mut amount = String::new();
                 let _ = localization.write_localized_currency_amount(
-                    quote.0 .0,
+                    super::display_currency_cents(quote.0),
                     !omit_fractional_currency_cents,
                     &mut amount,
                 );

@@ -13,31 +13,22 @@ pub struct HabitatFenceSegment {
 #[derive(Debug, PartialEq, Eq)]
 pub struct DerivedHabitatRegion {
     pub topology_cells: Vec<IVec2>,
+    pub(super) sectors: Vec<(IVec2, u8)>,
     pub boundary_fence_entities: Vec<Entity>,
     pub boundary_is_breached: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct TopologyCellPassage {
-    lower_topology_cell: IVec2,
-    upper_topology_cell: IVec2,
-}
+use super::placement_sectors::{cardinal_step, PlacementSector};
 
-impl TopologyCellPassage {
-    fn new(first_topology_cell: IVec2, second_topology_cell: IVec2) -> Self {
-        if topology_cell_sort_key(first_topology_cell)
-            <= topology_cell_sort_key(second_topology_cell)
-        {
-            Self {
-                lower_topology_cell: first_topology_cell,
-                upper_topology_cell: second_topology_cell,
-            }
-        } else {
-            Self {
-                lower_topology_cell: second_topology_cell,
-                upper_topology_cell: first_topology_cell,
-            }
-        }
+type Face = (IVec2, u8);
+type BlockedBoundary = HashMap<(Face, Face), (Entity, bool)>;
+
+fn boundary_key(a: Face, b: Face) -> (Face, Face) {
+    let order = |(tile, side): Face| (tile.x, tile.y, side);
+    if order(a) <= order(b) {
+        (a, b)
+    } else {
+        (b, a)
     }
 }
 
@@ -45,16 +36,8 @@ pub fn derive_enclosed_habitat_regions_from_fence_segments(
     fence_segments: &[HabitatFenceSegment],
     changed_topology_bounds: IRect,
 ) -> Vec<DerivedHabitatRegion> {
-    let expanded =
-        expand_authored_fence_segments_into_cardinal_habitat_grid_boundaries(fence_segments);
-    derive_enclosed_habitats_from_cardinal_boundaries(&expanded, changed_topology_bounds)
-}
-
-pub(super) fn derive_enclosed_habitats_from_cardinal_boundaries(
-    expanded: &[HabitatFenceSegment],
-    changed_topology_bounds: IRect,
-) -> Vec<DerivedHabitatRegion> {
-    let relevant: Vec<_> = connected_cardinal_fence_components(expanded)
+    let expanded = split_fence_segments_at_topology_nodes(fence_segments);
+    let relevant: Vec<_> = connected_fence_components(&expanded)
         .into_iter()
         .filter(|component| component.touches(changed_topology_bounds))
         .flat_map(|component| component.segments)
@@ -62,169 +45,175 @@ pub(super) fn derive_enclosed_habitats_from_cardinal_boundaries(
     derive_enclosed_habitats(&relevant)
 }
 
+fn record_fence_boundary(blocked: &mut BlockedBoundary, segment: HabitatFenceSegment) {
+    let a = segment.first_topology_node;
+    let b = segment.second_topology_node;
+    let tile = a.min(b);
+    let delta = b - a;
+    let mut block = |a, b| {
+        blocked.insert(
+            boundary_key(a, b),
+            (segment.fence_entity, segment.boundary_is_breached),
+        );
+    };
+    match (delta.x, delta.y) {
+        (1 | -1, 0) => {
+            let record = PlacementSector {
+                tile: IVec2::new(tile.x, a.y),
+                layer: 0,
+                side: 0,
+            };
+            if let [Some(first), Some(second)] = record.expanded(|_, _| true) {
+                block((first.tile, first.side), (second.tile, second.side));
+            }
+        }
+        (0, 1 | -1) => {
+            let record = PlacementSector {
+                tile: IVec2::new(a.x, tile.y),
+                layer: 0,
+                side: 6,
+            };
+            if let [Some(first), Some(second)] = record.expanded(|_, _| true) {
+                block((first.tile, first.side), (second.tile, second.side));
+            }
+        }
+        (1 | -1, 1 | -1) if delta.x == delta.y => {
+            block((tile, 0), (tile, 6));
+            block((tile, 4), (tile, 2));
+        }
+        (1 | -1, 1 | -1) => {
+            block((tile, 0), (tile, 2));
+            block((tile, 4), (tile, 6));
+        }
+        _ => {}
+    }
+}
+
+fn neighbouring_sectors((tile, side): Face) -> [Face; 3] {
+    [
+        (tile, (side + 6) % 8),
+        (tile, (side + 2) % 8),
+        (tile + cardinal_step(side), (side + 4) % 8),
+    ]
+}
+
+fn flood_sectors(
+    queue: &mut Vec<Face>,
+    seen: &mut HashSet<Face>,
+    min: IVec2,
+    max: IVec2,
+    blocked: &BlockedBoundary,
+) {
+    let mut cursor = 0;
+    while let Some(&face) = queue.get(cursor) {
+        cursor += 1;
+        for neighbour in neighbouring_sectors(face) {
+            if topology_cell_is_inside_exclusive_maximum_bounds(neighbour.0, min, max)
+                && !blocked.contains_key(&boundary_key(face, neighbour))
+                && seen.insert(neighbour)
+            {
+                queue.push(neighbour);
+            }
+        }
+    }
+}
+
 pub(super) fn derive_enclosed_habitats(
     relevant: &[HabitatFenceSegment],
 ) -> Vec<DerivedHabitatRegion> {
-    if relevant.is_empty() {
+    let Some(first) = relevant.first() else {
         return Vec::new();
-    }
-
-    let mut min = IVec2::splat(i32::MAX);
-    let mut max = IVec2::splat(i32::MIN);
+    };
+    let mut min = first.first_topology_node;
+    let mut max = min;
     let mut blocked = HashMap::with_capacity(relevant.len() * 2);
-    for segment in relevant {
+    for &segment in relevant {
         min = min
             .min(segment.first_topology_node)
             .min(segment.second_topology_node);
         max = max
             .max(segment.first_topology_node)
             .max(segment.second_topology_node);
-        if let Some((left, right)) = find_topology_cells_separated_by_fence_segment(
-            segment.first_topology_node,
-            segment.second_topology_node,
-        ) {
-            blocked.insert(TopologyCellPassage::new(left, right), segment.fence_entity);
-        }
+        record_fence_boundary(&mut blocked, segment);
     }
     min -= IVec2::ONE;
     max += IVec2::ONE;
-
-    let mut outside = HashSet::with_capacity(calculate_exclusive_maximum_topology_rectangle_area(
-        min, max,
-    ));
-    let mut queue = Vec::with_capacity(calculate_exclusive_maximum_topology_rectangle_area(
-        min, max,
-    ));
-    for x in min.x..max.x {
-        append_topology_cell_if_not_seen(IVec2::new(x, min.y), &mut outside, &mut queue);
-        append_topology_cell_if_not_seen(IVec2::new(x, max.y - 1), &mut outside, &mut queue);
-    }
-    for y in min.y..max.y {
-        append_topology_cell_if_not_seen(IVec2::new(min.x, y), &mut outside, &mut queue);
-        append_topology_cell_if_not_seen(IVec2::new(max.x - 1, y), &mut outside, &mut queue);
-    }
-    let mut cursor = 0;
-    while let Some(&cell) = queue.get(cursor) {
-        cursor += 1;
-        for neighbor in four_cardinal_topology_cell_neighbors(cell) {
-            if topology_cell_is_inside_exclusive_maximum_bounds(neighbor, min, max)
-                && !blocked.contains_key(&TopologyCellPassage::new(cell, neighbor))
-            {
-                append_topology_cell_if_not_seen(neighbor, &mut outside, &mut queue);
-            }
-        }
-    }
-
-    let mut interiors = HashSet::new();
-    for y in min.y..max.y {
-        for x in min.x..max.x {
-            let cell = IVec2::new(x, y);
-            if !outside.contains(&cell) {
-                interiors.insert(cell);
-            }
-        }
-    }
+    let mut seen = HashSet::new();
+    let seed = (min, 0);
+    seen.insert(seed);
+    flood_sectors(&mut vec![seed], &mut seen, min, max, &blocked);
 
     let mut regions = Vec::new();
-    while let Some(&start) = interiors
-        .iter()
-        .min_by_key(|cell| topology_cell_sort_key(**cell))
-    {
-        interiors.remove(&start);
-        let mut cells = vec![start];
-        let mut at = 0;
-        while let Some(&cell) = cells.get(at) {
-            at += 1;
-            for neighbor in four_cardinal_topology_cell_neighbors(cell) {
-                if !blocked.contains_key(&TopologyCellPassage::new(cell, neighbor))
-                    && interiors.remove(&neighbor)
-                {
-                    cells.push(neighbor);
+    for x in min.x..max.x {
+        for y in min.y..max.y {
+            for side in [0, 2, 4, 6] {
+                let first = (IVec2::new(x, y), side);
+                if !seen.insert(first) {
+                    continue;
                 }
+                let mut faces = vec![first];
+                flood_sectors(&mut faces, &mut seen, min, max, &blocked);
+                faces.sort_unstable_by_key(|(tile, side)| (tile.x, tile.y, *side));
+                let mut boundary = Vec::new();
+                let mut breached = false;
+                for &face in &faces {
+                    for neighbour in neighbouring_sectors(face) {
+                        if let Some(&(fence, breach)) = blocked.get(&boundary_key(face, neighbour))
+                        {
+                            boundary.push(fence);
+                            breached |= breach;
+                        }
+                    }
+                }
+                boundary.sort_unstable();
+                boundary.dedup();
+                let mut topology_cells: Vec<_> = faces.iter().map(|(tile, _)| *tile).collect();
+                topology_cells.dedup();
+                regions.push(DerivedHabitatRegion {
+                    topology_cells,
+                    sectors: faces,
+                    boundary_fence_entities: boundary,
+                    boundary_is_breached: breached,
+                });
             }
         }
-        cells.sort_unstable_by_key(|cell| topology_cell_sort_key(*cell));
-        let cell_set: HashSet<_> = cells.iter().copied().collect();
-        let mut boundary_edges = Vec::new();
-        let mut breached = false;
-        for segment in relevant {
-            let Some((left, right)) = find_topology_cells_separated_by_fence_segment(
-                segment.first_topology_node,
-                segment.second_topology_node,
-            ) else {
-                continue;
-            };
-            if cell_set.contains(&left) ^ cell_set.contains(&right) {
-                boundary_edges.push(segment.fence_entity);
-                breached |= segment.boundary_is_breached;
-            }
-        }
-        boundary_edges.sort_unstable_by_key(|entity| entity.to_bits());
-        boundary_edges.dedup();
-        regions.push(DerivedHabitatRegion {
-            topology_cells: cells,
-            boundary_fence_entities: boundary_edges,
-            boundary_is_breached: breached,
-        });
     }
-    regions.sort_by_key(|region| {
-        region
-            .topology_cells
-            .first()
-            .copied()
-            .map(topology_cell_sort_key)
-    });
     regions
 }
 
-pub(super) fn expand_authored_fence_segments_into_cardinal_habitat_grid_boundaries(
+pub(super) fn split_fence_segments_at_topology_nodes(
     segments: &[HabitatFenceSegment],
 ) -> Vec<HabitatFenceSegment> {
     let mut result = Vec::new();
     for segment in segments {
-        // Canonical direction makes the cell-boundary raster independent of
-        // which way the player drew the fence. This is the habitat's existing
-        // whole-cell approximation; rendered and collision geometry stay diagonal.
-        let (start, end) = if topology_cell_sort_key(segment.first_topology_node)
-            <= topology_cell_sort_key(segment.second_topology_node)
-        {
-            (segment.first_topology_node, segment.second_topology_node)
-        } else {
-            (segment.second_topology_node, segment.first_topology_node)
-        };
-        let delta = end - start;
-        if (delta.x != 0 && delta.y != 0 && delta.x.unsigned_abs() != delta.y.unsigned_abs())
-            || delta == IVec2::ZERO
+        let a = segment.first_topology_node;
+        let b = segment.second_topology_node;
+        let delta = b - a;
+        let length = delta.x.unsigned_abs().max(delta.y.unsigned_abs());
+        if length == 0
+            || (delta.x != 0 && delta.y != 0 && delta.x.unsigned_abs() != delta.y.unsigned_abs())
         {
             continue;
         }
         let step = delta.signum();
-        let length = delta.x.unsigned_abs().max(delta.y.unsigned_abs());
         for offset in 0..length {
-            let first = start + step * offset as i32;
-            let corner = first + IVec2::new(step.x, 0);
-            let second = first + step;
-            for (first_topology_node, second_topology_node) in [(first, corner), (corner, second)] {
-                if first_topology_node != second_topology_node {
-                    result.push(HabitatFenceSegment {
-                        fence_entity: segment.fence_entity,
-                        first_topology_node,
-                        second_topology_node,
-                        boundary_is_breached: segment.boundary_is_breached,
-                    });
-                }
-            }
+            let first = a + step * offset as i32;
+            result.push(HabitatFenceSegment {
+                first_topology_node: first,
+                second_topology_node: first + step,
+                ..*segment
+            });
         }
     }
     result
 }
 
-pub(super) struct CardinalFenceComponent {
+pub(super) struct FenceComponent {
     pub(super) segments: Vec<HabitatFenceSegment>,
     pub(super) bounds: IRect,
 }
 
-impl CardinalFenceComponent {
+impl FenceComponent {
     pub(super) fn touches(&self, bounds: IRect) -> bool {
         self.segments.iter().any(|edge| {
             inclusive_topology_bounds_contain_point(bounds, edge.first_topology_node)
@@ -233,9 +222,7 @@ impl CardinalFenceComponent {
     }
 }
 
-pub(super) fn connected_cardinal_fence_components(
-    segments: &[HabitatFenceSegment],
-) -> Vec<CardinalFenceComponent> {
+pub(super) fn connected_fence_components(segments: &[HabitatFenceSegment]) -> Vec<FenceComponent> {
     let mut by_node: HashMap<IVec2, Vec<usize>> = HashMap::new();
     for (index, segment) in segments.iter().enumerate() {
         by_node
@@ -278,46 +265,12 @@ pub(super) fn connected_cardinal_fence_components(
                 }
             }
         }
-        result.push(CardinalFenceComponent {
+        result.push(FenceComponent {
             segments: component.into_iter().map(|index| segments[index]).collect(),
             bounds,
         });
     }
     result
-}
-
-fn find_topology_cells_separated_by_fence_segment(a: IVec2, b: IVec2) -> Option<(IVec2, IVec2)> {
-    let delta = b - a;
-    match (delta.x, delta.y) {
-        (1 | -1, 0) => {
-            let x = a.x.min(b.x);
-            Some((IVec2::new(x, a.y - 1), IVec2::new(x, a.y)))
-        }
-        (0, 1 | -1) => {
-            let y = a.y.min(b.y);
-            Some((IVec2::new(a.x - 1, y), IVec2::new(a.x, y)))
-        }
-        _ => None,
-    }
-}
-
-fn four_cardinal_topology_cell_neighbors(cell: IVec2) -> [IVec2; 4] {
-    [
-        cell + IVec2::X,
-        cell - IVec2::X,
-        cell + IVec2::Y,
-        cell - IVec2::Y,
-    ]
-}
-
-fn append_topology_cell_if_not_seen(
-    cell: IVec2,
-    seen: &mut HashSet<IVec2>,
-    queue: &mut Vec<IVec2>,
-) {
-    if seen.insert(cell) {
-        queue.push(cell);
-    }
 }
 
 fn topology_cell_is_inside_exclusive_maximum_bounds(cell: IVec2, min: IVec2, max: IVec2) -> bool {
@@ -326,13 +279,4 @@ fn topology_cell_is_inside_exclusive_maximum_bounds(cell: IVec2, min: IVec2, max
 
 fn inclusive_topology_bounds_contain_point(rect: IRect, point: IVec2) -> bool {
     point.cmpge(rect.min).all() && point.cmple(rect.max).all()
-}
-
-fn calculate_exclusive_maximum_topology_rectangle_area(min: IVec2, max: IVec2) -> usize {
-    let side = (max - min).max(IVec2::ZERO);
-    usize::try_from(i64::from(side.x) * i64::from(side.y)).unwrap_or(0)
-}
-
-fn topology_cell_sort_key(cell: IVec2) -> (i32, i32) {
-    (cell.x, cell.y)
 }

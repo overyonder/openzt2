@@ -1,6 +1,4 @@
-use std::collections::VecDeque;
-
-use bevy::{ecs::system::SystemParam, platform::collections::HashMap, prelude::*};
+use bevy::{ecs::system::SystemParam, platform::collections::HashSet, prelude::*};
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_data::AssetId;
 use openzt2_zoo_state::topology::topology_graph_types::{PathTile, TileSurface, TopologyGrid, TopologyIndex};
@@ -115,33 +113,105 @@ impl<'w, 's> ElevatedCurbSurfaces<'w, 's> {
         index: &TopologyIndex,
         definitions: WorldDefinitionsView<'_>,
     ) -> Option<Vec<IVec3>> {
-        let mut previous = HashMap::<IVec3, IVec3>::from_iter([(from, from)]);
-        let mut pending = VecDeque::from([from]);
-        while let Some(cell) = pending.pop_front() {
-            if cell == to {
-                let mut route = vec![to];
-                while *route.last()? != from {
-                    route.push(previous[route.last()?]);
-                }
-                route.reverse();
-                return Some(route);
-            }
+        let candidates = |cell: IVec3| {
+            let mut slots = [None; 8];
             for corners in self.perimeters(cell.xy(), grid, index, definitions) {
-                let Some(corner) = corners.iter().position(|&(point, _)| point == cell) else {
+                if !corners.iter().any(|&(point, _)| point == cell) {
                     continue;
-                };
-                for adjacent in [(corner + 1) % 4, (corner + 3) % 4, (corner + 2) % 4] {
-                    let (next, _) = corners[adjacent];
-                    if (next - cell).xy().abs().max_element() != span
-                        || previous.contains_key(&next)
-                    {
+                }
+                for (other, _) in corners {
+                    let offset = (other - cell).xy();
+                    if offset.abs().max_element() != span {
                         continue;
                     }
-                    previous.insert(next, cell);
-                    pending.push_back(next);
+                    let slot = direction_slot(offset.signum());
+                    slots[slot] = Some(other);
                 }
             }
+            slots
+        };
+        let mut first_directions = candidates(from).into_iter().rev().flatten();
+        let first = first_directions.next()?;
+        // The anchor's two posts yield independent ordered walks. Select the
+        // first occurrence of the pointed segment; equal indices retain the
+        // walk from the anchor's first post.
+        let forward = walk_curb_assignments(from, first, to, candidates);
+        let reverse = first_directions
+            .next()
+            .and_then(|next| walk_curb_assignments(from, next, to, candidates));
+        match (forward, reverse) {
+            (Some(forward), Some(reverse)) if reverse.len() < forward.len() => Some(reverse),
+            (Some(forward), _) => Some(forward),
+            (None, reverse) => reverse,
         }
-        None
+    }
+}
+
+fn direction_slot(direction: IVec2) -> usize {
+    match direction.to_array() {
+        [0, -1] => 0,
+        [1, -1] => 1,
+        [1, 0] => 2,
+        [1, 1] => 3,
+        [0, 1] => 4,
+        [-1, 1] => 5,
+        [-1, 0] => 6,
+        _ => 7,
+    }
+}
+
+fn walk_curb_assignments(
+    anchor: IVec3,
+    first: IVec3,
+    target: IVec3,
+    candidates: impl Fn(IVec3) -> [Option<IVec3>; 8],
+) -> Option<Vec<IVec3>> {
+    let mut chain = vec![anchor, first];
+    let mut visited: HashSet<_> = [(anchor, first)].into_iter().collect();
+    let (mut previous, mut current) = (anchor, first);
+    loop {
+        if current == target {
+            return Some(chain);
+        }
+        let last_assignment = candidates(current)
+            .into_iter()
+            .rev()
+            .flatten()
+            .find(|&end| end != previous)?;
+        if !visited.insert((current, last_assignment)) {
+            return None;
+        }
+        chain.push(last_assignment);
+        (previous, current) = (current, last_assignment);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn curb_walk_takes_the_last_assignment_at_a_branch() {
+        let origin = IVec3::ZERO;
+        let branch = IVec3::X;
+        let earlier = branch - IVec3::Y;
+        let later = branch + IVec3::Y;
+        let candidates = |cell| {
+            let mut slots = [None; 8];
+            if cell == branch {
+                slots[0] = Some(earlier);
+                slots[4] = Some(later);
+                slots[6] = Some(origin);
+            }
+            slots
+        };
+        assert_eq!(
+            walk_curb_assignments(origin, branch, later, candidates),
+            Some(vec![origin, branch, later]),
+        );
+        assert_eq!(
+            walk_curb_assignments(origin, branch, earlier, candidates),
+            None,
+        );
     }
 }

@@ -290,7 +290,7 @@ fn check_due_animals_for_rampage(
         }
         let variance = (random.next_u32() % 10_001) as f32 / 10_000.0 * 2.0 - 1.0;
         commands.entity(animal).insert((
-            Rampaging { elapsed_ticks: 0 },
+            Rampaging,
             RampageTimeRemaining(Timer::new(
                 rampage_duration(policy.duration + policy.variance * variance),
                 TimerMode::Once,
@@ -360,11 +360,7 @@ mod tests {
     use super::*;
 
     fn points(good: f32, bad: f32) -> NeedPoints {
-        NeedPoints {
-            good,
-            bad,
-            seconds_until_update: 0.0,
-        }
+        NeedPoints { good, bad }
     }
 
     #[test]

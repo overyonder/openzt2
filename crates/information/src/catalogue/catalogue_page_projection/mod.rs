@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::{
+    AssetId,
     localization::LocalizationFormatArgument,
     ui_document::node_property_binding::{
         UiBooleanPropertyBindingSource, UiImagePropertyBindingSource,
@@ -8,7 +9,6 @@ use openzt2_game_data::{
     world_definitions::catalogue_and_progression::catalogue_definition_types::{
         CatalogueEntry, CatalogueFilterFlags,
     },
-    AssetId,
 };
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
@@ -172,7 +172,7 @@ pub(crate) fn project_catalogue_page(
             |definition| {
                 is_unlimited
                     || find_authored_object_or_placeable_price(catalog, definition)
-                        .is_some_and(|price| price.0 <= cash.0 .0)
+                        .is_some_and(|price| price <= cash.0)
             },
             |row, index, entry| {
                 rows[usize::from(row)] = Some((index, entry));
@@ -285,7 +285,7 @@ pub(crate) fn project_catalogue_page(
                                 catalog,
                                 AssetId(entry.definition.0),
                             )
-                            .is_some_and(|price| price.0 <= cash.0 .0)
+                            .is_some_and(|price| price <= cash.0)
                     })
                 }
                 _ => continue,
@@ -318,7 +318,7 @@ pub(crate) fn project_catalogue_page(
                                 catalog,
                                 AssetId(entry.definition.0),
                             )
-                            .is_some_and(|price| price.0 <= cash.0 .0)
+                            .is_some_and(|price| price <= cash.0)
                     })
                 }
                 _ => continue,

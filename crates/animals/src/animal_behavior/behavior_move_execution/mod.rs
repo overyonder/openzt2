@@ -76,6 +76,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
             ),
             Option<&StaffRole>,
             Option<&NavAgent>,
+            Has<super::behavior_set_start_request_types::AmbientBehaviorSubject>,
         ),
         (
             Without<PendingBehaviorMoveCompletion>,
@@ -88,10 +89,16 @@ pub(super) fn start_current_supported_behavior_move_actions(
     mut navigation_requests: MessageWriter<NavigateTo>,
     mut land_approach: KeeperLandApproach,
     animal_actors: Query<(), With<openzt2_zoo_state::animal_lifecycle::types::Animal>>,
-    water_targets: Query<&openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>,
-    waters: super::natural_water_targets::NaturalWaterTargets,
-    (programs, guests, entrances, grids): (
+    (water_targets, waters, terrain, mut poses, mut swim_layers): (
+        Query<&openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>,
+        super::natural_water_targets::NaturalWaterTargets,
+        openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility,
+        Query<&mut Transform>,
+        Query<&mut openzt2_zoo_state::locomotion::locomotion_types::SwimLayer>,
+    ),
+    (programs, continuations, guests, entrances, grids): (
         Res<Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>,
+        openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationFrames,
         Query<(), With<openzt2_zoo_state::guests::guest_simulation_types::Guest>>,
         Query<&openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::ZooEntrance>,
         Query<&openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid>,
@@ -103,6 +110,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
         (mut behavior_task, instruction, running_action),
         staff_role,
         navigation_agent,
+        ambient,
     ) in behavior_action_actors(&mut behavior_tasks, activation.0)
     {
         let Ok(simulation_clock) = clocks.get(member.root) else {
@@ -119,12 +127,8 @@ pub(super) fn start_current_supported_behavior_move_actions(
             continue;
         }
         let move_action = &running_action.0;
-        if !move_start_has_navigation_agent(navigation_agent) {
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            continue;
-        }
         let definitions = active_world_definitions.get(&world_definition_assets);
-        if !animal_actors.contains(actor)
+        if !ambient && !animal_actors.contains(actor)
             && !staff_mode_has_authored_locomotion(
                 move_action.locomotion_speed,
                 staff_role,
@@ -239,39 +243,83 @@ pub(super) fn start_current_supported_behavior_move_actions(
                 destination = shore;
             }
         }
+        if move_action.depth_below_surface_m.is_some() || move_action.height_above_floor_m.is_some() {
+            let point = destination.xz();
+            if let (Some(surface), Some(floor)) = (
+                terrain.water_surface_height(member.root, point),
+                terrain.ground_height(member.root, point),
+            ) {
+                if surface > floor {
+                    destination.y = if let Some(depth) = move_action.depth_below_surface_m {
+                        (surface - depth).max(floor)
+                    } else if let Some(height) = move_action.height_above_floor_m {
+                        (floor + height).min(surface)
+                    } else {
+                        destination.y
+                    };
+                    if ambient && target == actor {
+                        use openzt2_zoo_state::locomotion::locomotion_types::SwimLayer;
+                        let Ok(mut pose) = poses.get_mut(actor) else {
+                            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                            continue;
+                        };
+                        pose.translation.y = destination.y;
+                        let layer = if destination.y < surface { SwimLayer::Submerged } else { SwimLayer::Surface };
+                        if let Ok(mut current) = swim_layers.get_mut(actor) {
+                            current.set_if_neq(layer);
+                        } else {
+                            commands.entity(actor).insert(layer);
+                        }
+                        instruction.complete(actor, simulation_clock.tick, &mut commands);
+                        continue;
+                    }
+                }
+            }
+        }
+        if !move_start_has_navigation_agent(navigation_agent) {
+            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+            continue;
+        }
         let arrival_radius_m = move_action.move_radius_cm as f32 * 0.01;
         let Ok(mut generation) = navigation_generations.get_mut(actor) else {
             continue;
         };
         let request_id = generation.advance();
-        if move_action.target_node_name.is_none()
-            && guests.contains(actor)
-            && programs
-                .get(&behavior_task.document)
-                .and_then(|document| document.behavior_task_at_index(behavior_task.declaration))
-                .is_some_and(|task| {
-                    task.scores.iter().any(|score| {
-                        matches!(
-                            score,
-                            openzt2_game_data::behavior::score::BehaviorScore::LeaveZooPressure
-                        )
+        let departure_entrance = entrances.get(target).ok().filter(|_| {
+            move_action.target_node_name.is_none() && guests.contains(actor) && {
+                let (document, declaration) = if behavior_task.depth == 0 {
+                    (&behavior_task.document, behavior_task.declaration)
+                } else if let Some(root) = continuations.frames(actor).next() {
+                    (&root.document, root.declaration)
+                } else {
+                    (&behavior_task.document, behavior_task.declaration)
+                };
+                programs
+                    .get(document)
+                    .and_then(|document| document.behavior_task_at_index(declaration))
+                    .is_some_and(|task| {
+                        task.scores.iter().any(|score| {
+                            matches!(
+                                score,
+                                openzt2_game_data::behavior::score::BehaviorScore::LeaveZooPressure
+                            )
+                        })
                     })
-                })
-        {
-            if let Ok(entrance) = entrances.get(target) {
-                destination = definitions
-                    .and_then(|definitions| definitions.guest_generation())
-                    .map_or(entrance.exit, |policy| {
-                        let [x, y] = policy.departure_offset_m;
-                        entrance.exit + target_transform.rotation() * Vec3::new(x, 0.0, -y)
-                    });
-                if grids.get(member.root).is_ok_and(|grid| {
-                    grid.width != 0 && grid.height != 0 && grid.cell_of(destination.xz()).is_none()
-                }) {
-                    commands.entity(actor).insert(
-                        openzt2_zoo_state::locomotion::locomotion_types::EntranceNavigationConnection { request_id, gate: entrance.exit, inbound: false }
-                    );
-                }
+            }
+        });
+        if let Some(entrance) = departure_entrance {
+            destination = definitions
+                .and_then(|definitions| definitions.guest_generation())
+                .map_or(entrance.exit, |policy| {
+                    let [x, y] = policy.departure_offset_m;
+                    entrance.exit + target_transform.rotation() * Vec3::new(x, 0.0, -y)
+                });
+            if grids.get(member.root).is_ok_and(|grid| {
+                grid.width != 0 && grid.height != 0 && grid.cell_of(destination.xz()).is_none()
+            }) {
+                commands.entity(actor).insert(
+                    openzt2_zoo_state::locomotion::locomotion_types::EntranceNavigationConnection { request_id, gate: entrance.exit, inbound: false }
+                );
             }
         }
         navigation_requests.write(NavigateTo {
@@ -460,6 +508,8 @@ mod tests {
                             locomotion_speed: None,
                             target_node_name: None,
                             move_radius_cm: 200,
+                            depth_below_surface_m: None,
+                            height_above_floor_m: None,
                         },
                     )]),
                     completion: BehaviorTaskActionPhase::Supported(Vec::new()),

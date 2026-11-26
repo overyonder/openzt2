@@ -8,16 +8,14 @@ use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_depen
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
+use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::economy::scenario_economy_command_types::ScenarioEconomyOperation;
-use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
 use openzt2_zoo_state::progression::fame_types::Fame;
 
 pub(super) struct ScenarioLuaScriptResult {
     pub(super) entities: Vec<super::scenario_lua_entity_commands::ScenarioEntityCommand>,
     pub(super) ui: Vec<super::scenario_lua_ui::ScenarioUiCommand>,
     pub(super) persist_profile_variables: bool,
-    /// The photo challenge set named by `ZT_PHOTOEVENT_SET_CURRENT_CHALLENGE`.
-    pub(super) current_photo_challenge_set: Option<openzt2_game_data::AssetId>,
     /// The error that ended the call early. Native calls made before it have
     /// already acted and are carried in the fields below.
     pub(super) failure: Option<mlua::Error>,
@@ -26,7 +24,6 @@ pub(super) struct ScenarioLuaScriptResult {
         Vec<openzt2_zoo_state::scenario::scenario_objective_types::ShowScenarioRuleRequest>,
     pub(super) condition_status:
         openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatus,
-    pub(super) economy_operations: Vec<ScenarioEconomyOperation>,
     pub(super) award_point_adjustments: Vec<i32>,
     pub(super) maximum_fame_percent: Option<f32>,
     pub(super) challenge_offer_source_paths: Vec<String>,
@@ -39,8 +36,9 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     pub(super) localization: Option<openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView<'a>>,
     pub(super) spawn_animal: Option<&'a dyn Fn(openzt2_game_data::AssetId, [f32; 3], f32, &[openzt2_animals::animal_lifecycle::scripted_animal_spawning::ScriptedAnimalSpawnRequest]) -> mlua::Result<openzt2_animals::animal_lifecycle::scripted_animal_spawning::ScriptedAnimalSpawnRequest>>,
     pub(super) species: Option<openzt2_game_assets::species::species_asset_types::SpeciesView<'a>>,
+    pub(super) world_variable: Option<&'a dyn Fn(Entity, AssetId, Option<Option<&str>>) -> Option<String>>,
     pub(super) profile: Option<&'a dyn Fn(openzt2_game_data::AssetId, Option<Option<&str>>) -> mlua::Result<Option<String>>>,
-    pub(super) zoo_cash: ZooCash,
+    pub(super) economy: Option<&'a dyn Fn(Entity, Option<ScenarioEconomyOperation>) -> mlua::Result<(Money, AdmissionPrice)>>,
     /// Whether any closed tank exists, as `ZT_IS_TANK_IN_WORLD` reports.
     pub(super) tank_in_world: bool,
     /// Every tank's heights, for `ZT_GET_TANK_WATER_HEIGHT` and
@@ -50,7 +48,6 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     /// `ZT_GET_IS_FREEFORM` report.
     pub(super) world_session_mode:
         Option<openzt2_world_state::game_session_types::WorldSessionMode>,
-    pub(super) guest_admission_price: AdmissionPrice,
     pub(super) finance_history:
         Option<&'a openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory>,
     pub(super) zoo_fame: Option<&'a Fame>,
@@ -65,11 +62,13 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     pub(super) contained_crated_animals: &'a ScenarioLuaCrateQuery<'a, 'a>,
     pub(super) contained_entities: &'a dyn Fn(bevy::prelude::Entity) -> Vec<bevy::prelude::Entity>,
     pub(super) waste: Option<&'a dyn Fn(bevy::prelude::Entity, Option<u16>) -> Option<u16>>,
+    pub(super) authored_float_attributes: &'a bevy::prelude::Query<'a, 'a, &'static openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes>,
     pub(super) live_world_entities: &'a ScenarioLuaLiveEntityQuery<'a, 'a>,
     pub(super) world_definitions: Option<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'a>>,
     pub(super) scenario_document_assets: &'a bevy::prelude::Assets<WorldScenarioDocumentAsset>,
     pub(super) current_photo_challenge_sets: &'a ScenarioLuaCurrentPhotoChallengeSetQuery<'a, 'a>,
-    pub(super) selected_photo_set: Option<&'a std::cell::Cell<Option<AssetId>>>,
+    pub(super) photo_set: Option<&'a dyn Fn(Entity, Option<AssetId>) -> mlua::Result<Option<Entity>>>,
+    pub(super) photo_catalogue: Option<&'a openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeCatalogueIndex>,
     pub(super) photo_challenges: &'a ScenarioLuaPhotoChallengeQuery<'a, 'a>,
     pub(super) selected_entity: Option<bevy::prelude::Entity>,
     pub(super) fence_edges: &'a ScenarioLuaFenceEdgeQuery<'a, 'a>,
@@ -180,12 +179,7 @@ pub(super) struct ScenarioLuaVirtualMachine {
 pub(super) type ScenarioLuaCurrentPhotoChallengeSetQuery<'w, 's> = bevy::prelude::Query<
     'w,
     's,
-    (
-        &'static openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeSet,
-        bevy::prelude::Has<
-            openzt2_interface_state::photos::photo_challenge_types::CurrentPhotoChallengeSet,
-        >,
-    ),
+    &'static openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeSet,
 >;
 
 /// Live photo challenges and their progress.
@@ -204,20 +198,34 @@ pub(super) struct ScenarioLuaPhotoChallengeMemberStars {
     /// The member's authored `difficulty`.
     pub(super) required: u8,
     /// The rating of the photo that completed it, or 0.
-    pub(super) obtained: u8,
+    pub(super) obtained_half_stars: u8,
 }
 
 impl ScenarioLuaQueryFacts<'_> {
+    pub(super) fn zoo_economy(
+        &self,
+        operation: Option<ScenarioEconomyOperation>,
+    ) -> mlua::Result<(Money, AdmissionPrice)> {
+        self.economy.zip(self.world).map_or_else(
+            || {
+                if operation.is_none() {
+                    Ok((Money::ZERO, AdmissionPrice::default()))
+                } else {
+                    Err(mlua::Error::runtime("zoo economy is unavailable"))
+                }
+            },
+            |(access, world)| access(world, operation),
+        )
+    }
+
     /// The current photo challenge set's members in authored order, or `None`
     /// when no set is current.
     pub(super) fn read_photo_challenge_member_stars(
         &self,
-        requested: Option<AssetId>,
+        selected: Entity,
     ) -> Option<Vec<ScenarioLuaPhotoChallengeMemberStars>> {
-        let (set, _) = self
-            .current_photo_challenge_sets
-            .iter()
-            .find(|(set, current)| requested.map_or(*current, |id| set.id == id))?;
+        let set = self.current_photo_challenge_sets.get(selected).ok()?;
+        let catalogue = self.photo_catalogue?;
         let asset = self.scenario_document_assets.get(&set.source)?;
         let record = asset.document.find_photo_challenge_set(set.id)?;
         record
@@ -226,8 +234,8 @@ impl ScenarioLuaQueryFacts<'_> {
             .map(|member| {
                 let (challenge, progress) = self
                     .photo_challenges
-                    .iter()
-                    .find(|(challenge, _)| challenge.id == member.challenge)?;
+                    .get(*catalogue.rules.get(&member.challenge)?)
+                    .ok()?;
                 let rule = self
                     .scenario_document_assets
                     .get(&challenge.source)?
@@ -235,8 +243,8 @@ impl ScenarioLuaQueryFacts<'_> {
                     .find_photo_challenge_rule(challenge.id)?;
                 Some(ScenarioLuaPhotoChallengeMemberStars {
                     required: rule.difficulty,
-                    obtained: if progress.completed {
-                        progress.rating_stars
+                    obtained_half_stars: if progress.completed {
+                        progress.rating_half_stars
                     } else {
                         0
                     },

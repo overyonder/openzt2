@@ -17,6 +17,7 @@ pub(super) fn capture_saved_world_descriptor(
     handles: &SelectedWorldDocumentHandles,
     selection: &SelectedWorldIdentity,
     campaign: Option<&ScenarioCampaignRecord>,
+    scenario: Option<&Handle<WorldScenarioDocumentAsset>>,
     assets: &Assets<WorldScenarioDocumentAsset>,
     server: &AssetServer,
 ) -> Result<WorldScenarioDocumentSource, Failure> {
@@ -26,11 +27,17 @@ pub(super) fn capture_saved_world_descriptor(
     let mut source = map
         .capture_source_document(server)
         .map_err(|_| Failure::UnknownAssetIdentifier)?;
-    if handles.map != handles.start {
-        let start = assets
-            .get(&handles.start)
-            .ok_or(Failure::UnknownAssetIdentifier)?;
-        let additional = start
+    let additional = [Some(&handles.start), handles.mode.as_ref(), scenario];
+    for (index, handle) in additional.iter().copied().enumerate() {
+        let Some(handle) = handle else {
+            continue;
+        };
+        if *handle == handles.map || additional[..index].contains(&Some(handle)) {
+            continue;
+        }
+        let additional = assets
+            .get(handle)
+            .ok_or(Failure::UnknownAssetIdentifier)?
             .capture_source_document(server)
             .map_err(|_| Failure::UnknownAssetIdentifier)?;
         merge_sources(&mut source, additional)?;
@@ -60,6 +67,10 @@ fn merge_sources(
     destination: &mut WorldScenarioDocumentSource,
     additional: WorldScenarioDocumentSource,
 ) -> Result<(), Failure> {
+    destination
+        .authored
+        .merge(additional.authored)
+        .map_err(|_| Failure::BrokenPersistentEntityReference)?;
     let document = &mut destination.document;
     let source = additional.document;
     merge_records(&mut document.maps, source.maps, |record| record.id)?;

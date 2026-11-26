@@ -1,11 +1,17 @@
 use bevy::prelude::*;
 use openzt2_game_data::species::{AnimalNeedPointPolicy, NeedKind, SpeciesNeed};
 
-use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
+use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets, SpeciesView};
+use openzt2_game_assets::world_definitions::{
+    world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+    world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+};
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_world_state::simulation_time::deterministic_random_stream::RngDomain;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooTimekeeperElapsed;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 use openzt2_zoo_state::animal_lifecycle::types::{Animal, AnimalVariant};
@@ -37,24 +43,20 @@ pub(super) fn need_rank(kind: &NeedKind) -> Option<usize> {
 }
 
 fn species_reproduction_need<'a>(
-    index: &'a SpeciesAssets,
-    assets: &'a Assets<SpeciesAsset>,
-    handle: &SpeciesHandle,
+    view: SpeciesView<'a>,
+    species: openzt2_game_data::AssetId,
 ) -> Option<&'a SpeciesNeed> {
-    index
-        .get(assets)?
-        .find(handle.species)?
+    view.find(species)?
         .needs
         .iter()
         .find(|need| need.kind == NeedKind::Reproduction)
 }
 
 fn species_needs<'a>(
-    index: &'a SpeciesAssets,
-    assets: &'a Assets<SpeciesAsset>,
-    handle: &SpeciesHandle,
+    view: SpeciesView<'a>,
+    species: openzt2_game_data::AssetId,
 ) -> Option<[&'a SpeciesNeed; 11]> {
-    let species = index.get(assets)?.find(handle.species)?;
+    let species = view.find(species)?;
     let rows = &species.needs;
     let mut found: [Option<&SpeciesNeed>; 11] = [None; 11];
     for row in rows {
@@ -85,93 +87,114 @@ pub(crate) fn initialize_animal_needs(
         (With<Animal>, Without<AnimalWelfare>, Without<Dead>),
     >,
 ) {
+    let Some(view) = index.get(&assets) else {
+        return;
+    };
     for (entity, persistent_id, species, scripted) in &animals {
-        let Some(needs) = species_needs(&index, &assets, species) else {
-            continue;
-        };
-        let mut random =
-            DeterministicRng::from_entity(**zoo_seed, *persistent_id, RngDomain::AnimalNeeds);
-        let mut sample = |need: &SpeciesNeed| {
-            let minimum = need.initial_wellness_permille_range[0];
-            let maximum = need.initial_wellness_permille_range[1].max(minimum);
-            let width = u32::from(maximum - minimum) + 1;
-            let sampled = minimum + random.range_u32(width).unwrap_or_default() as u16;
-            i32::from(sampled) * Q16_ONE
-        };
-        let mut initial = needs.map(&mut sample);
-        // Sampled after the welfare needs so their streams stay as they were.
-        let reproduction_row = species_reproduction_need(&index, &assets, species);
-        let mut reproduction = reproduction_row.map(&mut sample);
-        if let Some(scripted) = scripted {
-            for (kind, value) in &scripted.needs {
-                let value = (*value).clamp(0, MAX_NEED_Q16);
-                match need_rank(kind) {
-                    Some(rank) => initial[rank] = value,
-                    None => reproduction = reproduction.map(|_| value),
-                }
-            }
-        }
-        // The next assessment uses live membership and species population.
-        let suitability = HabitatSuitability::default();
-        let value = calculate_mean_animal_welfare_with_habitat_limit(
-            std::array::from_fn(|index| initial[index]),
-            suitability,
+        let initialized = initialize_one_animal_needs(
+            &mut commands.entity(entity),
+            **zoo_seed,
+            *persistent_id,
+            view,
+            species.species,
+            scripted.map_or(&[], |scripted| scripted.needs.as_slice()),
         );
-        let critical = needs
-            .iter()
-            .take(10)
-            .map(|need| need.critical_wellness_threshold.unwrap_or(0))
-            .sum::<u16>()
-            / 10;
-        let good = needs
-            .iter()
-            .take(10)
-            .map(|need| need.cessation_wellness_threshold.unwrap_or(1000))
-            .sum::<u16>()
-            / 10;
-        let mut trigger_mask = 0;
-        for (index, need) in needs.iter().enumerate() {
-            if need
-                .trigger_wellness_threshold
-                .is_some_and(|threshold| initial[index] <= i32::from(threshold) * Q16_ONE)
-            {
-                trigger_mask |= 1 << index;
-            }
-        }
-        if let (Some(row), Some(value)) = (reproduction_row, reproduction) {
-            if row
-                .trigger_wellness_threshold
-                .is_some_and(|threshold| value <= i32::from(threshold) * Q16_ONE)
-            {
-                trigger_mask |= 1 << REPRODUCTION_TRIGGER_INDEX;
-            }
-            commands.entity(entity).insert(ReproductionNeed(value));
-        }
-        commands.entity(entity).insert((
-            Hunger(initial[0]),
-            Thirst(initial[1]),
-            RestNeed(initial[2]),
-            PrivacyNeed(initial[3]),
-            SocialNeed(initial[4]),
-            ExerciseNeed(initial[5]),
-            StimulationNeed(initial[6]),
-            EnvironmentNeed(initial[7]),
-            HealthNeed(initial[8]),
-        ));
-        commands.entity(entity).insert((
-            HygieneNeed(initial[9]),
-            BathroomNeed(initial[10]),
-            AnimalNeedLatchBundle::from_saved_mask(trigger_mask),
-            suitability,
-            AnimalWelfare(value),
-            CumulativeNeedPoints::default(),
-            NeedPoints::default(),
-            classify_animal_welfare_against_authored_thresholds(value, critical, good),
-        ));
-        if scripted.is_some() {
+        if initialized && scripted.is_some() {
             commands.entity(entity).remove::<crate::animal_lifecycle::scripted_animal_spawning::ScriptedAnimalInitialization>();
         }
     }
+}
+
+pub(crate) fn initialize_one_animal_needs(
+    entity: &mut EntityCommands,
+    seed: ZooSeed,
+    persistent_id: PersistentId,
+    view: SpeciesView<'_>,
+    species: openzt2_game_data::AssetId,
+    initial_needs: &[(NeedKind, i32)],
+) -> bool {
+    let Some(needs) = species_needs(view, species) else {
+        return false;
+    };
+    let mut random = DeterministicRng::from_entity(seed, persistent_id, RngDomain::AnimalNeeds);
+    let mut sample = |need: &SpeciesNeed| {
+        let minimum = need.initial_wellness_permille_range[0];
+        let maximum = need.initial_wellness_permille_range[1].max(minimum);
+        let width = u32::from(maximum - minimum) + 1;
+        let sampled = minimum + random.range_u32(width).unwrap_or_default() as u16;
+        i32::from(sampled) * Q16_ONE
+    };
+    let mut initial = needs.map(&mut sample);
+    // Sampled after the welfare needs so their streams stay as they were.
+    let reproduction_row = species_reproduction_need(view, species);
+    let mut reproduction = reproduction_row.map(&mut sample);
+    {
+        for (kind, value) in initial_needs {
+            let value = (*value).clamp(0, MAX_NEED_Q16);
+            match need_rank(kind) {
+                Some(rank) => initial[rank] = value,
+                None => reproduction = reproduction.map(|_| value),
+            }
+        }
+    }
+    // The next assessment uses live membership and species population.
+    let suitability = HabitatSuitability::default();
+    let value = calculate_mean_animal_welfare_with_habitat_limit(
+        std::array::from_fn(|index| initial[index]),
+        suitability,
+    );
+    let critical = needs
+        .iter()
+        .take(10)
+        .map(|need| need.critical_wellness_threshold.unwrap_or(0))
+        .sum::<u16>()
+        / 10;
+    let good = needs
+        .iter()
+        .take(10)
+        .map(|need| need.cessation_wellness_threshold.unwrap_or(1000))
+        .sum::<u16>()
+        / 10;
+    let mut trigger_mask = 0;
+    for (index, need) in needs.iter().enumerate() {
+        if need
+            .trigger_wellness_threshold
+            .is_some_and(|threshold| initial[index] <= i32::from(threshold) * Q16_ONE)
+        {
+            trigger_mask |= 1 << index;
+        }
+    }
+    if let (Some(row), Some(value)) = (reproduction_row, reproduction) {
+        if row
+            .trigger_wellness_threshold
+            .is_some_and(|threshold| value <= i32::from(threshold) * Q16_ONE)
+        {
+            trigger_mask |= 1 << REPRODUCTION_TRIGGER_INDEX;
+        }
+        entity.insert(ReproductionNeed(value));
+    }
+    entity.insert((
+        Hunger(initial[0]),
+        Thirst(initial[1]),
+        RestNeed(initial[2]),
+        PrivacyNeed(initial[3]),
+        SocialNeed(initial[4]),
+        ExerciseNeed(initial[5]),
+        StimulationNeed(initial[6]),
+        EnvironmentNeed(initial[7]),
+        HealthNeed(initial[8]),
+    ));
+    entity.insert((
+        HygieneNeed(initial[9]),
+        BathroomNeed(initial[10]),
+        AnimalNeedLatchBundle::from_saved_mask(trigger_mask),
+        suitability,
+        AnimalWelfare(value),
+        CumulativeNeedPoints::default(),
+        NeedPoints::default(),
+        classify_animal_welfare_against_authored_thresholds(value, critical, good),
+    ));
+    true
 }
 
 #[derive(Component, PartialEq)]
@@ -264,9 +287,13 @@ pub(super) fn step_need_points(
 
 pub(super) fn update_need_points(
     time: Res<Time<Fixed>>,
+    mut elapsed: MessageReader<ZooTimekeeperElapsed>,
+    definitions: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
     mut animals: Query<
         (
             Entity,
+            &WorldMember,
             AnimalNeedLatches,
             Ref<AuthoredNeedPointPolicy>,
             &mut ActiveNeedPointBranch,
@@ -276,22 +303,39 @@ pub(super) fn update_need_points(
     >,
     mut outcomes: MessageWriter<AccumulateNeedPoints>,
 ) {
-    for (animal, triggers, policy, mut branch, mut points) in &mut animals {
-        let unmet = triggers.any_triggered();
-        let due = branch.cadence.tick(time.timestep()).is_finished();
-        if !due && branch.unmet == Some(unmet) && !policy.is_changed() {
+    let step = definitions
+        .get(&assets)
+        .and_then(|view| view.authored_timekeeper_policy())
+        .map_or_else(|| time.timestep(), |policy| policy.slow.interval);
+    let mut counts = bevy::ecs::entity::EntityHashMap::<u32>::default();
+    for tick in elapsed.read().filter(|tick| {
+        tick.event == openzt2_game_assets::world_definitions::timing::TimekeeperEvent::Slow
+    }) {
+        let count = counts.entry(tick.root).or_default();
+        *count = count.saturating_add(tick.count);
+    }
+    for (animal, member, triggers, policy, mut branch, mut points) in &mut animals {
+        let Some(&count) = counts.get(&member.root) else {
             continue;
-        }
+        };
+        let unmet = triggers.any_triggered();
         if policy.is_changed() {
             branch.unmet = None;
         }
-        branch.cadence.set_duration(
-            std::time::Duration::try_from_secs_f32(policy.0.interval_seconds).unwrap_or_default(),
-        );
-        branch.cadence.reset();
-        let (good, bad) = step_need_points(&mut points, &mut branch, &policy.0, unmet);
-        if good != 0.0 || bad != 0.0 {
-            outcomes.write(AccumulateNeedPoints { animal, good, bad });
+        for _ in 0..count {
+            let due = branch.cadence.tick(step).is_finished();
+            if !due && branch.unmet == Some(unmet) {
+                continue;
+            }
+            branch.cadence.set_duration(
+                std::time::Duration::try_from_secs_f32(policy.0.interval_seconds)
+                    .unwrap_or_default(),
+            );
+            branch.cadence.reset();
+            let (good, bad) = step_need_points(&mut points, &mut branch, &policy.0, unmet);
+            if good != 0.0 || bad != 0.0 {
+                outcomes.write(AccumulateNeedPoints { animal, good, bad });
+            }
         }
     }
 }
@@ -328,7 +372,10 @@ pub(crate) fn initialize_missing_reproduction_needs(
     >,
 ) {
     for (entity, persistent_id, species) in &animals {
-        let Some(need) = species_reproduction_need(&index, &assets, species) else {
+        let Some(need) = index
+            .get(&assets)
+            .and_then(|view| species_reproduction_need(view, species.species))
+        else {
             continue;
         };
         let mut random =

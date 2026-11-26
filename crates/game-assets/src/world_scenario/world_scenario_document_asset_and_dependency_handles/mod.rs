@@ -1,12 +1,20 @@
 //! One canonical world-scenario document and its demand-loaded dependencies.
 
+use std::{
+    collections::BTreeMap,
+    hash::{DefaultHasher, Hash, Hasher},
+};
+
 use bevy::{
     asset::{UntypedAssetId, VisitAssetDependencies},
     prelude::*,
 };
 use openzt2_game_data::{
-    world_scenario::{PhotoChallengeScriptBinding, ScenarioScriptBinding, WorldScenarioDocument},
     AssetId,
+    world_scenario::{
+        PhotoChallengeScriptBinding, ScenarioScriptBinding, ScenarioScriptPhase,
+        WorldScenarioDocument,
+    },
 };
 
 use crate::{
@@ -26,17 +34,78 @@ pub struct DemandLoadedAssetPath {
     pub path: Box<str>,
 }
 
+type ScenarioScript = (ScenarioScriptBinding, String, Handle<LuaScriptAsset>);
+
+#[derive(Debug, Default)]
+pub(super) struct ScenarioScriptDependencies {
+    rows: Box<[ScenarioScript]>,
+    by_binding: Box<[(u64, usize)]>,
+    validation: BTreeMap<AssetId, usize>,
+}
+
+impl ScenarioScriptDependencies {
+    pub(super) fn new(rows: Box<[ScenarioScript]>) -> Self {
+        let mut by_binding = Vec::with_capacity(rows.len());
+        let mut validation = BTreeMap::new();
+        for (index, (binding, _, _)) in rows.iter().enumerate() {
+            by_binding.push((Self::key(binding), index));
+            if binding.phase == ScenarioScriptPhase::Validate {
+                validation.entry(binding.scenario).or_insert(index);
+            }
+        }
+        by_binding.sort_unstable();
+        Self {
+            rows,
+            by_binding: by_binding.into_boxed_slice(),
+            validation,
+        }
+    }
+
+    fn key(binding: &ScenarioScriptBinding) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        (
+            binding.scenario,
+            binding.objective,
+            binding.phase as u8,
+            &binding.script,
+            &binding.entry,
+        )
+            .hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn find(&self, binding: &ScenarioScriptBinding) -> Option<&ScenarioScript> {
+        let key = Self::key(binding);
+        let start = self
+            .by_binding
+            .partition_point(|&(candidate, _)| candidate < key);
+        self.by_binding[start..]
+            .iter()
+            .take_while(|&&(candidate, _)| candidate == key)
+            .map(|&(_, index)| &self.rows[index])
+            .find(|(candidate, _, _)| candidate == binding)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WorldModeEconomyPolicy {
+    pub initial_cash_dollars: Option<f32>,
+    pub unlimited_cash: Option<bool>,
+}
+
 #[derive(TypePath, Debug)]
 pub struct WorldScenarioDocumentAsset {
     pub authored: super::authored_world_scenario_state::AuthoredWorldScenarioState,
     pub document: WorldScenarioDocument,
+    pub(super) manager: Option<AssetId>,
+    pub(super) mode_economy: Option<WorldModeEconomyPolicy>,
     pub(super) starting_zoos: Box<[DemandLoadedAssetPath]>,
     pub(super) campaign_scenarios: Box<[DemandLoadedAssetHandle<WorldScenarioDocumentAsset>]>,
     pub(super) terrains: Box<[DemandLoadedAssetPath]>,
     pub(super) restored_terrain: Option<DemandLoadedAssetHandle<TerrainAsset>>,
     pub(super) scenes: Box<[DemandLoadedAssetHandle<ScenePrefabAsset>]>,
     pub(super) textures: Box<[DemandLoadedAssetHandle<Image>]>,
-    pub(super) scripts: Box<[(ScenarioScriptBinding, String, Handle<LuaScriptAsset>)]>,
+    pub(super) scripts: ScenarioScriptDependencies,
     pub(super) photo_scripts: Box<[(PhotoChallengeScriptBinding, String, Handle<LuaScriptAsset>)]>,
 }
 
@@ -53,7 +122,7 @@ impl VisitAssetDependencies for WorldScenarioDocumentAsset {
         for dependency in &self.textures {
             visit(dependency.handle.id().untyped());
         }
-        for (_, _, script) in &self.scripts {
+        for (_, _, script) in &self.scripts.rows {
             visit(script.id().untyped());
         }
         for (_, _, script) in &self.photo_scripts {
@@ -67,6 +136,8 @@ impl WorldScenarioDocumentAsset {
     pub fn from_test_document(document: WorldScenarioDocument) -> Self {
         Self {
             document,
+            manager: None,
+            mode_economy: None,
             authored: Default::default(),
             starting_zoos: Box::new([]),
             campaign_scenarios: Box::new([]),
@@ -74,7 +145,7 @@ impl WorldScenarioDocumentAsset {
             restored_terrain: None,
             scenes: Box::new([]),
             textures: Box::new([]),
-            scripts: Box::new([]),
+            scripts: ScenarioScriptDependencies::default(),
             photo_scripts: Box::new([]),
         }
     }
@@ -107,6 +178,14 @@ impl WorldScenarioDocumentAsset {
             .copied()
     }
 
+    pub fn manager(&self) -> Option<&openzt2_game_data::world_scenario::ScenarioDefinitionRecord> {
+        self.document.find_scenario_record(self.manager?)
+    }
+
+    pub fn mode_economy(&self) -> Option<WorldModeEconomyPolicy> {
+        self.mode_economy
+    }
+
     pub fn terrain_path(&self, id: AssetId) -> Option<&str> {
         self.terrains
             .binary_search_by_key(&id, |candidate| candidate.id)
@@ -134,8 +213,7 @@ impl WorldScenarioDocumentAsset {
         binding: &ScenarioScriptBinding,
     ) -> Option<(&str, &Handle<LuaScriptAsset>)> {
         self.scripts
-            .iter()
-            .find(|(candidate, _, _)| candidate == binding)
+            .find(binding)
             .map(|(_, path, handle)| (path.as_str(), handle))
     }
 
@@ -143,12 +221,11 @@ impl WorldScenarioDocumentAsset {
         &self,
         scenario: AssetId,
     ) -> Option<(&ScenarioScriptBinding, &str, &Handle<LuaScriptAsset>)> {
-        self.scripts.iter().find_map(|(binding, path, handle)| {
-            (binding.scenario == scenario
-                && binding.phase
-                    == openzt2_game_data::world_scenario::ScenarioScriptPhase::Validate)
-                .then_some((binding, path.as_str(), handle))
-        })
+        let (binding, path, handle) = self
+            .scripts
+            .rows
+            .get(*self.scripts.validation.get(&scenario)?)?;
+        Some((binding, path, handle))
     }
 
     pub fn photo_script(

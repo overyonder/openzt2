@@ -1,6 +1,6 @@
 use bevy::{ecs::relationship::RelationshipTarget, platform::collections::HashMap, prelude::*};
 use openzt2_game_data::{
-    world_definitions::facilities_and_maintenance::FacilityPaymentTrigger, AssetId,
+    AssetId, world_definitions::facilities_and_maintenance::FacilityPaymentTrigger,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -65,7 +65,7 @@ pub(super) fn reserve_requested_facility_capacity_and_inventory_for_customers(
             warn!(?customer, ?facility, requested_service = ?request.service, "live facility does not provide the requested timed service");
             continue;
         }
-        if price.0 .0 < 0
+        if price.0 < Money::ZERO
             || wallet.0 < price.0
             || reservation.is_some_and(|reservation| !reservation.is_empty())
         {
@@ -155,7 +155,7 @@ mod tests {
             .index_test_document(handle, &document);
         let facility = world
             .spawn((
-                Price(Money(20)),
+                Price(Money::from_cents(20)),
                 ServiceFacility {
                     definition,
                     capacity: 1,
@@ -173,8 +173,8 @@ mod tests {
             facility,
             service: definition,
         };
-        let first = world.spawn((Wallet(Money(40)), request)).id();
-        let second = world.spawn(Wallet(Money(40))).id();
+        let first = world.spawn((Wallet(Money::from_cents(40)), request)).id();
+        let second = world.spawn(Wallet(Money::from_cents(40))).id();
         app.update();
         let world = app.world_mut();
         assert!(world.get::<ServiceReservation>(first).is_none());

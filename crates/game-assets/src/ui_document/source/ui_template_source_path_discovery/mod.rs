@@ -1,6 +1,9 @@
 //! Discovery of UI template source paths from the winning archive overlay.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use crate::{
     asset_source::AssetArchives,
@@ -53,51 +56,18 @@ pub(in crate::ui_document) fn collect_referenced_ui_template_source_paths(
         .collect()
 }
 
-pub(in crate::ui_document) fn build_ui_template_declaration_source_path_index(
+pub(in crate::ui_document) fn read_ui_template_declarations(
     asset_archives: &AssetArchives,
-    template_entries: &[z2f::ResolvedArchiveEntry],
-) -> BTreeMap<String, String> {
-    let mut ui_template_declaration_source_paths = BTreeMap::new();
-    for entry in template_entries {
-        let source_path = &entry.normalized_asset_path;
-        let source_path_string = source_path.to_string_lossy().replace('\\', "/");
-        let Some(source_document) =
-            asset_archives
-                .read_source(source_path)
-                .ok()
-                .and_then(|source_bytes| {
-                    parse_blue_fang_source_document(
-                        AssetPath::new(&source_path_string),
-                        &source_bytes,
-                    )
-                    .ok()
-                })
-        else {
-            continue;
-        };
-
-        let mut declared_ui_template_names = source_document
-            .root
-            .attribute("templateName")
-            .map(|ui_template_name| vec![ui_template_name.trim().to_ascii_lowercase()])
-            .unwrap_or_default();
-        source_document
-            .root
-            .element_children()
-            .for_each(|source_node| {
-                collect_declared_ui_template_names_from_source_document_node(
-                    source_node,
-                    &mut declared_ui_template_names,
-                );
-            });
-
-        for declared_ui_template_name in declared_ui_template_names {
-            ui_template_declaration_source_paths
-                .insert(declared_ui_template_name, source_path_string.clone());
-        }
-    }
-
-    ui_template_declaration_source_paths
+    path: &Path,
+) -> Vec<String> {
+    let Some(document) = asset_archives.read_source(path).ok().and_then(|bytes| {
+        parse_blue_fang_source_document(AssetPath::new(path.to_string_lossy()), &bytes).ok()
+    }) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    collect_declared_ui_template_names_from_source_document_node(&document.root, &mut names);
+    names
 }
 
 fn collect_referenced_ui_template_names_from_source_document_node(

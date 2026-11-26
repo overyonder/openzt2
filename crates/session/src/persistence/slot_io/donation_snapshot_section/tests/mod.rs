@@ -22,10 +22,10 @@ fn completed_categories_survive_capture_binary_restore_and_next_payment() {
     let hippo = AssetId([2; 16]);
     let mut categories = DonationCategoryTotals::default();
     categories
-        .accumulate_completed_donation(lion, Money(499_000))
+        .accumulate_completed_donation(lion, Money::from_cents(499_000))
         .unwrap();
     categories
-        .accumulate_completed_donation(hippo, Money(123_400))
+        .accumulate_completed_donation(hippo, Money::from_cents(123_400))
         .unwrap();
     let mut source = World::new();
     source.spawn((
@@ -61,24 +61,24 @@ fn completed_categories_survive_capture_binary_restore_and_next_payment() {
     state.apply(destination);
     assert_eq!(
         destination.get::<DonationTotal>(acceptor).unwrap().amount,
-        Money(622_400)
+        Money::from_cents(622_400)
     );
     let mut restored = destination
         .get_mut::<DonationCategoryTotals>(acceptor)
         .unwrap();
     restored
-        .accumulate_completed_donation(lion, Money(1_000))
+        .accumulate_completed_donation(lion, Money::from_cents(1_000))
         .unwrap();
     assert_eq!(
         restored.aggregate_for_category(Some(lion)).unwrap(),
         DonationTotal {
-            amount: Money(500_000),
+            amount: Money::from_cents(500_000),
             count: 2
         }
     );
     assert_eq!(
         restored.aggregate_for_category(Some(hippo)).unwrap().amount,
-        Money(123_400)
+        Money::from_cents(123_400)
     );
 }
 
@@ -86,7 +86,7 @@ fn completed_categories_survive_capture_binary_restore_and_next_payment() {
 fn malformed_external_category_rows_cannot_duplicate_completed_donations() {
     let mut categories = DonationCategoryTotals::default();
     categories
-        .accumulate_completed_donation(AssetId([1; 16]), Money(100))
+        .accumulate_completed_donation(AssetId([1; 16]), Money::from_cents(100))
         .unwrap();
     let records = [DonationSnapshotRecord {
         identifier: PersistentId(1),

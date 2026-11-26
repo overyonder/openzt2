@@ -53,6 +53,7 @@ use super::guest_simulation_types::GuestViewingTarget;
 use super::guest_simulation_types::Viewing;
 use super::guest_simulation_types::ViewingOpportunity;
 
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::GuestTourDepartureGate;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::economy::service_types::{FacilityReservations, ServiceReservation};
 
@@ -94,6 +95,7 @@ pub(crate) fn choose_guest_destination(
                 &GuestPhase,
                 Option<&openzt2_zoo_state::guests::guest_simulation_types::GuestDeparturePoints>,
                 &WorldMember,
+                Has<GuestTourDepartureGate>,
             ),
         ),
         (
@@ -139,7 +141,7 @@ pub(crate) fn choose_guest_destination(
         amusement,
         favourite,
         mut rng,
-        (phase, departure_points, world),
+        (phase, departure_points, world, authored_tour),
     ) in &mut guests
     {
         // Admission and departure own navigation until the guest is visiting.
@@ -165,6 +167,9 @@ pub(crate) fn choose_guest_destination(
         let mut viewing_target = None;
         let mut total_weight = 0_u64;
         for weight in weights {
+            if authored_tour && weight.purpose == GuestVisitPurpose::Tour {
+                continue;
+            }
             let need = need_value(
                 &weight.need,
                 hunger,

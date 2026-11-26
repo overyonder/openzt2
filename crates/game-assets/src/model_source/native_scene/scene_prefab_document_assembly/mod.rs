@@ -62,6 +62,7 @@ impl ScenePrefabDocumentAssembler {
             billboards: Vec::new(),
             lights: Vec::new(),
             effects: Vec::new(),
+            terrain_decal: None,
             lods: Vec::new(),
             pending_lods: Vec::new(),
             pending_visibility: Vec::new(),
@@ -125,6 +126,7 @@ impl ScenePrefabDocumentAssembler {
             billboards: Vec::new(),
             lights: Vec::new(),
             effects: Vec::new(),
+            terrain_decal: None,
         });
         self.entity_keys.push(stable_key.to_owned());
         self.names.insert(stable_key.to_owned(), index);
@@ -285,6 +287,11 @@ impl ScenePrefabDocumentAssembler {
     }
     pub(super) fn light(&mut self, entity: u32, light: PrefabLight) {
         self.lights.push((entity, light));
+    }
+    pub(super) fn set_light_targets(&mut self, targets: &BTreeMap<u32, Vec<u32>>) {
+        for (row, light) in &mut self.lights {
+            light.affected_rows = Some(targets.get(row).cloned().unwrap_or_default());
+        }
     }
     pub(super) fn effect(&mut self, entity: u32, effect: PrefabEffect) {
         self.effects.push((entity, effect));

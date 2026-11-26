@@ -54,10 +54,15 @@ pub(in crate::ui_document) async fn lower(
             format!("{}: {}", gap.virtual_path, gap.message),
         )
     })?;
+    let first_person_hotkeys =
+        resolver::gameplay_mode_ui_presentation_source_parsing::lower_first_person_hotkeys(
+            &source_documents,
+        )?;
     let fame_stars =
         resolver::gameplay_mode_ui_presentation_source_parsing::load_authored_fame_star_display(
             &source_documents,
             &documents,
+            archives,
             context,
         )
         .await?;
@@ -65,5 +70,6 @@ pub(in crate::ui_document) async fn lower(
         documents,
         rail_cameras,
         fame_stars,
+        first_person_hotkeys,
     })
 }

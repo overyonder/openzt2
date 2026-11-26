@@ -148,6 +148,9 @@ pub(super) fn dispatch_due_authored_sequence_steps(
                 if active.elapsed_seconds <= due.0.as_secs_f32() {
                     break;
                 }
+                if script.is_some() && active.awaiting_presentation.is_some() {
+                    break;
+                }
                 active.next_step += 1;
                 if let Some(script) = script {
                     if let (Some(scripts), Some(asset)) = (
@@ -157,15 +160,14 @@ pub(super) fn dispatch_due_authored_sequence_steps(
                             .ok()
                             .and_then(|root| assets.as_ref()?.get(&root.document)),
                     ) {
-                        if let Some(invocation) = script.authored_action_records(asset).next() {
+                        if let Some((invocation, handle)) =
+                            script.invocations(asset, UiTrigger::Press).next()
+                        {
                             scripts.write(RunAuthoredUiScript {
                                 action: step,
                                 document_root: *document,
                                 invocation: invocation.clone(),
-                                handle: invocation
-                                    .script
-                                    .and_then(|id| asset.script_handle(id))
-                                    .cloned(),
+                                handle: handle.cloned(),
                                 timed: true,
                             });
                             active.awaiting_script = Some(step);
@@ -178,9 +180,7 @@ pub(super) fn dispatch_due_authored_sequence_steps(
                         node: step,
                         trigger: UiTrigger::Press,
                     });
-                    if active.selection.is_some() {
-                        active.awaiting_presentation = Some(step);
-                    }
+                    active.awaiting_presentation = Some(step);
                 }
             }
         }

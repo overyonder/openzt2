@@ -41,6 +41,7 @@ pub(super) enum ScenarioEntityCommand {
     Need(SetAnimalNeed),
     Crate(Entity),
     Remove(Entity),
+    Name(Entity),
 }
 
 #[derive(Default)]
@@ -131,7 +132,8 @@ impl ScenarioAnimalSpawnSources<'_, '_> {
         let (species, components) = resolve_scripted_animal_spawn(
             species_view,
             kind,
-            definitions.timing().ticks_per_day,
+            openzt2_simulation_time::simulation_time_world_lifecycle::zoo_day_cadence_from_world_definitions(definitions)
+                .ok_or_else(unavailable)?.ticks_per_zoo_day(),
             &mut rng,
         )
         .ok_or_else(|| {
@@ -276,7 +278,7 @@ fn apply_entity_commands(
     mut removals: MessageWriter<
         openzt2_zoo_state::construction::construction_interaction_types::DeleteEntity,
     >,
-    animals: Query<(), (With<Animal>, With<WorldMember>)>,
+    animals: Query<Has<ScriptedCrating>, (With<Animal>, With<WorldMember>)>,
 ) {
     for operation in operations.read() {
         match operation {
@@ -293,8 +295,15 @@ fn apply_entity_commands(
                     ),
                 );
             }
-            ScenarioEntityCommand::Crate(entity) if animals.contains(*entity) => {
-                commands.entity(*entity).insert(ScriptedCrating);
+            ScenarioEntityCommand::Crate(entity)
+                if animals.get(*entity).is_ok_and(|crated| !crated) =>
+            {
+                commands.entity(*entity).insert_if_new(ScriptedCrating);
+            }
+            ScenarioEntityCommand::Name(entity) => {
+                commands.trigger(openzt2_world::world_spawn::generated_entity_name_application::GenerateWorldEntityName {
+                    entity: *entity,
+                });
             }
             _ => {}
         }
@@ -303,11 +312,23 @@ fn apply_entity_commands(
 
 #[derive(SystemParam)]
 pub(super) struct ScenarioLuaDirectAccess<'w, 's> {
+    economy: ParamSet<'w, 's, (
+        openzt2_economy::economy::ScenarioEconomyAccess<'w, 's>,
+        Query<'w, 's, (
+            &'static openzt2_zoo_state::economy::zoo_cash_types::ZooCash,
+            &'static openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice,
+        )>,
+    )>,
+    photo_selection: Query<'w, 's, (
+        &'static mut openzt2_interface_state::photos::photo_challenge_types::CurrentPhotoChallengeSet,
+        &'static openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeCatalogueIndex,
+    )>,
     containers: Query<
         'w,
         's,
         &'static mut openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste,
     >,
+    award_globals: Query<'w, 's, &'static mut openzt2_progression::progression::AwardGlobalVariables>,
     profile: ResMut<
         'w,
         openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
@@ -315,6 +336,50 @@ pub(super) struct ScenarioLuaDirectAccess<'w, 's> {
 }
 
 impl ScenarioLuaDirectAccess<'_, '_> {
+    pub(super) fn economy(
+        &mut self,
+        root: Entity,
+        operation: Option<
+            openzt2_zoo_state::economy::scenario_economy_command_types::ScenarioEconomyOperation,
+        >,
+    ) -> mlua::Result<(
+        openzt2_zoo_state::economy::money_types::Money,
+        openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice,
+    )> {
+        if let Some(operation) = operation {
+            self.economy
+                .p0()
+                .apply(root, operation)
+                .map_err(|reason| mlua::Error::runtime(format!("{reason:?}")))?;
+        }
+        let readers = self.economy.p1();
+        let (cash, admission) = readers
+            .get(root)
+            .map_err(|_| mlua::Error::runtime("zoo economy is unavailable"))?;
+        Ok((cash.0, *admission))
+    }
+
+    pub(super) fn current_photo_set(
+        &mut self,
+        world: Entity,
+        set: Option<AssetId>,
+    ) -> mlua::Result<Option<Entity>> {
+        use openzt2_interface_state::photos::photo_challenge_types::CurrentPhotoChallengeSet;
+        let (mut current, catalogue) = self
+            .photo_selection
+            .get_mut(world)
+            .map_err(|_| mlua::Error::runtime("photo challenge catalogue is unavailable"))?;
+        if let Some(set) = set {
+            let entity = catalogue
+                .sets
+                .get(&set)
+                .copied()
+                .ok_or_else(|| mlua::Error::runtime("unknown photo challenge set"))?;
+            current.set_if_neq(CurrentPhotoChallengeSet(Some(entity)));
+        }
+        Ok(current.0)
+    }
+
     pub(super) fn waste(&mut self, entity: Entity, next: Option<u16>) -> Option<u16> {
         let mut container = self.containers.get_mut(entity).ok()?;
         if let Some(next) = next {
@@ -325,6 +390,25 @@ impl ScenarioLuaDirectAccess<'_, '_> {
                 .set_if_neq(units);
         }
         Some(container.contained_waste_units)
+    }
+
+    pub(super) fn world_variable(
+        &mut self,
+        root: Entity,
+        key: AssetId,
+        value: Option<Option<&str>>,
+    ) -> Option<String> {
+        let mut globals = self.award_globals.get_mut(root).ok()?;
+        match value {
+            Some(Some(value)) if globals.0.get(&key).is_none_or(|current| current != value) => {
+                globals.0.insert(key, value.to_owned());
+            }
+            Some(None) if globals.0.contains_key(&key) => {
+                globals.0.remove(&key);
+            }
+            _ => {}
+        }
+        globals.0.get(&key).cloned()
     }
 
     pub(super) fn profile(

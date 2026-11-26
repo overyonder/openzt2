@@ -11,13 +11,13 @@ use openzt2_game_assets::{
     ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
 };
 use openzt2_game_data::{
+    AssetId,
     localization::LocalizationFormatArgument,
     ui_document::{
         finance_table::{UiFinanceTableCategoryDefinition, UiFinanceTableValueSource},
         node_property_binding::UiTextPropertyBindingSource,
         widget_live_collection::UiWidgetLiveCollectionSource,
     },
-    AssetId,
 };
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::RequestedUiListRowCount;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
@@ -481,12 +481,10 @@ fn select_monthly_finance_category_value(
     let value = match source {
         UiFinanceTableValueSource::AdmissionsCount => return (i64::from(month.total_users), false),
         UiFinanceTableValueSource::AdmissionIncome => month.admission_income,
-        UiFinanceTableValueSource::CashGrants => Money(
-            month.cash_grants.0.saturating_add(
-                (month.month_ordinal == 0)
-                    .then_some(month.opening_cash.0)
-                    .unwrap_or(0),
-            ),
+        UiFinanceTableValueSource::CashGrants => month.cash_grants.saturating_add(
+            (month.month_ordinal == 0)
+                .then_some(month.opening_cash)
+                .unwrap_or(Money::ZERO),
         ),
         UiFinanceTableValueSource::DonationIncome => month.donation_income,
         UiFinanceTableValueSource::FoodDrinkSales => month.food_drink_sales,
@@ -513,9 +511,9 @@ fn select_monthly_finance_category_value(
     );
     (
         if expense {
-            value.0.saturating_neg()
+            super::display_currency_cents(-value)
         } else {
-            value.0
+            super::display_currency_cents(value)
         },
         true,
     )
@@ -528,10 +526,10 @@ mod tests {
     #[test]
     fn report_profit_negates_expense_magnitudes_without_mutating_accounts() {
         let month = MonthlyFinance {
-            animal_adoption: Money(100_000),
-            staff_salaries: Money(70_000),
-            construction: Money(12_000),
-            admission_income: Money(4_000),
+            animal_adoption: Money::from_cents(100_000),
+            staff_salaries: Money::from_cents(70_000),
+            construction: Money::from_cents(12_000),
+            admission_income: Money::from_cents(4_000),
             ..Default::default()
         };
         for (source, expected) in [
@@ -545,7 +543,7 @@ mod tests {
                 (expected, true)
             );
         }
-        assert_eq!(month.animal_adoption, Money(100_000));
+        assert_eq!(month.animal_adoption, Money::from_cents(100_000));
     }
 }
 

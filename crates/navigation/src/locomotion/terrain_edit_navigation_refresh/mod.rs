@@ -120,26 +120,84 @@ pub(super) fn invalidate_routes_after_navigation_geometry_changes(
     mut water_changes: MessageReader<
         super::tank_water_navigation_overlay::TankNavigationWaterChanged,
     >,
-    mut routes: Query<(&mut Route, &mut Destination, &WorldMember)>,
+    graphs: Query<&ActiveTerrainDerivedNavigationGraph>,
+    mut routes: Query<(&mut Route, &mut Destination, &WorldMember, &GlobalTransform)>,
 ) {
-    let changed: bevy::ecs::entity::EntityHashSet = terrain_changes
-        .read()
-        .map(|event| event.root)
-        .chain(path_changes.read().map(|event| event.root))
-        .chain(water_changes.read().map(|event| event.0))
-        .collect();
-    if changed.is_empty() {
+    let mut changed = bevy::ecs::entity::EntityHashMap::<Vec<Rect>>::default();
+    let mut rebuilt = bevy::ecs::entity::EntityHashSet::default();
+    for event in terrain_changes.read() {
+        changed.entry(event.root).or_default().push(event.bounds);
+    }
+    let mut record_cells = |root, cells: &[[u32; 2]]| {
+        let Ok(graph) = graphs.get(root) else {
+            return;
+        };
+        let size = f32::from(
+            graph
+                .terrain_derived_navigation_graph()
+                .terrain_cell_size_centimetres,
+        ) * 0.01;
+        let bounds = changed.entry(root).or_default();
+        bounds.extend(cells.iter().map(|&[x, z]| {
+            let corner = Vec2::new(x as f32, -(z as f32)) * size;
+            Rect::from_corners(corner, corner + Vec2::new(size, -size))
+        }));
+    };
+    for event in path_changes.read() {
+        let cells: Vec<_> = event.changes.affected_cells.iter().copied().collect();
+        record_cells(event.root, &cells);
+    }
+    for event in water_changes.read() {
+        if let Some(cells) = &event.cells {
+            record_cells(event.root, cells);
+        } else {
+            rebuilt.insert(event.root);
+        }
+    }
+    if changed.is_empty() && rebuilt.is_empty() {
         return;
     }
     routes
         .par_iter_mut()
-        .for_each(|(mut route, mut destination, member)| {
-            if !changed.contains(&member.root) {
-                return;
+        .for_each(|(mut route, mut destination, member, transform)| {
+            let affected = changed.get(&member.root).is_some_and(|bounds| {
+                let mut from = transform.translation().xz();
+                route.points.iter().skip(route.cursor).any(|point| {
+                    let to = point.xz();
+                    let intersects = bounds
+                        .iter()
+                        .any(|&area| segment_intersects_rect(from, to, area));
+                    from = to;
+                    intersects
+                })
+            });
+            if affected || rebuilt.contains(&member.root) {
+                route.clear();
+                destination.set_changed();
             }
-            route.clear();
-            destination.set_changed();
         });
+}
+
+fn segment_intersects_rect(from: Vec2, to: Vec2, rect: Rect) -> bool {
+    let delta = to - from;
+    let mut first = 0.0_f32;
+    let mut last = 1.0_f32;
+    for axis in 0..2 {
+        if delta[axis] == 0.0 {
+            if from[axis] < rect.min[axis] || from[axis] > rect.max[axis] {
+                return false;
+            }
+            continue;
+        }
+        let a = (rect.min[axis] - from[axis]) / delta[axis];
+        let b = (rect.max[axis] - from[axis]) / delta[axis];
+        first = first.max(a.min(b));
+        last = last.min(a.max(b));
+        if first > last {
+            return false;
+        }
+    }
+    true
 }
 
 pub(super) fn refresh_terrain_derived_navigation_graph_cells_from_changed_terrain_samples(

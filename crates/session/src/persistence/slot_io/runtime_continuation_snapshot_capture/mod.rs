@@ -1,13 +1,17 @@
 use bevy::ecs::relationship::RelationshipTarget;
 use bevy::{ecs::system::SystemParam, prelude::*};
+use openzt2_animals::{
+    animal_behavior::BreedingCenterEndangeredBirths,
+    animal_lifecycle::egg_incubation_types::EggIncubationState,
+};
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::{
     persistent_id_types::{PersistentId, PersistentIdAllocator},
     world_membership_types::{WorldMember, WorldMembers},
 };
-use openzt2_zoo_state::animal_behavior::{
-    disease_exposure_state::{ActiveZooDisease, DiseaseExposureDeadline, DiseaseResearchFunding},
-    egg_incubation::EggIncubation,
+use openzt2_zoo_state::animal_behavior::disease_exposure_state::{
+    ActiveZooDisease, AssignedDiseaseTarget, AssignedDiseaseTargets, DiseaseExposureDeadline,
+    DiseaseResearchFunding,
 };
 use openzt2_zoo_state::guests::guest_favourite_animal_trend_types::GuestFavouriteAnimalTrend;
 use openzt2_zoo_state::shows::running_show_types::WorldTrickPopularity;
@@ -73,7 +77,6 @@ pub(in crate::persistence) struct RuntimeContinuationSnapshotCapture<'w, 's> {
             &'static openzt2_world_state::world_spawn::world_membership_types::WorldMember,
             &'static Name,
         ),
-        // Guests have no saved records yet, so their names have no owner on load.
         Without<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
     >,
     named_entities: Query<
@@ -83,10 +86,7 @@ pub(in crate::persistence) struct RuntimeContinuationSnapshotCapture<'w, 's> {
             &'static openzt2_world_state::world_spawn::persistent_id_types::PersistentId,
             &'static openzt2_world_state::world_spawn::world_membership_types::WorldMember,
         ),
-        (
-            With<openzt2_zoo_state::entity_naming_types::EntityNameRegistered>,
-            Without<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
-        ),
+        With<openzt2_zoo_state::entity_naming_types::EntityNameRegistered>,
     >,
     favourite_trends: Query<'w, 's, &'static GuestFavouriteAnimalTrend, With<WorldRoot>>,
     domain_roots: Query<
@@ -98,6 +98,7 @@ pub(in crate::persistence) struct RuntimeContinuationSnapshotCapture<'w, 's> {
             Option<&'static DiseaseExposureDeadline>,
             Option<&'static ActiveZooDisease>,
             Option<&'static WorldTrickPopularity>,
+            Option<&'static AssignedDiseaseTargets>,
         ),
         With<WorldRoot>,
     >,
@@ -107,10 +108,34 @@ pub(in crate::persistence) struct RuntimeContinuationSnapshotCapture<'w, 's> {
         (
             &'static PersistentId,
             &'static WorldMember,
-            &'static EggIncubation,
+            &'static EggIncubationState,
+        ),
+    >,
+    disease_assignments: Query<'w, 's, (&'static AssignedDiseaseTarget, &'static ChildOf)>,
+    animal_ids: Query<
+        'w,
+        's,
+        (&'static PersistentId, &'static WorldMember),
+        With<openzt2_zoo_state::animal_lifecycle::types::Animal>,
+    >,
+    breeding_centers: Query<
+        'w,
+        's,
+        (
+            &'static PersistentId,
+            &'static BreedingCenterEndangeredBirths,
+        ),
+    >,
+    filters: Query<
+        'w,
+        's,
+        (
+            &'static PersistentId,
+            &'static openzt2_aquatic::aquatic::water_filter_timing::FilterCleanupInterval,
         ),
     >,
     fossils: super::fossil_continuation_snapshot::CaptureFossilContinuation<'w, 's>,
+    guests: super::guest_continuation_snapshot::GuestContinuationCapture<'w, 's>,
 }
 
 impl RuntimeContinuationSnapshotCapture<'_, '_> {
@@ -136,7 +161,7 @@ impl RuntimeContinuationSnapshotCapture<'_, '_> {
             })
             .collect::<Vec<_>>();
         names.sort_unstable_by_key(|(id, _)| *id);
-        let (members, funding, exposure_deadline, active, popularity) = self
+        let (members, funding, exposure_deadline, active, popularity, assigned) = self
             .domain_roots
             .get(world_root)
             .map_err(|_| Failure::BrokenPersistentEntityReference)?;
@@ -144,19 +169,61 @@ impl RuntimeContinuationSnapshotCapture<'_, '_> {
             .eggs
             .iter_many(members.into_iter().flat_map(RelationshipTarget::iter))
             .flatten()
-            .map(|(id, _, egg)| EggContinuation {
-                id: id.0,
-                amount: egg.amount,
-                remaining_ns: egg.remaining_ns,
-                random: egg.random.to_raw(),
+            .map(|(id, _, egg)| {
+                let (amount, remaining_ns, random) = egg.saved_remaining();
+                EggContinuation {
+                    id: id.0,
+                    amount,
+                    remaining_ns,
+                    random,
+                }
             })
             .collect::<Vec<_>>();
         eggs.sort_unstable_by_key(|egg| egg.id);
+        let mut assignments = Vec::new();
+        if let Some(assigned) = assigned {
+            for assignment in self.disease_assignments.iter_many(assigned.iter()) {
+                let (assignment, parent) =
+                    assignment.map_err(|_| Failure::BrokenPersistentEntityReference)?;
+                let (id, member) = self
+                    .animal_ids
+                    .get(parent.parent())
+                    .map_err(|_| Failure::BrokenPersistentEntityReference)?;
+                if member.root != world_root {
+                    return Err(Failure::BrokenPersistentEntityReference);
+                }
+                assignments.push((id.0, assignment.disease));
+            }
+        }
+        assignments.sort_unstable();
+        let mut breeding_center_births = self
+            .breeding_centers
+            .iter_many(members.into_iter().flat_map(RelationshipTarget::iter))
+            .flatten()
+            .map(|(id, value)| (id.0, value.0))
+            .collect::<Vec<_>>();
+        breeding_center_births.sort_unstable_by_key(|(id, _)| *id);
+        let mut water_filter_cleanup = self
+            .filters
+            .iter_many(members.into_iter().flat_map(RelationshipTarget::iter))
+            .flatten()
+            .map(|(id, timer)| {
+                let ns = u64::try_from(timer.remaining().as_nanos())
+                    .map_err(|_| Failure::CapacityExceeded)?;
+                Ok((id.0, ns))
+            })
+            .collect::<Result<Vec<_>, Failure>>()?;
+        water_filter_cleanup.sort_unstable_by_key(|(id, _)| *id);
         let fossils = self.fossils.capture(world_root, members)?;
+        let guests = self.guests.capture(members)?;
         let domain_continuation = (funding.is_some()
             || exposure_deadline.is_some()
             || active.is_some()
             || !eggs.is_empty()
+            || !assignments.is_empty()
+            || !breeding_center_births.is_empty()
+            || !water_filter_cleanup.is_empty()
+            || !guests.is_empty()
             || fossils.is_some()
             || popularity.is_some_and(|popularity| !popularity.0.is_empty()))
         .then(|| RuntimeDomainContinuation {
@@ -164,8 +231,12 @@ impl RuntimeContinuationSnapshotCapture<'_, '_> {
                 funding: funding.map(|funding| funding.0),
                 exposure_deadline: exposure_deadline.map(|deadline| deadline.0),
                 active: active.map(|active| (active.definition, active.cure_due_tick)),
+                assignments,
             },
             eggs,
+            breeding_center_births,
+            water_filter_cleanup,
+            guests,
             fossils,
             trick_popularity: popularity.map(|popularity| {
                 popularity

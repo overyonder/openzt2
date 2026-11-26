@@ -22,7 +22,8 @@ fn diagonal_enclosure_is_closed_in_both_draw_directions_and_opens_when_a_side_is
     let bounds = IRect::from_corners(IVec2::splat(-2), IVec2::splat(2));
     let closed = derive_enclosed_habitat_regions_from_fence_segments(&segments, bounds);
     assert_eq!(closed.len(), 1);
-    assert_eq!(closed[0].topology_cells.len(), 8);
+    assert_eq!(closed[0].sectors.len(), 32);
+    assert_eq!(closed[0].topology_cells.len(), 12);
     assert_eq!(closed[0].boundary_fence_entities.len(), 4);
     for segment in &mut segments {
         std::mem::swap(

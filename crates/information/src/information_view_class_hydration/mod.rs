@@ -1,10 +1,10 @@
-use bevy::{ecs::entity::EntityHashSet, prelude::*};
+use bevy::{ecs::entity::EntityHashSet, platform::collections::HashSet, prelude::*};
 use openzt2_game_data::{
     ui_document::action::information::InformationViewCategory,
     world_definitions::world_objects::WorldObjectInformationViewClass,
 };
 
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::{WorldDefinitions, WorldDefinitionSourcesPublished};
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
 use openzt2_zoo_state::{
@@ -54,11 +54,21 @@ pub(super) fn hydrate_information_view_classes_from_canonical_world_definitions(
         )>,
     >,
     mut commands: Commands,
+    publication: Option<MessageReader<WorldDefinitionSourcesPublished>>,
 ) {
     let Some(definitions) = active_definitions.get(&assets) else {
         return;
     };
-    let refresh_all = active_definitions.is_changed();
+    let refresh_without_publisher = publication.is_none() && active_definitions.is_changed();
+    let changed: HashSet<_> = publication
+        .into_iter()
+        .flat_map(|mut publications| {
+            publications
+                .read()
+                .flat_map(|event| event.changed_objects.iter().copied())
+                .collect::<Vec<_>>()
+        })
+        .collect();
     let mut dirty = removed
         .0
         .read()
@@ -67,10 +77,13 @@ pub(super) fn hydrate_information_view_classes_from_canonical_world_definitions(
         .chain(removed.3.read())
         .chain(removed.4.read())
         .collect::<EntityHashSet>();
-    if refresh_all {
-        dirty.extend(classes.iter().map(|(entity, ..)| entity));
-    } else {
-        dirty.extend(sources_changed.iter());
+    dirty.extend(sources_changed.iter());
+    if refresh_without_publisher || !changed.is_empty() {
+        dirty.extend(classes.iter().filter_map(|(entity, inspectable, ..)| {
+            (refresh_without_publisher
+                || inspectable.is_some_and(|subject| changed.contains(&subject.definition)))
+            .then_some(entity)
+        }));
     }
     let mut subjects = classes.iter_many_mut(dirty);
     while let Some(row) = subjects.fetch_next() {

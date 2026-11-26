@@ -1,5 +1,6 @@
 //! Scene-prefab asset registration.
 
+mod authored_physical_scene_loading;
 pub mod transform_animation_lowering;
 
 use bevy::{
@@ -9,8 +10,8 @@ use bevy::{
 };
 use openzt2_game_data::{
     scene_prefab::{
-        PrefabRenderLodPolicy, PrefabRenderLodSource, ScenePrefabAssetDependencyKind,
-        ScenePrefabDocument,
+        PrefabAnimationStart, PrefabRenderLodPolicy, PrefabRenderLodSource, PrefabRenderable,
+        ScenePrefabAssetDependencyKind, ScenePrefabDocument,
     },
     AssetId,
 };
@@ -68,9 +69,28 @@ pub struct ScenePrefabAsset {
     collider_models: Box<[(AssetId, Handle<Gltf>)]>,
     material_paths: Box<[(AssetId, Box<str>)]>,
     effects: Box<[(AssetId, Handle<ParticleEffectDocumentAsset>)]>,
-    animations: Box<[(AssetId, Handle<AnimationSetAsset>)]>,
+    #[dependency]
+    animations: BTreeMap<usize, Vec<Option<ScenePrefabAnimationBinding>>>,
     #[dependency]
     motion: Vec<PrefabMotion>,
+    ground_fit_height_offset_m: Option<f32>,
+    #[dependency]
+    terrain_decal: Option<ScenePrefabTerrainDecal>,
+}
+
+#[derive(Debug, bevy::asset::VisitAssetDependencies)]
+struct ScenePrefabAnimationBinding {
+    #[dependency]
+    set: Handle<AnimationSetAsset>,
+    start: Option<PrefabAnimationStart>,
+}
+
+#[derive(Debug, bevy::asset::VisitAssetDependencies)]
+pub struct ScenePrefabTerrainDecal {
+    pub texture: AssetId,
+    pub lighting_colors: [Option<[u8; 3]>; 4],
+    #[dependency]
+    pub image: Handle<Image>,
 }
 
 impl ScenePrefabAsset {
@@ -83,8 +103,10 @@ impl ScenePrefabAsset {
             collider_models: Box::new([]),
             material_paths: Box::new([]),
             effects: Box::new([]),
-            animations: Box::new([]),
+            animations: BTreeMap::new(),
             motion: Vec::new(),
+            ground_fit_height_offset_m: None,
+            terrain_decal: None,
         }
     }
 
@@ -127,10 +149,57 @@ impl ScenePrefabAsset {
         find_loaded_dependency_handle_by_asset_id(&self.effects, asset_id)
     }
 
-    pub fn loaded_animation_set_asset_handles(
+    pub fn ground_fit_height_offset_m(&self) -> Option<f32> {
+        self.ground_fit_height_offset_m
+    }
+
+    pub fn terrain_decal_texture(&self, texture: AssetId) -> Option<&Handle<Image>> {
+        self.terrain_decal
+            .as_ref()
+            .filter(|decal| decal.texture == texture)
+            .map(|decal| &decal.image)
+    }
+
+    pub fn terrain_decal_lighting(&self, texture: AssetId) -> Option<&[Option<[u8; 3]>; 4]> {
+        self.terrain_decal
+            .as_ref()
+            .filter(|decal| decal.texture == texture)
+            .map(|decal| &decal.lighting_colors)
+    }
+
+    pub fn bind_animation_set_to_renderable(
+        &mut self,
+        row: usize,
+        renderable: usize,
+        animation_set: Handle<AnimationSetAsset>,
+        start: Option<PrefabAnimationStart>,
+    ) {
+        let bindings = self.animations.entry(row).or_default();
+        bindings.resize_with(self.document.entities[row].renderables.len(), || None);
+        bindings[renderable] = Some(ScenePrefabAnimationBinding {
+            set: animation_set,
+            start,
+        });
+    }
+
+    fn renderable_index(&self, row: usize, renderable: &PrefabRenderable) -> Option<usize> {
+        self.document
+            .entities
+            .get(row)?
+            .renderables
+            .iter()
+            .position(|candidate| std::ptr::eq(candidate, renderable))
+    }
+
+    pub fn loaded_animation_set_asset_handles_for_renderable(
         &self,
+        row: usize,
+        renderable: &PrefabRenderable,
     ) -> impl Iterator<Item = &Handle<AnimationSetAsset>> {
-        self.animations.iter().map(|(_, handle)| handle)
+        self.renderable_index(row, renderable)
+            .and_then(|index| self.animations.get(&row)?.get(index)?.as_ref())
+            .map(|binding| &binding.set)
+            .into_iter()
     }
 
     pub fn authored_animation_start_for_renderable(
@@ -138,13 +207,15 @@ impl ScenePrefabAsset {
         row: usize,
         renderable: &openzt2_game_data::scene_prefab::PrefabRenderable,
     ) -> Option<&openzt2_game_data::scene_prefab::PrefabAnimationStart> {
-        let entity = self.canonical_scene_prefab_document().entities.get(row)?;
-        entity
-            .renderables
-            .iter()
-            .any(|candidate| std::ptr::eq(candidate, renderable))
-            .then_some(entity.animation_start.as_ref())
-            .flatten()
+        let index = self.renderable_index(row, renderable)?;
+        match self
+            .animations
+            .get(&row)
+            .and_then(|bindings| bindings.get(index)?.as_ref())
+        {
+            Some(binding) => binding.start.as_ref(),
+            None => self.document.entities[row].animation_start.as_ref(),
+        }
     }
 
     pub fn motion_for_row(&self, index: usize) -> Option<&PrefabMotion> {
@@ -174,11 +245,6 @@ pub fn create_scene_prefab_asset_and_load_dependencies(
         &document,
         ScenePrefabAssetDependencyKind::Effect,
     );
-    let animations = load_scene_prefab_dependencies_of_asset_kind(
-        load_context,
-        &document,
-        ScenePrefabAssetDependencyKind::Animation,
-    );
     let motion = document
         .entities
         .iter_mut()
@@ -192,8 +258,10 @@ pub fn create_scene_prefab_asset_and_load_dependencies(
         collider_models,
         material_paths,
         effects,
-        animations,
+        animations: BTreeMap::new(),
         motion,
+        ground_fit_height_offset_m: None,
+        terrain_decal: None,
     }
 }
 
@@ -324,6 +392,7 @@ pub struct ScenePrefabAssetPlugin;
 
 impl Plugin for ScenePrefabAssetPlugin {
     fn build(&self, app: &mut App) {
-        app.init_asset::<ScenePrefabAsset>();
+        app.init_asset::<ScenePrefabAsset>()
+            .init_asset_loader::<authored_physical_scene_loading::AuthoredPhysicalSceneLoader>();
     }
 }

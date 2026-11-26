@@ -32,31 +32,39 @@ pub(super) fn annotate_ui_source_script_dependencies(
     scripts: &BTreeMap<String, String>,
 ) -> Option<OrderedSourceDocument> {
     fn annotate(
-        node: &mut OrderedSourceDocumentNode,
+        source: &OrderedSourceDocumentNode,
         prefix: &str,
         scripts: &BTreeMap<String, String>,
-    ) {
-        if node.attribute("msg") == Some("ZT_RUN_SCRIPT") {
-            if let Some(reference) = node.attribute("string").and_then(ui_script_reference) {
+    ) -> OrderedSourceDocumentNode {
+        let mut attributes = source.attributes.clone();
+        if source.attribute("msg") == Some("ZT_RUN_SCRIPT") {
+            attributes.retain(|attribute| attribute.name() != SELECTED_SCRIPT_PATH_ATTRIBUTE);
+            if let Some(reference) = script_payload(source).and_then(ui_script_reference) {
                 let key = AssetPath::new(reference).key();
                 if let Some(winner) = scripts.get(&format!("{prefix}{key}")) {
-                    node.attributes
-                        .retain(|attribute| attribute.name() != SELECTED_SCRIPT_PATH_ATTRIBUTE);
-                    node.attributes.push(OrderedSourceDocumentAttribute::new_synthetic_ordered_source_document_attribute(
+                    attributes.push(OrderedSourceDocumentAttribute::new_synthetic_ordered_source_document_attribute(
                         SELECTED_SCRIPT_PATH_ATTRIBUTE, winner.as_str(),
                     ));
                 }
             }
         }
-        if !node.child_items().is_empty() {
-            let mut children = node.child_items().to_vec();
-            for child in &mut children {
-                if let OrderedSourceDocumentChild::Element(child) = child {
-                    annotate(child, prefix, scripts);
+        let children = source
+            .child_items()
+            .iter()
+            .map(|child| match child {
+                OrderedSourceDocumentChild::Element(node) => {
+                    OrderedSourceDocumentChild::Element(Box::new(annotate(node, prefix, scripts)))
                 }
-            }
-            node.children =
-                OrderedSourceDocumentChildren::from_ordered_source_document_child_items(children);
+                child => child.clone(),
+            })
+            .collect();
+        OrderedSourceDocumentNode {
+            name: source.name.clone(),
+            attributes,
+            children: OrderedSourceDocumentChildren::from_ordered_source_document_child_items(
+                children,
+            ),
+            span: source.span,
         }
     }
     let prefix = format!("{}\0", document.path.key());
@@ -64,13 +72,19 @@ pub(super) fn annotate_ui_source_script_dependencies(
     if !first.starts_with(&prefix) {
         return None;
     }
-    let mut annotated = document.clone();
-    annotate(&mut annotated.root, &prefix, scripts);
-    Some(annotated)
+    Some(OrderedSourceDocument {
+        path: document.path.clone(),
+        format: document.format,
+        root: annotate(&document.root, &prefix, scripts),
+    })
 }
 
 fn ui_script_reference(command: &str) -> Option<&str> {
-    command.split(' ').filter(|token| !token.is_empty()).nth(1)
+    command.split_ascii_whitespace().nth(1)
+}
+
+fn script_payload(node: &OrderedSourceDocumentNode) -> Option<&str> {
+    node.attribute("string").or_else(|| node.attribute("value"))
 }
 
 pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
@@ -84,9 +98,8 @@ pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
         resolved_dependencies: &mut UiResolvedDependencies,
     ) {
         if source_document_node.attribute("msg") == Some("ZT_RUN_SCRIPT") {
-            if let Some(reference) = source_document_node
-                .attribute("string")
-                .and_then(ui_script_reference)
+            if let Some(reference) =
+                script_payload(source_document_node).and_then(ui_script_reference)
             {
                 if let Some(winner) = asset_archives
                     .resolve_script_reference(Path::new(source_document_path), reference)

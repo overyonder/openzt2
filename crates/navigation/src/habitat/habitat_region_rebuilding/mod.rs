@@ -19,9 +19,9 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use super::habitat_fence_inputs::{
     HabitatBoundaryRaster, HabitatFenceIncidences, HabitatFenceLattice,
 };
-use super::habitat_membership_and_containment::HabitatCellOwnershipChanged;
+use super::habitat_membership_and_containment::HabitatCellSectors;
 use crate::habitat::habitat_region_derivation::{
-    connected_cardinal_fence_components, derive_enclosed_habitats,
+    connected_fence_components, derive_enclosed_habitats,
 };
 use crate::habitat::habitat_terrain_summary_calculation::calculate_habitat_terrain_summary_from_topology_cells;
 use crate::habitat::habitat_terrain_summary_refresh::derive_dominant_habitat_climate;
@@ -29,7 +29,6 @@ use crate::habitat::habitat_terrain_summary_refresh::read_terrain_fact_for_topol
 use openzt2_zoo_state::habitat::habitat_topology_cell_queries::sorted_topology_cells_contain_cell;
 use openzt2_zoo_state::habitat::habitat_types::HabitatChanged;
 use openzt2_zoo_state::habitat::habitat_types::HabitatClimate;
-use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
 use openzt2_zoo_state::habitat::habitat_types::RebuildHabitatRegionsWithinTopologyBounds;
@@ -93,6 +92,8 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
         With<WorldRoot>,
     >,
     habitat_children: Query<&Children>,
+    cell_owners: Query<&HabitatCellOf>,
+    mut sector_owners: Query<&mut HabitatCellSectors>,
     boundary_links: Query<&HabitatBoundaryFence>,
     mut existing_habitats: Query<
         (
@@ -138,19 +139,31 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
         let nearby = IRect::from_corners(bounds.min - IVec2::ONE, bounds.max + IVec2::ONE);
         for y in nearby.min.y..=nearby.max.y {
             for x in nearby.min.x..=nearby.max.x {
-                let Some(habitat) = habitat_index.habitat_for_topology_cell(IVec2::new(x, y))
-                else {
+                let Some(cell) = habitat_index.cell_at(IVec2::new(x, y)) else {
                     continue;
                 };
-                if affected.insert(habitat) {
-                    if let Ok((_, region, ..)) = existing_habitats.get(habitat) {
-                        if let Some(footprint) = calculate_topology_cell_bounds_of_cells(
-                            region.topology_cells.iter().copied(),
-                        ) {
-                            bounds = bounds.union(IRect::from_corners(
-                                footprint.min,
-                                footprint.max + IVec2::ONE,
-                            ));
+                let owners = sector_owners.get(cell).ok().map_or_else(
+                    || {
+                        [
+                            cell_owners.get(cell).ok().map(|owner| owner.0),
+                            None,
+                            None,
+                            None,
+                        ]
+                    },
+                    |sectors| sectors.0,
+                );
+                for habitat in owners.into_iter().flatten() {
+                    if affected.insert(habitat) {
+                        if let Ok((_, region, ..)) = existing_habitats.get(habitat) {
+                            if let Some(footprint) = calculate_topology_cell_bounds_of_cells(
+                                region.topology_cells.iter().copied(),
+                            ) {
+                                bounds = bounds.union(IRect::from_corners(
+                                    footprint.min,
+                                    footprint.max + IVec2::ONE,
+                                ));
+                            }
                         }
                     }
                 }
@@ -187,7 +200,7 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
             break;
         }
     }
-    let components = connected_cardinal_fence_components(&loaded_fences);
+    let components = connected_fence_components(&loaded_fences);
     // Nested or overlapping boundary components must share an outside flood.
     // Disjoint bounds can be solved independently without altering cell order.
     let mut groups: Vec<(IRect, Vec<_>)> = Vec::new();
@@ -228,19 +241,14 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
         .collect::<Vec<_>>();
     affected_existing_habitats.sort_unstable_by_key(|(entity, _)| entity.to_bits());
     let mut reused_existing_habitats = vec![false; affected_existing_habitats.len()];
-    let mut previous_cell_owners = bevy::platform::collections::HashMap::<IVec2, Entity>::default();
-
-    for (habitat_entity, topology_cells) in &affected_existing_habitats {
-        for topology_cell in topology_cells.iter() {
-            if let Some(owner) = habitat_index.habitat_for_topology_cell(*topology_cell) {
-                previous_cell_owners.insert(*topology_cell, owner);
-            }
-            habitat_index
-                .remove_habitat_for_topology_cell_if_it_matches(*topology_cell, *habitat_entity);
+    let mut changed_sectors =
+        bevy::platform::collections::HashMap::<IVec2, [Option<Entity>; 4]>::new();
+    for (_, topology_cells) in &affected_existing_habitats {
+        for &coordinate in topology_cells {
+            changed_sectors.insert(coordinate, [None; 4]);
         }
     }
 
-    let mut changed_cells = Vec::new();
     for derived_region in derived_regions {
         let habitat_entity = find_best_reusable_habitat_region_index(
             &derived_region.topology_cells,
@@ -263,9 +271,14 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
                 &terrain_chunks,
             )
         };
+        let sector_cells: Vec<_> = derived_region
+            .sectors
+            .iter()
+            .map(|&(cell, _)| cell)
+            .collect();
         let habitat_summary = calculate_habitat_terrain_summary_from_topology_cells(
-            &derived_region.topology_cells,
-            topology_cell_area_square_metres,
+            &sector_cells,
+            topology_cell_area_square_metres / 4.0,
             derived_region.boundary_is_breached,
             &mut read_terrain_cell_fact,
         );
@@ -276,14 +289,13 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
         );
         let habitat_region = HabitatRegion {
             area_square_metres: topology_cell_area_square_metres
-                * derived_region.topology_cells.len() as f32,
+                * derived_region.sectors.len() as f32
+                / 4.0,
             topology_cells: derived_region.topology_cells.into_boxed_slice(),
         };
-        for topology_cell in habitat_region.topology_cells.iter().copied() {
-            if previous_cell_owners.remove(&topology_cell) != Some(habitat_entity) {
-                changed_cells.push(topology_cell);
-            }
-            habitat_index.record_habitat_for_topology_cell(topology_cell, habitat_entity);
+        for (tile, side) in derived_region.sectors {
+            changed_sectors.entry(tile).or_insert([None; 4])[usize::from(side / 2)] =
+                Some(habitat_entity);
         }
         let habitat_climate = derive_dominant_habitat_climate(&habitat_summary, world_definitions);
         let member = WorldMember { root: world_root };
@@ -338,6 +350,49 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
         });
     }
 
+    let mut changed_cells = Vec::new();
+    let mut changed_sectors: Vec<_> = changed_sectors.into_iter().collect();
+    changed_sectors.sort_unstable_by_key(|(tile, _)| (tile.x, tile.y));
+    for (coordinate, desired) in changed_sectors {
+        let mut centre_owner = desired[3];
+        let uniform = desired.iter().all(|&owner| owner == centre_owner);
+        let cell = match habitat_index.cell_at(coordinate) {
+            Some(cell) => cell,
+            None if desired.into_iter().any(|owner| owner.is_some()) => {
+                let cell = commands
+                    .spawn((HabitatGridCell(coordinate), ChildOf(world_root)))
+                    .id();
+                habitat_index.record_cell(coordinate, cell);
+                cell
+            }
+            None => continue,
+        };
+        if !uniform {
+            let updated = HabitatCellSectors(desired);
+            if let Ok(mut current) = sector_owners.get_mut(cell) {
+                if current.set_if_neq(updated) {
+                    changed_cells.push(coordinate);
+                }
+            } else {
+                commands.entity(cell).insert(updated);
+                changed_cells.push(coordinate);
+            }
+        } else if sector_owners.contains(cell) {
+            commands.entity(cell).remove::<HabitatCellSectors>();
+            changed_cells.push(coordinate);
+        }
+        // Whole-cell consumers use the centre sector when querying a cut cell.
+        let old = cell_owners.get(cell).ok().map(|current| current.0);
+        if old != centre_owner {
+            if let Some(owner) = centre_owner.take() {
+                commands.entity(cell).insert(HabitatCellOf(owner));
+            } else {
+                commands.entity(cell).remove::<HabitatCellOf>();
+            }
+            changed_cells.push(coordinate);
+        }
+    }
+    changed_cells.dedup();
     for (existing_habitat_index, (habitat_entity, _)) in
         affected_existing_habitats.iter().enumerate()
     {
@@ -349,7 +404,6 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
             commands.entity(*habitat_entity).despawn();
         }
     }
-    changed_cells.extend(previous_cell_owners.into_keys());
     if !changed_cells.is_empty() {
         cell_changes.write(HabitatCellOwnershipChanged {
             root: world_root,

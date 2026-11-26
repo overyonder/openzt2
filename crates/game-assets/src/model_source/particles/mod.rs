@@ -2,7 +2,7 @@ use openzt2_game_data::{
     particle::{
         legacy_nif_particle_effect::{
             LegacyNifParticleColorKey as ColorKey, LegacyNifParticleEffect as ParticleEffect,
-            LegacyNifParticleModifier as Modifier,
+            LegacyNifParticleModifier as Modifier, LegacyNifParticleSpawnPolicy,
         },
         ParticleEffectDocument,
     },
@@ -111,12 +111,29 @@ fn lower(
             },
         )
     })?;
-    let modifiers = modifiers(document, controller_ref, controller.particle_extra_ref)?;
+    let mut rules = modifiers(document, controller_ref, controller.particle_modifier_ref)?;
+    rules.extend(modifiers(
+        document,
+        controller_ref,
+        controller.collider_ref,
+    )?);
     let identity = AssetId::from_key(&format!(
         "{}.__effect/nif_{block:08x}",
         document.source_path.to_ascii_lowercase()
     ));
     let model = document.source_path.as_str().to_owned();
+    let emit_rate = if controller.use_birth_rate {
+        controller.emit_rate
+    } else {
+        let emission_duration = (controller.controller.stop_time
+            - controller.controller.start_time)
+            .min(controller.lifetime);
+        if emission_duration > 0.0 {
+            controller.particles.len() as f32 / emission_duration
+        } else {
+            0.0
+        }
+    };
     Ok(ParticleEffect {
         effect_id: identity,
         emitter_id: identity,
@@ -124,7 +141,7 @@ fn lower(
         source_block: block,
         capacity,
         particle_radius,
-        emit_rate: controller.emit_rate,
+        emit_rate,
         controller_clock: controller.controller.prefab_clock(),
         emit_start_seconds: controller.emit_start_time,
         emit_stop_seconds: controller.emit_stop_time,
@@ -146,7 +163,15 @@ fn lower(
         start_random: controller.start_random,
         emitter_block: controller.emitter_ref,
         mesh_particles,
-        modifiers,
+        modifiers: rules,
+        spawn_policy: LegacyNifParticleSpawnPolicy {
+            maximum_generation: controller.spawn_generations,
+            probability: controller.spawn_probability,
+            multiplier: controller.spawn_multiplier,
+            speed_chaos: controller.spawn_speed_chaos,
+            direction_chaos: controller.spawn_direction_chaos,
+            on_death: controller.spawn_on_death,
+        },
     })
 }
 

@@ -3,14 +3,14 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::ui_document::action::UiTrigger;
-use openzt2_game_data::{species::Sex, AssetId};
+use openzt2_game_data::{AssetId, species::Sex};
 use openzt2_world_state::game_session_types::WorldSessionMode;
 use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_animals::animal_lifecycle::adoption_offer_types::{
-    AdoptionOfferRandom, AdoptionOfferOption, AdoptionOfferOptions, AdoptionOfferSupply, AdoptionOfferUnlocked, CurrentAdoptionOffer,
+    AdoptionOfferCooldown, AdoptionOfferRandom, AdoptionOfferOption, AdoptionOfferOptions, AdoptionOfferSupply, AdoptionOfferUnlocked, CurrentAdoptionOffer,
 };
 use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::AnimalCatalogueGender;
 use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::BeginAnimalAdoptionPlacement;
@@ -121,6 +121,7 @@ pub(crate) struct AdoptionCatalogueOffers<'w, 's> {
         (
             &'static AdoptionOfferOption,
             Option<Ref<'static, CurrentAdoptionOffer>>,
+            Option<Ref<'static, AdoptionOfferCooldown>>,
         ),
     >,
     supplies: Query<
@@ -132,6 +133,7 @@ pub(crate) struct AdoptionCatalogueOffers<'w, 's> {
         ),
     >,
     removed_offers: RemovedComponents<'w, 's, CurrentAdoptionOffer>,
+    removed_cooldowns: RemovedComponents<'w, 's, AdoptionOfferCooldown>,
 }
 
 fn offer_is_actionable(offer: &AdoptionOfferSupply, sex: Sex, unlocked: bool) -> bool {
@@ -174,7 +176,10 @@ pub(crate) fn select_first_available_species_after_adoption_catalogue_and_offer_
             .options
             .iter_many(members.iter())
             .flatten()
-            .filter_map(|(option, current)| {
+            .filter_map(|(option, current, cooldown)| {
+                if cooldown.is_some() {
+                    return None;
+                }
                 let (supply, unlocked) = offers.supplies.get(*current?.collection()).ok()?;
                 offer_is_actionable(&supply, sex, unlocked.is_some()).then_some((
                     option.slot,
@@ -270,12 +275,12 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
             Entity,
             &Name,
             &UiDocumentOwner,
-            Option<&AdoptionRowEntry>,
+            Option<&mut AdoptionRowEntry>,
             Option<&mut ImageNode>,
             Option<&mut UiInteractionEnabled>,
             Option<&mut UiSelected>,
-            Option<&UiShortTooltipKey>,
-            Option<&UiLongTooltipKey>,
+            Option<&mut UiShortTooltipKey>,
+            Option<&mut UiLongTooltipKey>,
             &mut Visibility,
         ),
         (Without<UiListRow>, Without<UiVisualLayer>),
@@ -295,14 +300,16 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
         return;
     };
     let removed_offer = offers.removed_offers.read().count() != 0;
+    let removed_cooldown = offers.removed_cooldowns.read().count() != 0;
     let Ok((_, random, members)) = offers.roots.single() else {
         return;
     };
     let mut offers_changed = removed_offer
+        || removed_cooldown
         || random.is_added()
         || members.as_ref().is_some_and(|members| members.is_changed());
     let mut slots = Vec::<[Option<(Ref<AdoptionOfferSupply>, bool)>; 2]>::new();
-    for (option, current) in offers
+    for (option, current, cooldown) in offers
         .options
         .iter_many(
             members
@@ -313,6 +320,7 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
         .flatten()
     {
         let slot = usize::from(option.slot);
+        offers_changed |= cooldown.as_ref().is_some_and(Ref::is_added);
         if slots.len() <= slot {
             slots.resize_with(slot + 1, || [None, None]);
         }
@@ -326,7 +334,7 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
                     .as_ref()
                     .is_some_and(|unlocked| unlocked.is_added());
             if let Some(entry) = slots[slot].get_mut(usize::from(option.option)) {
-                *entry = Some((supply, unlocked.is_some()));
+                *entry = Some((supply, unlocked.is_some() && cooldown.is_none()));
             }
         }
     }
@@ -382,10 +390,18 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
                 let long_tooltip_key =
                     locked_adoption_slot_long_tooltip_key(configuration, usize::from(row.index));
                 let mut entity_commands = commands.entity(icon_entity);
-                if short_tooltip.is_none_or(|key| key.0 != short_tooltip_key) {
+                if let Some(mut key) = short_tooltip {
+                    if key.0 != short_tooltip_key {
+                        key.0 = short_tooltip_key;
+                    }
+                } else {
                     entity_commands.insert(UiShortTooltipKey(short_tooltip_key));
                 }
-                if long_tooltip.is_none_or(|key| key.0 != long_tooltip_key) {
+                if let Some(mut key) = long_tooltip {
+                    if key.0 != long_tooltip_key {
+                        key.0 = long_tooltip_key;
+                    }
+                } else {
                     entity_commands.insert(UiLongTooltipKey(long_tooltip_key));
                 }
             }
@@ -467,18 +483,15 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
                 &mut visual_images,
             );
         }
-        if catalogue_content_changed
-            || bound_entry.is_none_or(|bound_entry| {
-                bound_entry.species != species_identifier
-                    || bound_entry.offer_slot_index != offer_slot_index
-                    || usize::from(bound_entry.offer_option_index) != option_index
-            })
-        {
-            commands.entity(icon_entity).insert(AdoptionRowEntry {
-                species: species_identifier,
-                offer_slot_index,
-                offer_option_index: option_index as u8,
-            });
+        let entry = AdoptionRowEntry {
+            species: species_identifier,
+            offer_slot_index,
+            offer_option_index: option_index as u8,
+        };
+        if let Some(mut current) = bound_entry {
+            current.set_if_neq(entry);
+        } else {
+            commands.entity(icon_entity).insert(entry);
         }
     }
 }

@@ -3,24 +3,25 @@
 use std::{io, path::Path};
 
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 use openzt2_game_data::AssetId;
 
 use super::{
     world_scenario_document_asset_and_dependency_handles::{
-        DemandLoadedAssetHandle, DemandLoadedAssetPath, WorldScenarioDocumentAsset,
+        DemandLoadedAssetHandle, DemandLoadedAssetPath, ScenarioScriptDependencies,
+        WorldScenarioDocumentAsset,
     },
     world_scenario_source_reference_resolution::{SourceReference, SourceReferenceKind},
 };
 
 use crate::{
     asset_source::{
-        archive_entry_asset_path::{
-            archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION,
-        },
         AssetArchives,
+        archive_entry_asset_path::{
+            ARCHIVE_ENTRY_ASSET_EXTENSION, archive_entry_asset_source_path,
+        },
     },
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
@@ -38,6 +39,27 @@ impl FromWorld for WorldScenarioDocumentLoader {
             archives: world.resource::<AssetArchives>().clone(),
         }
     }
+}
+
+pub(super) fn scenario_manager_asset_path(
+    archives: &AssetArchives,
+    path: &str,
+) -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(AssetPath::new(path).key());
+    archives
+        .resolved_winning_entry(&path)
+        .filter(|winner| winner.normalized_asset_path == path)
+        .map_or(path, |winner| {
+            crate::asset_source::archive_entry_asset_path::archive_entry_asset_path(&winner)
+        })
+}
+
+pub fn load_scenario_manager_from_path(
+    archives: &AssetArchives,
+    server: &AssetServer,
+    path: &str,
+) -> Handle<WorldScenarioDocumentAsset> {
+    server.load(scenario_manager_asset_path(archives, path))
 }
 
 impl AssetLoader for WorldScenarioDocumentLoader {
@@ -161,16 +183,28 @@ impl AssetLoader for WorldScenarioDocumentLoader {
         let photo_scripts = super::world_scenario_script_dependency_loading::load_photo_challenge_script_dependencies(
             &document,&self.archives,&path,context,
         );
+        let manager = (source.root.name.rsplit(':').next() == Some("ZTScenarioMgr"))
+            .then(|| document.scenarios.first().map(|record| record.id))
+            .flatten();
+        let mode_economy =
+            super::original_saved_world_configuration_loading::load_world_mode_economy_policy(
+                source,
+                &self.archives,
+                context,
+            )
+            .await?;
         Ok(WorldScenarioDocumentAsset {
             document,
             authored,
+            manager,
+            mode_economy,
             starting_zoos,
             campaign_scenarios: campaign_scenarios.into_boxed_slice(),
             terrains: terrains.into_boxed_slice(),
             restored_terrain: None,
             scenes: scenes.into_boxed_slice(),
             textures: textures.into_boxed_slice(),
-            scripts,
+            scripts: ScenarioScriptDependencies::new(scripts),
             photo_scripts,
         })
     }

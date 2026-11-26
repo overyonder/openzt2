@@ -51,9 +51,11 @@ use world_object_targets::{
 };
 use openzt2_zoo_state::animal_behavior::behavior_token_types::{BehaviorSelfToken, ClaimedBehaviorSelfToken};
 
-#[derive(Default)]
+#[derive(Resource, Default, PartialEq)]
 pub(super) struct AnimalSubjectTaskIndex {
     by_variant:
+        bevy::platform::collections::HashMap<AssetId, Vec<(Handle<BehaviorDocumentAsset>, usize)>>,
+    ambient:
         bevy::platform::collections::HashMap<AssetId, Vec<(Handle<BehaviorDocumentAsset>, usize)>>,
 }
 
@@ -82,11 +84,80 @@ pub(super) struct PendingAnimalTaskStart {
     delay_ticks: Option<u64>,
 }
 
+pub(super) fn refresh_animal_subject_tasks(
+    documents: Res<LoadedBehaviorDocumentCollection>,
+    assets: Res<Assets<BehaviorDocumentAsset>>,
+    world_assets: Res<Assets<WorldDefinitionAsset>>,
+    world_definitions: Res<WorldDefinitions>,
+    species_assets: Res<Assets<SpeciesAsset>>,
+    species_index: Res<SpeciesAssets>,
+    mut index: ResMut<AnimalSubjectTaskIndex>,
+) {
+    if !(documents.is_changed() || assets.is_changed() || species_assets.is_changed() || species_index.is_changed() || world_assets.is_changed() || world_definitions.is_changed()) {
+        return;
+    }
+    let mut next = AnimalSubjectTaskIndex::default();
+    if let (Some(view), Some(species)) = (
+        documents.create_declaration_index_view(&assets),
+        species_index.get(&species_assets),
+    ) {
+        for definition in species.species() {
+            for variant in species.variants(definition.id) {
+                let authored_types = &variant.behavior_subject_type_identifiers;
+                let declarations = view
+                    .behavior_tasks()
+                    .filter(|(_, _, task)| {
+                        task_has_typed_subject_and_target(task)
+                            && candidate_requirements_are_satisfied(
+                                &task.candidate_eligibility_requirements,
+                                |role, required| {
+                                    role != BehaviorCandidateRole::Subject
+                                        || animal_subject_type_can_match(
+                                            required,
+                                            authored_types,
+                                            definition.id,
+                                            variant.id,
+                                        )
+                                },
+                                |_, _| true,
+                            )
+                    })
+                    .map(|(document, index, _)| (document.clone(), index))
+                    .collect();
+                next.by_variant.insert(variant.id, declarations);
+            }
+        }
+    }
+    if let (Some(view), Some(definitions)) = (
+        documents.create_declaration_index_view(&assets),
+        world_definitions.get(&world_assets),
+    ) {
+        let self_tasks = view.behavior_tasks().filter(|(_, _, task)| {
+            task_has_typed_subject_and_target(task)
+                && task.targets.iter().any(|target| target.eq_ignore_ascii_case("self"))
+        }).collect::<Vec<_>>();
+        let ambient_types = ["ambient_air", "ambient_ground", "ambient_water"].map(AssetId::from_key);
+        for object in definitions.objects().filter(|object| {
+            ambient_types.iter().any(|tag| object.behavior_type_identifiers.contains(tag))
+        }) {
+            let declarations = self_tasks.iter().filter(|(_, _, task)| {
+                candidate_requirements_are_satisfied(
+                    &task.candidate_eligibility_requirements,
+                    |role, required| ambient_role_matches(object, role, required),
+                    |_, _| true,
+                )
+            }).map(|(handle, declaration, _)| ((*handle).clone(), *declaration)).collect();
+            next.ambient.insert(object.id, declarations);
+        }
+    }
+    index.set_if_neq(next);
+}
+
 pub(super) fn select_idle_animal_tasks(
-    (documents, assets, mut subject_tasks): (
+    (documents, assets, subject_tasks): (
         Res<LoadedBehaviorDocumentCollection>,
         Res<Assets<BehaviorDocumentAsset>>,
-        Local<AnimalSubjectTaskIndex>,
+        Res<AnimalSubjectTaskIndex>,
     ),
     world_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
@@ -118,19 +189,9 @@ pub(super) fn select_idle_animal_tasks(
     >,
     commands: ParallelCommands,
 ) {
-    let authored_tasks_changed = documents.is_changed()
-        || assets.is_changed()
-        || species_assets.is_changed()
-        || species_index.is_changed();
-    if authored_tasks_changed {
-        subject_tasks.by_variant.clear();
-    }
-    if animals.is_empty() {
+    if animals.is_empty() || documents.create_declaration_index_view(&assets).is_none() {
         return;
     }
-    let Some(view) = documents.create_declaration_index_view(&assets) else {
-        return;
-    };
     let Some(definitions) = world_definitions.get(&world_assets) else {
         return;
     };
@@ -142,34 +203,6 @@ pub(super) fn select_idle_animal_tasks(
     };
     if !policy.enabled {
         return;
-    }
-    if subject_tasks.by_variant.is_empty() {
-        for definition in species.species() {
-            for variant in species.variants(definition.id) {
-                let authored_types = &variant.behavior_subject_type_identifiers;
-                let declarations = view
-                    .behavior_tasks()
-                    .filter(|(_, _, task)| {
-                        task_has_typed_subject_and_target(task)
-                            && candidate_requirements_are_satisfied(
-                                &task.candidate_eligibility_requirements,
-                                |role, required| {
-                                    role != BehaviorCandidateRole::Subject
-                                        || animal_subject_type_can_match(
-                                            required,
-                                            authored_types,
-                                            definition.id,
-                                            variant.id,
-                                        )
-                                },
-                                |_, _| true,
-                            )
-                    })
-                    .map(|(document, index, _)| (document.clone(), index))
-                    .collect();
-                subject_tasks.by_variant.insert(variant.id, declarations);
-            }
-        }
     }
     let subject_tasks = &subject_tasks.by_variant;
     animals.par_iter_mut().for_each_init(
@@ -201,7 +234,9 @@ pub(super) fn select_idle_animal_tasks(
             .flatten()
             .filter(|(_, token)| clock.tick >= token.available_at && clock.tick < token.expires_at)
             .collect();
-        let ticks_per_day = definitions.timing().ticks_per_day;
+        let cadence = crate::zoo_day_cadence(definitions);
+        let ticks_per_day = cadence.ticks_per_zoo_day();
+        let day_fraction = cadence.day_fraction(**clock).unwrap_or_default();
         let held_items = memberships.members_of_container(animal).collect::<Vec<_>>();
         let slot_of = |object| {
             let (_, slot) = memberships.container_for_member(object)?;
@@ -231,7 +266,7 @@ pub(super) fn select_idle_animal_tasks(
             if let Ok((_, object_facts)) = animal_targets.animals.get(object) {
                 return species.find_variant_with_species(object_facts.variant_id()).is_some_and(|(_, variant)| {
                     animal_targets.target_satisfies(animal, &facts, object, &object_facts, fact,
-                        clock.tick, ticks_per_day, clock.tick_in_day, &variant.behavior_subject_type_identifiers)
+                        clock.tick, ticks_per_day, day_fraction, &variant.behavior_subject_type_identifiers)
                 });
             }
             world_objects.objects.get(object).ok().is_some_and(|object| {
@@ -255,7 +290,7 @@ pub(super) fn select_idle_animal_tasks(
             else {
                 continue;
             };
-            if !subject_can_consider_task(task, &facts, authored_types, &animal_targets, &clock, ticks_per_day) {
+            if !subject_can_consider_task(task, &facts, authored_types, &animal_targets, &clock, (ticks_per_day, day_fraction)) {
                 cooldowns.disarm(task.id);
                 continue;
             }
@@ -267,7 +302,7 @@ pub(super) fn select_idle_animal_tasks(
                 let delay_ticks = task_cooldowns::sample_task_delay_ticks(
                     delay,
                     random.0.unit_f32(),
-                    definitions.timing().fixed_hz,
+                    definitions.simulation_timestep().expect("simulation timing is loaded"),
                 );
                 debug!(?animal, task = %task.name, delay_ticks,
                     "animal task became possible and waits out its delay");
@@ -298,7 +333,7 @@ pub(super) fn select_idle_animal_tasks(
                         },
                         |role, fact| match role {
                             BehaviorCandidateRole::Subject => true,
-                            BehaviorCandidateRole::Target => animal_targets.spatial_satisfies(&facts, fact, clock.tick_in_day, ticks_per_day).unwrap_or_else(|| facts.satisfies(fact, clock.tick, ticks_per_day, authored_types)),
+                            BehaviorCandidateRole::Target => animal_targets.spatial_satisfies(&facts, fact, day_fraction).unwrap_or_else(|| facts.satisfies(fact, clock.tick, ticks_per_day, authored_types)),
                             BehaviorCandidateRole::Object => object_fact(object, fact),
                         },
                     ) {
@@ -379,7 +414,7 @@ pub(super) fn select_idle_animal_tasks(
                             fact,
                             clock.tick,
                             ticks_per_day,
-                            clock.tick_in_day,
+                            day_fraction,
                             target_types,
                         ),
                         BehaviorCandidateRole::Object => object_fact(object, fact),
@@ -753,7 +788,7 @@ pub(super) fn select_idle_animal_tasks(
                 task_cooldowns::sample_task_delay_ticks(
                     delay,
                     random.0.unit_f32(),
-                    definitions.timing().fixed_hz,
+                    definitions.simulation_timestep().expect("simulation timing is loaded"),
                 )
             });
         commands.command_scope(|mut commands| {
@@ -772,10 +807,267 @@ pub(super) fn select_idle_animal_tasks(
     });
 }
 
+pub(super) fn advance_ambient_lifespans(
+    mut commands: Commands,
+    time: Res<Time<Fixed>>,
+    world_assets: Res<Assets<WorldDefinitionAsset>>,
+    world_definitions: Res<WorldDefinitions>,
+    seeds: Query<&openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed>,
+    mut subjects: Query<
+        (
+            Entity,
+            &openzt2_world_state::world_spawn::world_membership_types::DefinitionId,
+            &openzt2_world_state::world_spawn::world_membership_types::WorldMember,
+            Option<&mut crate::animal_welfare::need_timing_types::NeedAdjustmentCadence>,
+            Option<&mut openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes>,
+        ),
+        With<super::behavior_set_start_request_types::AmbientBehaviorSubject>,
+    >,
+) {
+    use crate::animal_welfare::need_timing_types::NeedAdjustmentCadence;
+    use openzt2_world_state::{
+        simulation_time::deterministic_random_stream::{DeterministicRng, RngDomain},
+        world_spawn::persistent_id_types::PersistentId,
+    };
+    use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
+
+    let Some(definitions) = world_definitions.get(&world_assets) else {
+        return;
+    };
+    let Some(policy) = definitions
+        .need_adjustment()
+        .filter(|policy| policy.enabled)
+    else {
+        return;
+    };
+    let key = AssetId::from_key("lifespan");
+    for (entity, definition, member, cadence, attributes) in &mut subjects {
+        let Some(rate) = definitions.find_object(definition.0).and_then(|object| {
+            object
+                .authored_runtime
+                .numeric_behavior_properties
+                .iter()
+                .find_map(|&(name, value)| (name == key).then_some(value))
+        }) else {
+            continue;
+        };
+        let step = time.timestep();
+        let due = if let Some(mut cadence) = cadence {
+            cadence.tick(step, policy.delay_steps)
+        } else {
+            let Ok(seed) = seeds.get(member.root) else {
+                continue;
+            };
+            let random = DeterministicRng::from_entity(
+                *seed,
+                PersistentId(entity.to_bits()),
+                RngDomain::AnimalNeeds,
+            );
+            let mut cadence = NeedAdjustmentCadence::from_saved_remaining(0, random);
+            let due = cadence.tick(step, policy.delay_steps);
+            commands.entity(entity).insert(cadence);
+            due
+        };
+        if due {
+            if let Some(mut attributes) = attributes {
+                let next = (attributes.get(key).unwrap_or_default() + rate).clamp(0.0, 100.0);
+                if attributes.get(key) != Some(next) {
+                    attributes.set(key, next);
+                }
+            } else {
+                let mut attributes = AuthoredFloatAttributes::default();
+                attributes.set(key, rate.clamp(0.0, 100.0));
+                commands.entity(entity).insert(attributes);
+            }
+        }
+    }
+}
+
+pub(super) fn select_idle_ambient_tasks(
+    mut commands: Commands,
+    assets: Res<Assets<BehaviorDocumentAsset>>,
+    declarations: Res<AnimalSubjectTaskIndex>,
+    world_assets: Res<Assets<WorldDefinitionAsset>>,
+    world_definitions: Res<WorldDefinitions>,
+    terrain: openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility,
+    clocks: Query<&ZooClock>,
+    presentations: Query<&openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations>,
+    controllers: Query<(), With<openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController>>,
+    mut subjects: Query<
+        (
+            Entity,
+            &openzt2_world_state::world_spawn::world_membership_types::DefinitionId,
+            &openzt2_world_state::world_spawn::world_membership_types::WorldMember,
+            &GlobalTransform,
+            Option<&openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode>,
+            &mut BehaviorRandomStream,
+            Option<&mut BehaviorTaskGeneration>,
+            Option<&mut BehaviorTaskEffectiveScore>,
+            Option<&openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes>,
+        ),
+        (
+            With<openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::AmbientBehaviorSubject>,
+            With<openzt2_zoo_state::animal_lifecycle::types::Age>,
+            Without<BehaviorTaskExecutionState>,
+            Without<PendingBehaviorSet>,
+            UncratedWorldEntity,
+        ),
+    >,
+) {
+    use openzt2_game_data::behavior::eligibility::{
+        BehaviorEntityStateEligibilityFact as State, BehaviorSpatialEligibilityFact as Spatial,
+        BehaviorWelfareEligibilityFact as Welfare,
+    };
+    use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
+
+    if subjects.is_empty() {
+        return;
+    }
+    let Some(definitions) = world_definitions.get(&world_assets) else {
+        return;
+    };
+    let Some(policy) = definitions
+        .behavior_selection_policy()
+        .filter(|policy| policy.enabled)
+    else {
+        return;
+    };
+    let lifespan_key = AssetId::from_key("lifespan");
+    for (actor, definition, world, pose, locomotion, mut random, generation, score, attributes) in
+        &mut subjects
+    {
+        use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
+        if !AnimationPresentations::for_subject(actor, presentations.get(actor).ok())
+            .any(|entity| controllers.contains(entity))
+        {
+            continue;
+        }
+        let (Ok(clock), Some(definition)) = (
+            clocks.get(world.root),
+            definitions.find_object(definition.0),
+        ) else {
+            continue;
+        };
+        let point = pose.translation();
+        let water = terrain
+            .water_surface_height(world.root, point.xz())
+            .is_some_and(|height| point.y <= height);
+        let lifespan = attributes
+            .and_then(|values| values.get(lifespan_key))
+            .unwrap_or_default();
+        let mut ranking = BehaviorCandidateRanking::new(policy.minimum_score);
+        let Some(subject_tasks) = declarations.ambient.get(&definition.id) else {
+            continue;
+        };
+        for (document, declaration) in subject_tasks {
+            let Some(task) = assets
+                .get(document)
+                .and_then(|document| document.behavior_task_at_index(*declaration))
+            else {
+                continue;
+            };
+            if !candidate_requirements_are_satisfied(
+                &task.candidate_eligibility_requirements,
+                |role, required| ambient_role_matches(definition, role, required),
+                |role, fact| {
+                    if role == BehaviorCandidateRole::Object {
+                        return false;
+                    }
+                    let q16 = match fact.fact_input {
+                        BehaviorEligibilityFactInput::Spatial(Spatial::SupportedSurface) => 1 << 16,
+                        BehaviorEligibilityFactInput::Spatial(Spatial::InWater) => {
+                            i32::from(water) << 16
+                        }
+                        BehaviorEligibilityFactInput::Spatial(Spatial::OnLand) => {
+                            i32::from(!water) << 16
+                        }
+                        BehaviorEligibilityFactInput::State(State::Swimming) => {
+                            i32::from(locomotion == Some(&LocomotionMode::Swim)) << 16
+                        }
+                        BehaviorEligibilityFactInput::Welfare(Welfare::Lifespan) => {
+                            (lifespan * 65_536.0).round() as i32
+                        }
+                        _ => return false,
+                    };
+                    match fact.expected_value {
+                        BehaviorEligibilityFactValue::Q16(expected) => {
+                            candidate_facts::compare_q16(q16, expected, fact.comparison)
+                        }
+                        _ => false,
+                    }
+                },
+            ) {
+                continue;
+            }
+            let Some(score) = openzt2_zoo_state::animal_behavior::behavior_candidate_selection::score_behavior_task_with_need_points(
+                task,
+                policy.outside_range_need_value,
+                0.0,
+                (0.0, 0.0),
+                || None,
+                |attribute| (attribute == lifespan_key).then_some(((lifespan * 65_536.0).round() as i32, true)),
+                |value| value.sample_q16(|upper| random.range_u32(upper).unwrap_or_default()),
+            ) else { continue; };
+            ranking.consider(
+                (document, *declaration, task),
+                task.priority.unwrap_or_default(),
+                score,
+            );
+        }
+        let Some(((document, declaration, task), selected_score)) =
+            ranking.finish(|| random.next_u32())
+        else {
+            continue;
+        };
+        let execution_id = allocate_behavior_execution_id(actor, generation, &mut commands);
+        let next_score = BehaviorTaskEffectiveScore {
+            execution_id,
+            template_score: task.priority,
+            linked_score: None,
+            selected_candidate_score: Some(selected_score),
+        };
+        let mut actor_commands = commands.entity(actor);
+        if let Some(mut current) = score {
+            current.set_if_neq(next_score);
+        } else {
+            actor_commands.insert(next_score);
+        }
+        actor_commands.insert(BehaviorTaskExecutionState {
+            execution_id,
+            program: task.id,
+            target: Some(actor),
+            document: document.clone(),
+            declaration,
+            phase: BehaviorTaskExecutionPhase::Execution,
+            action: 0,
+            repetitions: 0,
+            next_action_tick: clock.tick,
+            object: None,
+            interaction_slot: None,
+            depth: 0,
+        });
+    }
+}
+
+fn ambient_role_matches(
+    object: &openzt2_game_data::world_definitions::world_objects::WorldObjectDefinition,
+    role: BehaviorCandidateRole,
+    required: AssetId,
+) -> bool {
+    match role {
+        BehaviorCandidateRole::Subject => required == object.id || object.behavior_type_identifiers.contains(&required),
+        BehaviorCandidateRole::Target => required == AssetId::from_key("self")
+            || required == object.id
+            || object.behavior_type_identifiers.contains(&required),
+        BehaviorCandidateRole::Object => false,
+    }
+}
+
 pub(super) fn start_selected_idle_animal_tasks(
     clock: Single<&ZooClock>,
     pending_starts: Query<(Entity, &PendingAnimalTaskStart)>,
     mut idle_animals: Query<Option<&mut BehaviorTaskGeneration>, IdleAnimalTaskFilter>,
+    mut effective_scores: Query<&mut BehaviorTaskEffectiveScore>,
     tokens: Query<(), With<BehaviorSelfToken>>,
     mut commands: Commands,
 ) {
@@ -804,12 +1096,17 @@ pub(super) fn start_selected_idle_animal_tasks(
         debug!(?animal, ?program, ?target, execution_id,
             cooldown_ticks = ?delay_ticks, "animal started task");
         let mut started = commands.entity(animal);
-        started.insert(BehaviorTaskEffectiveScore {
+        let score = BehaviorTaskEffectiveScore {
             execution_id,
             template_score: Some(priority),
             linked_score: None,
             selected_candidate_score: Some(score),
-        });
+        };
+        if let Ok(mut current) = effective_scores.get_mut(animal) {
+            current.set_if_neq(score);
+        } else {
+            started.insert(score);
+        }
         if let Some(shore) = shore {
             started.insert(shore);
         } else {
@@ -876,7 +1173,7 @@ fn subject_can_consider_task(
     authored_types: &[AssetId],
     targets: &animal_targets::AnimalTargetSources,
     clock: &ZooClock,
-    ticks_per_day: u32,
+    (ticks_per_day, day_fraction): (f64, f64),
 ) -> bool {
     // Prune subject mismatches before scanning world targets, while retaining
     // all authored target checks for concrete candidate evaluation.
@@ -888,7 +1185,7 @@ fn subject_can_consider_task(
         |role, fact| {
             role != BehaviorCandidateRole::Subject
                 || targets
-                    .spatial_satisfies(facts, fact, clock.tick_in_day, ticks_per_day)
+                    .spatial_satisfies(facts, fact, day_fraction)
                     .unwrap_or_else(|| {
                         facts.satisfies(fact, clock.tick, ticks_per_day, authored_types)
                     })

@@ -11,7 +11,7 @@ use crate::source_document::{
     ordered_source_document_types::OrderedSourceDocumentNode, path::AssetPath,
 };
 
-pub(super) fn lower_bfm_source_to_animation_set_document(
+pub(crate) fn lower_bfm_source_to_animation_set_document(
     animation_set_asset_path: &str,
     bfm_source_bytes: &[u8],
 ) -> io::Result<AuthoredAnimationSetDocument> {

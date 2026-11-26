@@ -93,6 +93,7 @@ impl Plugin for PersistencePlugin {
             .add_message::<openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameCatalogueFailed>()
             .init_resource::<ProfileIndex>()
             .init_resource::<ProfileOptions>()
+            .init_resource::<openzt2_photos::PhotoAlbumProfileOptions>()
             .init_resource::<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>()
             .add_message::<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>()
             .init_resource::<SaveSlotCatalogue>()
@@ -135,6 +136,13 @@ impl Plugin for PersistencePlugin {
             .add_systems(Startup, initial_profile_activation::begin_startup_profile_activation)
             .add_systems(
                 Update,
+                profile_filesystem_task_completion_application::project_photo_album_profile_options
+                    .after_ignore_deferred(profile_filesystem_task_completion_application::apply_completed_profile_filesystem_tasks_to_canonical_profile_state)
+                    .after_ignore_deferred(persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests)
+                    .run_if(resource_changed::<ProfileOptions>),
+            )
+            .add_systems(
+                Update,
                 (
                     slot_io::original_saved_game_catalogue_execution::begin_original_saved_game_catalogue_loading,
                     slot_io::original_saved_game_catalogue_execution::complete_original_saved_game_catalogue_loading,
@@ -150,7 +158,8 @@ impl Plugin for PersistencePlugin {
                         profile_request_execution::begin_deleting_requested_profiles,
                         profile_filesystem_task_completion_application::
                             apply_completed_profile_filesystem_tasks_to_canonical_profile_state,
-                        profile_request_execution::begin_persisting_changed_active_profile_options,
+                        profile_request_execution::begin_persisting_changed_active_profile_options
+                            .after_ignore_deferred(persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests),
                     ).chain(),
                     (
                         initial_profile_activation::activate_initial_profile_from_loaded_index,
@@ -229,8 +238,6 @@ impl Plugin for PersistencePlugin {
             .add_systems(
                 Update,
                 (
-                    persistence_ui_operation_presentation::update_wait_cursor_when_snapshot_operations_change
-                        .before(GameSet::Presentation),
                     persistence_ui_operation_presentation::present_original_saved_game_failures
                         .before(openzt2_interface_state::ui::UiSet::Notifications),
                     (

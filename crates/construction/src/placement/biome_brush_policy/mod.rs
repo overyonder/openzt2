@@ -9,7 +9,7 @@ use openzt2_game_assets::{
     graphics_settings_presets::{
         GraphicsDetailPreset, GraphicsSettingsPresetSource, GraphicsSettingsPresets,
     },
-    graphics_settings_types::GraphicsSettings,
+    graphics_settings_types::{GraphicsSettings, ThreeLevelGraphicsDetail},
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
     },
@@ -91,6 +91,15 @@ pub(super) struct BiomeBrushRules<'w> {
 impl BiomeBrushRules<'_> {
     pub(super) fn policy(&self) -> Option<&BiomeBrushPolicy> {
         self.policies.get(&self.source.as_ref()?.0)
+    }
+
+    pub(super) fn object_detail_allows(&self, minimum: Option<u8>) -> bool {
+        let detail = match self.settings.object_detail {
+            ThreeLevelGraphicsDetail::Low => 0,
+            ThreeLevelGraphicsDetail::Medium => 1,
+            ThreeLevelGraphicsDetail::High => 2,
+        };
+        minimum.is_none_or(|minimum| minimum <= detail)
     }
 
     pub(super) fn nothing_weight_percent(&self, policy: &BiomeBrushPolicy) -> u32 {

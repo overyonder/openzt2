@@ -166,6 +166,7 @@ fn spawn_authored_scenario_objectives(
     super::scenario_group_completion::spawn_scenario_objective_groups(
         commands,
         owner,
+        scenario_id,
         &scenario.objective_groups,
         spawned
             .into_iter()

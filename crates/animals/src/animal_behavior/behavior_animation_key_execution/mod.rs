@@ -7,8 +7,8 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::{
-    animation::animation_text_key::AuthoredAnimationTextAction,
-    world_definitions::world_objects::WorldObjectWhapPhysics, AssetId,
+    AssetId, animation::animation_text_key::AuthoredAnimationTextAction,
+    world_definitions::world_objects::WorldObjectWhapPhysics,
 };
 use openzt2_world_state::{
     animation_graph::{
@@ -40,6 +40,8 @@ use openzt2_zoo_state::{
     animal_health::types::{AnimalDied, Dead, DeathCause},
     animal_lifecycle::types::Animal,
     behavior_task_execution_types::{
+        BehaviorTaskExecutionState, PendingBehaviorAnimationClipCompletion,
+        PendingBehaviorTaskFailure,
         continuations::BehaviorContinuationFrames,
         running_actions::{
             BehaviorAnimationEffect, BehaviorAnimationKeyDelivery, BehaviorAnimationTextKeys,
@@ -48,8 +50,6 @@ use openzt2_zoo_state::{
             RunBehaviorAnimationEffect, RunningBehaviorInstruction, SuspendedBehaviorSetInterrupt,
             TimedBehaviorAnimationEffect,
         },
-        BehaviorTaskExecutionState, PendingBehaviorAnimationClipCompletion,
-        PendingBehaviorTaskFailure,
     },
     guests::guest_simulation_types::GuestRng,
     placement::{
@@ -59,7 +59,7 @@ use openzt2_zoo_state::{
     topology::topology_graph_types::TopologyGrid,
 };
 
-use super::behavior_target_morph_execution::{resolve_fence_morph, FenceTopology};
+use super::behavior_target_morph_execution::{FenceTopology, resolve_fence_morph};
 use crate::animal_health::disease_mortality_execution::finalize_animal_death;
 
 #[derive(Component)]
@@ -609,10 +609,11 @@ impl AnimalAnimationEffectTargets<'_, '_> {
                 DeathCause::Authored(program),
                 tick,
             );
-            let ticks = fade
-                .as_nanos()
-                .saturating_mul(u128::from(view.timing().fixed_hz))
-                .div_ceil(1_000_000_000);
+            let ticks = fade.as_nanos().div_ceil(
+                view.simulation_timestep()
+                    .expect("simulation timing is loaded")
+                    .as_nanos(),
+            );
             commands.entity(victim).insert(
                 super::behavior_termination_execution::AuthoredAnimalRemovalTick(
                     tick.saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX)),
@@ -621,7 +622,14 @@ impl AnimalAnimationEffectTargets<'_, '_> {
         } else if destroy && placed {
             self.destroy.write(DestroyPlacedObject { entity: victim });
         } else {
-            fade_and_remove_authored_object(commands, victim, tick, view.timing().fixed_hz, fade);
+            fade_and_remove_authored_object(
+                commands,
+                victim,
+                tick,
+                view.simulation_timestep()
+                    .expect("simulation timing is loaded"),
+                fade,
+            );
         }
         true
     }
@@ -702,16 +710,13 @@ pub(super) fn fade_and_remove_authored_object(
     commands: &mut Commands,
     victim: Entity,
     tick: u64,
-    fixed_hz: u16,
+    step: std::time::Duration,
     fade: std::time::Duration,
 ) {
     if fade.is_zero() {
         commands.entity(victim).try_despawn();
     } else {
-        let delay = fade
-            .as_nanos()
-            .saturating_mul(u128::from(fixed_hz))
-            .div_ceil(1_000_000_000);
+        let delay = fade.as_nanos().div_ceil(step.as_nanos());
         commands.entity(victim).insert((
             openzt2_world::world_spawn::prefab_world_instance_spawning::morph_fade_projection::PrefabMorphFade::fade_out(fade),
             PendingAnimationKeyRemoval(tick.saturating_add(u64::try_from(delay).unwrap_or(u64::MAX))),

@@ -1,31 +1,28 @@
-use super::staff_request_state_types::StaffRequestControllerSample;
-use openzt2_game_data::world_definitions::staff_management::StaffRequestThresholdComparison;
-use openzt2_game_data::world_definitions::staff_management::StaffRequestThresholdValue;
+use super::staff_request_fact_changes::StaffRequestFactValue;
+use openzt2_game_data::world_definitions::staff_management::{
+    StaffRequestThresholdComparison as Comparison, StaffRequestThresholdValue,
+};
 
 pub(super) fn staff_threshold_matches(
-    comparison: StaffRequestThresholdComparison,
+    comparison: Comparison,
     threshold: StaffRequestThresholdValue,
-    sample: StaffRequestControllerSample,
+    sample: StaffRequestFactValue,
 ) -> bool {
     match (threshold, sample) {
-        (
-            StaffRequestThresholdValue::Number(value),
-            StaffRequestControllerSample::NumberQ16(q16),
-        ) if value.is_finite() => {
-            let threshold_q16 = (f64::from(value) * 65_536.0).round() as i64;
-            let current = i64::from(q16);
+        (StaffRequestThresholdValue::Number(value), StaffRequestFactValue::Number(current))
+            if value.is_finite() && current.is_finite() =>
+        {
             match comparison {
-                StaffRequestThresholdComparison::EntersEquality => current == threshold_q16,
-                StaffRequestThresholdComparison::FallsBelow => current < threshold_q16,
-                StaffRequestThresholdComparison::RisesAbove => current > threshold_q16,
-                StaffRequestThresholdComparison::ReachesOrBelow => current <= threshold_q16,
-                StaffRequestThresholdComparison::ReachesOrAbove => current >= threshold_q16,
+                Comparison::EntersEquality => current == value,
+                Comparison::FallsBelow => current < value,
+                Comparison::RisesAbove => current > value,
+                Comparison::ReachesOrBelow => current <= value,
+                Comparison::ReachesOrAbove => current >= value,
             }
         }
-        (
-            StaffRequestThresholdValue::Boolean(threshold),
-            StaffRequestControllerSample::Boolean(value),
-        ) if comparison == StaffRequestThresholdComparison::EntersEquality => value == threshold,
+        (StaffRequestThresholdValue::Boolean(threshold), StaffRequestFactValue::Boolean(value)) => {
+            value == threshold
+        }
         _ => false,
     }
 }

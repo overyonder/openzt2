@@ -19,7 +19,6 @@ mod experience_donation_payment;
 mod facility_accounting;
 mod facility_economy_ui;
 mod finance_donation_reports;
-pub use finance_donation_reports::WorldShowDonationTotal;
 pub mod finance_table_ui;
 mod guest_admission_payment;
 mod guest_admission_ui;
@@ -27,6 +26,7 @@ mod keeper_refill_settlement;
 mod monthly_finance_recording;
 mod saved_world_economy_trackers;
 mod scenario_economy_command_application;
+pub use scenario_economy_command_application::ScenarioEconomyAccess;
 mod selected_object_sale_ui;
 mod service_cancellation;
 mod service_inventory_restocking;
@@ -41,7 +41,7 @@ use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    update_waiting_behavior_actors, BehaviorStepFixedSet,
+    BehaviorStepFixedSet, update_waiting_behavior_actors,
 };
 use openzt2_zoo_state::construction::FixedConstructionSet;
 
@@ -54,14 +54,24 @@ use self::{
 
 pub struct EconomyPlugin;
 
+/// Converts a live dollar value to the integer cents carried by authored UI fields.
+pub fn display_currency_cents(amount: money_types::Money) -> i64 {
+    (f64::from(amount.dollars()) * 100.0).round() as i64
+}
+
+/// Fixed-step producers that submit account requests for this simulation step.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SubmitSimulationAccountRequests;
+
 impl Plugin for EconomyPlugin {
     fn build(&self, app: &mut App) {
         app.register_required_components::<
             WorldRoot,
             finance_donation_reports::FinanceDonationReports,
         >()
-            .register_required_components::<WorldRoot, WorldShowDonationTotal>()
             .init_resource::<finance_donation_reports::DonationSpeciesCategories>()
+            .add_message::<finance_donation_reports::RetiredFinanceDonationSubject>()
+            .add_observer(finance_donation_reports::invalidate_retired_finance_donation_subjects)
             .add_systems(
                 Update,
                 (
@@ -73,8 +83,8 @@ impl Plugin for EconomyPlugin {
             .add_message::<openzt2_zoo_state::transport_tours::transport_circuit_types::SetTransportCircuitFare>()
             .add_message::<TransactionRequest>()
             .init_resource::<account_transaction_settlement::AccountRequestCursor>()
-            .add_message::<account_transaction_settlement::RecordedAccountMovement<true>>()
-            .add_message::<account_transaction_settlement::RecordedAccountMovement<false>>()
+            .add_message::<account_transaction_types::RecordedAccountMovement<true>>()
+            .add_message::<account_transaction_types::RecordedAccountMovement<false>>()
             .add_message::<TransactionCompleted>()
             .add_message::<TransactionRejected>()
             .add_message::<ScenarioEconomyCommand>()
@@ -172,19 +182,23 @@ impl Plugin for EconomyPlugin {
                 (
                     keeper_refill_settlement::mark_staff_refill_cancellations_before_account_settlement
                         .before(account_transaction_settlement::settle_requested_account_transactions::<false>),
+                    guest_admission_payment::request_guest_admission_payment_after_entrance_reached
+                        .in_set(SubmitSimulationAccountRequests),
+                    account_transaction_settlement::stage_requested_account_transactions::<false>
+                        .after(BehaviorStepFixedSet::Think)
+                        .after(SubmitSimulationAccountRequests)
+                        .after(service_progress_and_payment::advance_reserved_services_and_request_completed_service_payments),
+                    account_transaction_settlement::settle_requested_account_transactions::<false>
+                        .after(account_transaction_settlement::stage_requested_account_transactions::<false>),
                     (
-                        guest_admission_payment::request_guest_admission_payment_after_entrance_reached,
-                        account_transaction_settlement::stage_requested_account_transactions::<false>,
-                        account_transaction_settlement::settle_requested_account_transactions::<false>,
-                        (
                             guest_admission_payment::complete_guest_admission_after_successful_payment,
                             guest_admission_payment::reject_guest_admission_after_failed_payment,
                             facility_accounting::record_completed_transaction_results_for_attributed_facilities::<false>,
                             experience_donation_payment::resume_show_donation_instructions_after_payment,
                             monthly_finance_recording::record_completed_transactions_in_monthly_finance_history::<false>,
-                            monthly_finance_recording::record_monthly_guest_counts,
-                        ),
-                    ).chain(),
+                    ).after(account_transaction_settlement::settle_requested_account_transactions::<false>),
+                    monthly_finance_recording::record_monthly_guest_counts
+                        .after(guest_admission_payment::complete_guest_admission_after_successful_payment),
                     service_inventory_restocking::restock_service_facility_inventories_after_zoo_days_advance,
                 )
                     .in_set(FixedGameSet::Economy),
@@ -192,25 +206,31 @@ impl Plugin for EconomyPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    account_transaction_settlement::stage_requested_account_transactions::<true>,
-                    account_transaction_settlement::settle_requested_account_transactions::<true>,
+                    account_transaction_settlement::stage_requested_account_transactions::<true>
+                        .after(account_transaction_settlement::settle_requested_account_transactions::<false>),
+                    account_transaction_settlement::settle_requested_account_transactions::<true>
+                        .after(account_transaction_settlement::stage_requested_account_transactions::<true>),
                     (
                         facility_accounting::record_completed_transaction_results_for_attributed_facilities::<true>,
                         monthly_finance_recording::record_completed_transactions_in_monthly_finance_history::<true>,
-                    ),
-                    zoo_cash_ui::remove_resolved_ui_cash_grant_transaction_entities,
-                ).chain().in_set(FixedConstructionSet::SettleEconomy),
+                    ).after(account_transaction_settlement::settle_requested_account_transactions::<true>),
+                    zoo_cash_ui::remove_resolved_ui_cash_grant_transaction_entities
+                        .after(account_transaction_settlement::settle_requested_account_transactions::<true>),
+                ).in_set(FixedConstructionSet::SettleEconomy),
             )
             .add_systems(
                 FixedUpdate,
                 (
-                    service_progress_and_payment::complete_services_after_successful_payments,
+                    service_progress_and_payment::complete_services_after_successful_payments
+                        .after(account_transaction_settlement::settle_requested_account_transactions::<false>),
                     service_progress_and_payment::cancel_services_after_rejected_payments
-                        .after(service_progress_and_payment::complete_services_after_successful_payments),
-                    behavior_transaction_execution::finish_settled_behavior_transactions,
+                        .after(account_transaction_settlement::settle_requested_account_transactions::<false>),
+                    behavior_transaction_execution::finish_settled_behavior_transactions
+                        .after(account_transaction_settlement::settle_requested_account_transactions::<false>),
                     behavior_transaction_execution::clear_interrupted_behavior_transaction_state
                         .after(behavior_transaction_execution::finish_settled_behavior_transactions),
                     service_cancellation::cancel_timed_service_for_departing_guests
+                        .after(service_progress_and_payment::complete_services_after_successful_payments)
                         .after(service_progress_and_payment::cancel_services_after_rejected_payments)
                         .in_set(openzt2_zoo_state::economy::EconomyServiceCleanupSet)
                         .after(
@@ -221,10 +241,7 @@ impl Plugin for EconomyPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                (
-                    scenario_economy_command_application::apply_scenario_cash_and_admission_commands,
-                    scenario_economy_command_application::remove_resolved_scenario_economy_command_transactions,
-                )
+                scenario_economy_command_application::apply_scenario_cash_and_admission_commands
                     .in_set(FixedGameSet::Cleanup),
             );
     }
@@ -240,8 +257,8 @@ mod guest_admission_payment_tests;
 pub fn add_account_transaction_test_systems(app: &mut App) {
     app.add_message::<TransactionRequest>()
             .init_resource::<account_transaction_settlement::AccountRequestCursor>()
-            .add_message::<account_transaction_settlement::RecordedAccountMovement<true>>()
-            .add_message::<account_transaction_settlement::RecordedAccountMovement<false>>()
+            .add_message::<account_transaction_types::RecordedAccountMovement<true>>()
+            .add_message::<account_transaction_types::RecordedAccountMovement<false>>()
         .add_message::<TransactionCompleted>()
         .add_message::<TransactionRejected>()
 

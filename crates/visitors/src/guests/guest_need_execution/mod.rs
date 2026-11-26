@@ -2,7 +2,6 @@ use super::guest_definition_queries::guest_need_rows;
 use bevy::{platform::collections::HashMap, prelude::*};
 use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestRarity;
-use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use super::guest_simulation_calculations::apply_q16;
@@ -163,25 +162,65 @@ struct NeedRates {
 #[derive(Resource, Default, PartialEq, Eq)]
 pub(super) struct GuestArchetypeTables {
     rates: HashMap<AssetId, NeedRates>,
-    rarity: [Vec<AssetId>; 3],
+    rarity: [[Vec<AssetId>; 3]; 4],
 }
+
+const GUEST_DEMOGRAPHICS: [&str; 4] = [
+    "guest_adult_m",
+    "guest_adult_f",
+    "guest_young_m",
+    "guest_young_f",
+];
 
 impl GuestArchetypeTables {
     pub(super) fn choose_archetype(
         &self,
-        rarity: GuestRarity,
-        rng: &mut DeterministicRng,
+        test_type: bool,
+        [rare_threshold, uncommon_threshold]: [u16; 2],
+        mut draw: impl FnMut() -> u16,
     ) -> Option<AssetId> {
-        [
-            rarity,
-            GuestRarity::Common,
-            GuestRarity::Uncommon,
-            GuestRarity::Rare,
-        ]
-        .into_iter()
-        .map(|rarity| self.rarity[rarity as usize].as_slice())
-        .find(|cohort| !cohort.is_empty())
-        .map(|cohort| cohort[rng.next_u32() as usize % cohort.len()])
+        if test_type {
+            return Some(AssetId::from_key(GUEST_DEMOGRAPHICS[0]));
+        }
+        let demographic = &self.rarity[usize::from(draw() % 4)];
+        let roll = draw() % 100;
+        let rare = &demographic[GuestRarity::Rare as usize];
+        let uncommon = &demographic[GuestRarity::Uncommon as usize];
+        let common = &demographic[GuestRarity::Common as usize];
+        let cohort = if roll < rare_threshold && !rare.is_empty() {
+            rare
+        } else if roll < uncommon_threshold && !uncommon.is_empty() {
+            uncommon
+        } else {
+            common
+        };
+        (!cohort.is_empty()).then(|| cohort[usize::from(draw()) % cohort.len()])
+    }
+}
+
+#[cfg(test)]
+mod arrival_cohort_tests {
+    use super::*;
+
+    #[test]
+    fn test_type_draws_nothing_and_rarity_boundaries_are_strict() {
+        let mut tables = GuestArchetypeTables::default();
+        let uncommon = AssetId::from_key("uncommon");
+        let common = AssetId::from_key("common");
+        tables.rarity[0][GuestRarity::Uncommon as usize].push(uncommon);
+        tables.rarity[0][GuestRarity::Common as usize].push(common);
+        assert_eq!(
+            tables.choose_archetype(true, [10, 30], || panic!("test type drew")),
+            Some(AssetId::from_key("guest_adult_m"))
+        );
+        for (roll, expected) in [(10, uncommon), (30, common)] {
+            let mut draws = [0, roll, 0].into_iter();
+            assert_eq!(
+                tables.choose_archetype(false, [10, 30], || draws.next().unwrap()),
+                Some(expected)
+            );
+            assert_eq!(draws.next(), None);
+        }
     }
 }
 
@@ -196,7 +235,13 @@ pub(super) fn compile_guest_archetype_tables(
     let mut resolved = GuestArchetypeTables::default();
     if let Some(definitions) = definitions.get(&assets) {
         for definition in definitions.guest_definitions() {
-            resolved.rarity[definition.rarity as usize].push(definition.id);
+            if let Some(demographic) = GUEST_DEMOGRAPHICS.iter().position(|family| {
+                definition
+                    .behavior_subject_type_identifiers
+                    .contains(&AssetId::from_key(family))
+            }) {
+                resolved.rarity[demographic][definition.rarity as usize].push(definition.id);
+            }
             let Some(needs) = guest_need_rows(definition) else {
                 continue;
             };

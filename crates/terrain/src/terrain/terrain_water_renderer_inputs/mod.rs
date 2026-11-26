@@ -534,7 +534,7 @@ pub(super) fn project_authored_terrain_water_surface_coverage(
         (&Projection, Option<&TerrainWaterCameraPose>),
         (With<ZooCamera>, With<Camera>),
     >,
-    waves: Query<&TerrainWaterWaveRegisters>,
+    waves: Query<Ref<TerrainWaterWaveRegisters>>,
     groups: Query<&TerrainWaterSurfaceRegion>,
     region_sources: TerrainWaterRegionQuery,
     mut regions: Query<(Entity, &mut TerrainWaterRegionVisibility)>,
@@ -573,7 +573,7 @@ pub(super) fn project_authored_terrain_water_surface_coverage(
             waves
                 .get(key.0)
                 .ok()
-                .and_then(|wave| surface.wave_expanded_world_bounds(wave))
+                .and_then(|wave| surface.wave_expanded_world_bounds(&wave))
         };
         if let Some(bounds) = world_bounds {
             let matrix = coordinates.0;
@@ -620,7 +620,7 @@ pub(super) fn project_authored_terrain_water_surface_coverage(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn update_authored_terrain_water_renderer_inputs(
     environment_maps: Query<(&WorldMember, Ref<EnvironmentMapSamples>)>,
-    waves: Query<&TerrainWaterWaveRegisters>,
+    waves: Query<Ref<TerrainWaterWaveRegisters>>,
     phase: Res<State<openzt2_game_assets::application_lifecycle::GamePhase>>,
     targets: Query<(
         &AuthoredTerrainWaterRendererTargets,
@@ -662,8 +662,8 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
     mut water_surfaces: Query<
         (
             Ref<MeshMaterial3d<EffectPassMaterial>>,
-            &AuthoredTerrainWaterSurfaceEffectPass,
-            &TerrainWaterWaveStateKey,
+            Ref<AuthoredTerrainWaterSurfaceEffectPass>,
+            Ref<TerrainWaterWaveStateKey>,
             &ChildOf,
             &mut Visibility,
             &TerrainWaterSurfacePassKind,
@@ -683,7 +683,7 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
         >,
         Query<
             (
-                &TankGeometry,
+                Ref<TankGeometry>,
                 &WorldMember,
                 &TankWaterMaterial,
                 Option<&TerrainWaterScumScroll>,
@@ -957,7 +957,7 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
             .map_or(Mat4::IDENTITY, |(frame, projection, _)| {
                 projection.get_clip_from_view() * frame.to_matrix().inverse() * source_from_local
             });
-    for (draw, kind, handle, visibility) in &tank_draws {
+    for (draw, kind, handle, visibility) in &mut tank_draws {
         if kind.uses_stitch_geometry() || *visibility == Visibility::Hidden {
             continue;
         }
@@ -1021,7 +1021,13 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
                     source_to_reflection_clip
                 },
         );
-        wave_state.bind_wave_channels_to_effect_pass(geometry.water_height, material);
+        if wave_state.is_changed()
+            || geometry.is_changed()
+            || handle.is_changed()
+            || visibility.is_changed()
+        {
+            wave_state.bind_wave_channels_to_effect_pass(geometry.water_height, material);
+        }
         material
             .write_programmable_float_registers_to_persistent_buffers(&mut effect_uniform_buffers);
     }
@@ -1109,8 +1115,15 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
                     source_to_reflection_clip
                 },
         );
-        geometric_wave_state
-            .bind_wave_channels_to_effect_pass(surface.surface_plane_height, material);
+        if geometric_wave_state.is_changed()
+            || surface.is_changed()
+            || wave_key.is_changed()
+            || material_handle.is_changed()
+            || visibility.is_changed()
+        {
+            geometric_wave_state
+                .bind_wave_channels_to_effect_pass(surface.surface_plane_height, material);
+        }
         material
             .write_programmable_float_registers_to_persistent_buffers(&mut effect_uniform_buffers);
     }

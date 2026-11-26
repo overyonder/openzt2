@@ -163,6 +163,8 @@ pub(super) fn encode_original_saved_game_snapshot(
         unlocked_catalogue_definition_count: 0,
         unlocked_catalogue_definition_bit_words: Vec::new(),
         scenario_award_points: award_points,
+        award_globals: Default::default(),
+        award_presentation: Default::default(),
         endangered_animal_birth_count: 0,
         animal_adoption_availability_policy: Default::default(),
         research_projects: Vec::new(),

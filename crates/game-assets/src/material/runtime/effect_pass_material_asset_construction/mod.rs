@@ -364,8 +364,16 @@ fn create_effect_pass_material_asset(
         };
         let samples_texture_with_srgb_decode =
             state.samplers[stage].samples_texture_with_srgb_decode();
-        textures[stage] =
-            Some(context.load_image(path.to_owned(), samples_texture_with_srgb_decode));
+        let asset_path = bevy::asset::AssetPath::try_parse(path).map_err(io::Error::other)?;
+        textures[stage] = Some(match (&mut *context, asset_path.label()) {
+            (GeneratedAssetPublication::Labeled(loader), Some(label))
+                if asset_path.path() == loader.path().path()
+                    && asset_path.source() == loader.path().source() =>
+            {
+                loader.get_label_handle::<Image>(label.to_owned())
+            }
+            _ => context.load_image(path.to_owned(), samples_texture_with_srgb_decode),
+        });
     }
     // Base.fx exposes this renderer-owned semantic but deliberately does not
     // assign the Lighting state inside its pass. Explicit FX states still win.

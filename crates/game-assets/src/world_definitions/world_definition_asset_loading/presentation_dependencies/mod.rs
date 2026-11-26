@@ -1,6 +1,6 @@
 use super::super::world_definition_document_asset_and_demand_loaded_dependency_paths::{
-    DemandLoadedDependencyPath, WorldDefinitionAsset,
-    AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS,
+    AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS, DemandLoadedDependencyPath,
+    WorldDefinitionAsset,
 };
 use super::unresolved_reference;
 use crate::asset_source::AssetArchives;
@@ -8,7 +8,6 @@ use crate::model_source::native_model_source_lowering::native_model_scene_labell
 use crate::source_document::{
     blue_fang_actor_manifest_model_and_scene_resolution_index::BlueFangActorManifestModelAndSceneResolutionIndex,
     blue_fang_source_dependency_reference_discovery::{
-        collect_blue_fang_actor_manifest_source_references,
         collect_blue_fang_native_model_source_references,
         collect_blue_fang_static_asset_source_references,
     },
@@ -16,31 +15,20 @@ use crate::source_document::{
 };
 use crate::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image;
 use bevy::asset::LoadContext;
-use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
+use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
 use std::{collections::BTreeMap, io, path::Path};
 
 pub(super) async fn resolve_world_definition_presentation_models(
     archives: &AssetArchives,
     context: &mut LoadContext<'_>,
-    path: &str,
     documents: &[OrderedSourceDocument],
 ) -> io::Result<(
     BlueFangActorManifestModelAndSceneResolutionIndex,
     BTreeMap<(String, String), String>,
 )> {
     let mut actor_manifest_resolution_index =
-        BlueFangActorManifestModelAndSceneResolutionIndex::default();
-    let mut manifests = collect_blue_fang_actor_manifest_source_references(documents);
-    while let Some(manifest) = manifests.pop_first() {
-        let resolved = archives
-            .resolve_source_reference(Path::new(path), &manifest)
-            .ok_or_else(|| unresolved_reference(path, "actor manifest", &manifest))?;
-        let manifest = resolved.to_string_lossy().replace('\\', "/");
-        let actor_manifest =
-            super::source_documents::read_source_document(context, &manifest).await?;
-        actor_manifest_resolution_index
-            .insert_parsed_blue_fang_actor_model_manifest(&actor_manifest);
-    }
+        BlueFangActorManifestModelAndSceneResolutionIndex::load(archives, context, documents)
+            .await?;
 
     let referenced_models = collect_blue_fang_native_model_source_references(
         documents,
@@ -77,6 +65,7 @@ pub(super) fn register_world_definition_presentation_dependencies(
     document: WorldDefinitionDocument,
     actor_manifest_resolution_index: &BlueFangActorManifestModelAndSceneResolutionIndex,
     resolved_models: &BTreeMap<(String, String), String>,
+    tank_material_paths: std::collections::BTreeSet<String>,
 ) -> io::Result<WorldDefinitionAsset> {
     let mut textures = Vec::new();
     let mut models = Vec::new();
@@ -92,6 +81,46 @@ pub(super) fn register_world_definition_presentation_dependencies(
             },
         )
         .collect::<Vec<_>>();
+    for source in documents {
+        let source_path = source.path.key();
+        let mut nodes = vec![&source.root];
+        while let Some(node) = nodes.pop() {
+            if node.name.eq_ignore_ascii_case("ZTGuestViewMode") {
+                for attribute in ["tagFile", "groundCursor"] {
+                    let Some(reference) = node
+                        .attribute_named_any(&[attribute])
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    else {
+                        continue;
+                    };
+                    let authored = crate::source_document::path::AssetPath::new(reference).key();
+                    let resolved = if Path::new(&authored)
+                        .extension()
+                        .is_some_and(|extension| extension == "xml")
+                    {
+                        archives
+                            .resolve_source_reference(Path::new(&source_path), reference)
+                            .map(|path| path.to_string_lossy().into_owned())
+                    } else {
+                        archives
+                            .resolve_model_reference(Path::new(&source_path), reference)
+                            .map(|path| {
+                                native_model_scene_labelled_asset_path(&path.to_string_lossy())
+                            })
+                    }
+                    .ok_or_else(|| {
+                        unresolved_reference(&source_path, "Guest View scene", reference)
+                    })?;
+                    scenes.push(DemandLoadedDependencyPath {
+                        id: AssetId::from_virtual_path(&authored),
+                        path: resolved.into_boxed_str(),
+                    });
+                }
+            }
+            nodes.extend(node.element_children());
+        }
+    }
     for ((_, authored), resolved) in resolved_models {
         let resolved_scene = native_model_scene_labelled_asset_path(resolved);
         models.push(DemandLoadedDependencyPath {
@@ -187,33 +216,22 @@ pub(super) fn register_world_definition_presentation_dependencies(
             &mut textures,
         );
     }
-    let tank_material_ids: std::collections::BTreeSet<_> = document
-        .tanks
-        .iter()
-        .flat_map(|tank| {
-            [tank.floor_material]
-                .into_iter()
-                .chain(tank.wall_materials)
-                .chain(tank.wall_materials_low)
-        })
-        .collect();
-    let mut materials: Vec<_> = archives
-        .source_paths_under(Path::new("materials"))
-        .into_iter()
-        .filter_map(|path| {
-            let path = path.to_string_lossy().replace('\\', "/");
-            let id = AssetId::from_virtual_path(
-                &crate::source_document::path::AssetPath::new(&path).key(),
-            );
-            tank_material_ids
-                .contains(&id)
-                .then(|| DemandLoadedDependencyPath {
-                    id,
-                    path: path.into_boxed_str(),
-                })
-        })
-        .collect();
+    let mut materials = Vec::new();
+    let mut tank_water_material_sources = Vec::new();
+    for path in tank_material_paths {
+        let id = AssetId::from_virtual_path(&path);
+        let dependency = DemandLoadedDependencyPath {
+            id,
+            path: path.into_boxed_str(),
+        };
+        if dependency.path.ends_with(".xml") {
+            tank_water_material_sources.push(dependency);
+        } else {
+            materials.push(dependency);
+        }
+    }
     sort_paths(&mut materials);
+    sort_paths(&mut tank_water_material_sources);
     sort_paths(&mut textures);
     sort_paths(&mut models);
     sort_paths(&mut effects);
@@ -221,11 +239,12 @@ pub(super) fn register_world_definition_presentation_dependencies(
     sort_paths(&mut animation_sets);
     Ok(WorldDefinitionAsset {
         document,
-        timekeeper: None,
+        metadata: Default::default(),
         authored_binder_sources: None,
         textures: textures.into_boxed_slice(),
         models: models.into_boxed_slice(),
         materials: materials.into_boxed_slice(),
+        tank_water_material_sources: tank_water_material_sources.into_boxed_slice(),
         effects: effects.into_boxed_slice(),
         scenes: scenes.into_boxed_slice(),
         animation_sets: animation_sets.into_boxed_slice(),

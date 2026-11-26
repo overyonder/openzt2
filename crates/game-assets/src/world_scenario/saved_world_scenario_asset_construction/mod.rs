@@ -11,7 +11,8 @@ use crate::{
 
 use super::{
     world_scenario_document_asset_and_dependency_handles::{
-        DemandLoadedAssetHandle, DemandLoadedAssetPath, WorldScenarioDocumentAsset,
+        DemandLoadedAssetHandle, DemandLoadedAssetPath, ScenarioScriptDependencies,
+        WorldScenarioDocumentAsset,
     },
     world_scenario_document_source::WorldScenarioDocumentSource,
     world_scenario_document_source_encoding::validate_world_scenario_document_source,
@@ -79,6 +80,8 @@ pub(crate) fn build_restored_world_scenario_asset(
     Ok(WorldScenarioDocumentAsset {
         document: source.document,
         authored: source.authored,
+        manager: None,
+        mode_economy: None,
         starting_zoos: source.starting_zoos,
         campaign_scenarios: Box::new([]),
         terrains: source.terrains,
@@ -88,7 +91,7 @@ pub(crate) fn build_restored_world_scenario_asset(
         }),
         scenes,
         textures,
-        scripts,
+        scripts: ScenarioScriptDependencies::new(scripts),
         photo_scripts,
     })
 }

@@ -78,6 +78,8 @@ struct ChallengeSnapshot {
     rng: [u64; 2],
     next_evaluation: Option<u64>,
     instant_decided: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_validation: Option<AssetId>,
     candidates: BTreeMap<AssetId, ScenarioLuaSavedState>,
     offer: Option<ChallengeOfferSnapshot>,
 }
@@ -112,6 +114,7 @@ pub(in crate::persistence) struct ScenarioSnapshotCapture<'w, 's> {
         ),
         With<WorldRoot>,
     >,
+    pending_challenge: Query<'w, 's, &'static crate::scenario::challenge_offer_lua_validation::PendingChallengeValidation>,
     members: Query<'w, 's, &'static ScenarioObjectives>,
     group_members: Query<'w, 's, &'static ScenarioObjectiveGroups>,
     groups: Query<'w, 's, &'static ScenarioObjectiveGroup>,
@@ -244,6 +247,11 @@ pub(super) fn capture(
             rng: rng.ok_or(Failure::CorruptSnapshotSection)?.to_raw(),
             next_evaluation: next.map(|next| next.0),
             instant_decided,
+            pending_validation: parameters
+                .pending_challenge
+                .get(owner)
+                .ok()
+                .map(|pending| pending.scenario),
             candidates,
             offer,
         });
@@ -447,7 +455,12 @@ fn validate(snapshot: &ScenarioSnapshot) -> Result<(), Failure> {
         validate_lua(lua)?;
     }
     if let Some(challenge) = &snapshot.challenge {
-        if challenge.rng[1] & 1 == 0 || challenge.candidates.len() > 65_536 {
+        if challenge.rng[1] & 1 == 0
+            || challenge.candidates.len() > 65_536
+            || challenge
+                .pending_validation
+                .is_some_and(|pending| pending == AssetId::default() || challenge.offer.is_some())
+        {
             return Err(Failure::CorruptSnapshotSection);
         }
         for lua in challenge.candidates.values() {
@@ -537,6 +550,21 @@ pub(in crate::persistence) struct ScenarioSnapshotApplication<'w, 's> {
     scripts: Option<Res<'w, Assets<LuaScriptAsset>>>,
     script_sources: Option<Res<'w, LuaScriptSources>>,
     existing_groups: Query<'w, 's, &'static ScenarioObjectiveGroups>,
+    timings: Query<'w, 's, &'static mut ScenarioScriptTiming>,
+    root_scenario: Query<
+        'w,
+        's,
+        (
+            Option<&'static mut ScenarioDocument>,
+            Option<&'static mut ActiveScenarioSession>,
+            Option<&'static mut ScenarioLuaContext>,
+            Option<&'static mut ScenarioChallengeSelectionRandomNumberGenerator>,
+            Option<&'static mut ScenarioChallengeManagerNextEvaluationTick>,
+            Has<ScenarioInstantChallengeDecided>,
+            Option<&'static mut crate::scenario::challenge_offer_lua_validation::PendingChallengeValidation>,
+        ),
+        With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
+    >,
     existing: Query<
         'w,
         's,
@@ -554,6 +582,8 @@ pub(super) struct PreparedScenarioSnapshot {
     snapshot: ScenarioSnapshot,
     campaign: Option<PreparedScenarioRules>,
     offer: Option<PreparedScenarioRules>,
+    pending_validation:
+        Option<crate::scenario::challenge_offer_lua_validation::PendingChallengeValidation>,
     candidates: BTreeMap<AssetId, (Handle<WorldScenarioDocumentAsset>, ScenarioLuaContext)>,
 }
 
@@ -606,7 +636,25 @@ pub(super) fn prepare(
     };
     let mut candidates = BTreeMap::new();
     let mut offer = None;
+    let mut pending_validation = None;
     if let Some(challenge) = &snapshot.challenge {
+        if let Some(scenario) = challenge.pending_validation {
+            let document = view
+                .handle_for_scenario(scenario)
+                .cloned()
+                .ok_or(Failure::UnknownAssetIdentifier)?;
+            let (_, _, script) = assets
+                .get(&document)
+                .and_then(|asset| asset.validation_script(scenario))
+                .ok_or(Failure::UnknownAssetIdentifier)?;
+            pending_validation = Some(
+                crate::scenario::challenge_offer_lua_validation::PendingChallengeValidation {
+                    scenario,
+                    document,
+                    script: script.clone(),
+                },
+            );
+        }
         for (definition, lua) in &challenge.candidates {
             let document = view
                 .handle_for_scenario(*definition)
@@ -630,6 +678,7 @@ pub(super) fn prepare(
         snapshot,
         campaign,
         offer,
+        pending_validation,
         candidates,
     }))
 }
@@ -762,6 +811,11 @@ fn prepare_current_runtime(
             .script_sources
             .as_deref()
             .ok_or(Failure::CorruptSnapshotSection)?,
+        parameters
+            .assets
+            .as_deref()
+            .and_then(|assets| assets.get(document))
+            .ok_or(Failure::UnknownAssetIdentifier)?,
     )
     .map_err(|error| {
         warn!(%error, "cannot restore scenario Lua data");
@@ -803,6 +857,12 @@ pub(super) fn apply(
             .map(|asset| &asset.authored)
             .ok_or(Failure::UnknownAssetIdentifier)
     };
+    use super::restored_component_values::restore_optional_component;
+    let (document, session, runtime, random, next_evaluation, instant_decided, pending_validation) =
+        parameters
+            .root_scenario
+            .get_mut(root)
+            .map_err(|_| Failure::BrokenPersistentEntityReference)?;
     if let Some(campaign) = prepared.campaign {
         spawn_restored_objectives(
             commands,
@@ -815,9 +875,17 @@ pub(super) fn apply(
             &snapshot.groups.session,
             read_authored(&campaign.document)?,
         );
-        commands.entity(root).insert((
-            ScenarioDocument(campaign.document),
-            ActiveScenarioSession {
+        let mut world = commands.entity(root);
+        restore_optional_component(
+            &mut world,
+            document,
+            Some(ScenarioDocument(campaign.document)),
+            false,
+        );
+        restore_optional_component(
+            &mut world,
+            session,
+            Some(ActiveScenarioSession {
                 definition: snapshot.definition,
                 started_tick: snapshot.started_tick,
                 state: match snapshot.state {
@@ -825,34 +893,55 @@ pub(super) fn apply(
                     1 => ScenarioSessionState::Won,
                     _ => ScenarioSessionState::Lost,
                 },
-            },
-        ));
-        if let Some(timing) = snapshot.timing {
-            commands.entity(root).insert(timing);
-        } else {
-            commands
-                .entity(root)
-                .insert(ScenarioScriptTiming::default());
-        }
-        commands
-            .entity(root)
-            .insert(campaign.runtime.unwrap_or_default());
+            }),
+            false,
+        );
+        restore_optional_component(
+            &mut world,
+            parameters.timings.get_mut(root).ok(),
+            Some(snapshot.timing.unwrap_or_default()),
+            false,
+        );
+        restore_optional_component(
+            &mut world,
+            runtime,
+            Some(campaign.runtime.unwrap_or_default()),
+            false,
+        );
     }
     if let Some(challenge) = snapshot.challenge {
         let mut world = commands.entity(root);
-        world.insert(ScenarioChallengeSelectionRandomNumberGenerator::from_raw(
-            challenge.rng,
-        ));
-        if let Some(tick) = challenge.next_evaluation {
-            world.insert(ScenarioChallengeManagerNextEvaluationTick(tick));
-        } else {
-            world.remove::<ScenarioChallengeManagerNextEvaluationTick>();
+        restore_optional_component(
+            &mut world,
+            random,
+            Some(ScenarioChallengeSelectionRandomNumberGenerator::from_raw(
+                challenge.rng,
+            )),
+            false,
+        );
+        restore_optional_component(
+            &mut world,
+            next_evaluation,
+            challenge
+                .next_evaluation
+                .map(ScenarioChallengeManagerNextEvaluationTick),
+            true,
+        );
+        match (instant_decided, challenge.instant_decided) {
+            (false, true) => {
+                world.insert(ScenarioInstantChallengeDecided);
+            }
+            (true, false) => {
+                world.remove::<ScenarioInstantChallengeDecided>();
+            }
+            _ => {}
         }
-        if challenge.instant_decided {
-            world.insert(ScenarioInstantChallengeDecided);
-        } else {
-            world.remove::<ScenarioInstantChallengeDecided>();
-        }
+        restore_optional_component(
+            &mut world,
+            pending_validation,
+            prepared.pending_validation,
+            true,
+        );
         let mut contexts = BTreeMap::new();
         for (id, (document, runtime)) in prepared.candidates {
             let entity = commands
@@ -973,6 +1062,7 @@ fn spawn_restored_objectives(
     crate::scenario::scenario_group_completion::spawn_scenario_objective_groups(
         commands,
         owner,
+        scenario,
         groups,
         entities,
         objectives

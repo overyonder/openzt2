@@ -51,6 +51,8 @@ impl Default for PlacementSurfacePolicy {
 pub struct PlaceableDefinition {
     pub id: AssetId,
     #[serde(default)]
+    pub minimum_object_detail: Option<u8>,
+    #[serde(default)]
     pub surface_policy: PlacementSurfacePolicy,
     /// Authored `ZTPlacementData.weight`. The placement cursor divides its
     /// base interpolation rate by positive values of this field.

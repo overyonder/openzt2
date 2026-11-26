@@ -53,7 +53,7 @@ pub(super) fn spawn_snapshot_photos(
         );
         photo_image.data = Some(photo_snapshot_record.rgba8_pixel_bytes);
         let photo_image_handle = loaded_photo_images.add(photo_image);
-        commands.spawn((
+        let mut photo = commands.spawn((
             photo_snapshot_record.persistent_identifier,
             WorldMember {
                 root: world_root_entity,
@@ -73,6 +73,9 @@ pub(super) fn spawn_snapshot_photos(
                     .challenge_photo_file_identifiers,
             },
         ));
+        if let Some(caption) = photo_snapshot_record.caption {
+            photo.insert(openzt2_photos::PhotoCaption(caption));
+        }
     }
     Ok(())
 }
@@ -98,7 +101,7 @@ pub(super) fn restore_snapshot_photo_challenge_completion(
             .set_if_neq(PhotoChallengeProgress {
                 completed: record.completed,
                 completed_by,
-                rating_stars: record.rating_stars,
+                rating_half_stars: record.rating_half_stars,
             });
     }
     Ok(())

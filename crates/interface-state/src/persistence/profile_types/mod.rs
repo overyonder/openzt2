@@ -23,6 +23,7 @@ pub struct ProfileOptions {
     pub profile_identifier: AssetId,
     pub locale_identifier: AssetId,
     pub controller_input_enabled: bool,
+    pub photo_album: Option<PhotoAlbumProfileOptions>,
     pub attributes: std::collections::BTreeMap<String, String>,
 }
 
@@ -79,4 +80,9 @@ pub enum ProfileFailure {
     Active,
     HasSaves,
     CapacityExceeded,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PhotoAlbumProfileOptions {
+    pub default_spreads: Option<u32>,
 }

@@ -4,6 +4,7 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::AssetId;
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooSlowTickElapsed;
 use openzt2_world_state::world_spawn::{
     world_entity_crating::UncratedWorldEntity, world_membership_types::WorldMember,
 };
@@ -25,6 +26,7 @@ use openzt2_zoo_state::{
 #[allow(clippy::type_complexity)]
 pub(super) fn sample_current_guest_need_observations(
     time: Res<Time<Fixed>>,
+    mut slow_ticks: MessageReader<ZooSlowTickElapsed>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active: Res<WorldDefinitions>,
     mut cadences: Query<&mut GuestSurveyNeedCadence>,
@@ -61,6 +63,14 @@ pub(super) fn sample_current_guest_need_observations(
         ),
     >,
 ) {
+    let mut ticks = bevy::ecs::entity::EntityHashMap::<u32>::default();
+    for event in slow_ticks.read() {
+        let count = ticks.entry(event.root).or_default();
+        *count = count.saturating_add(event.count);
+    }
+    if ticks.is_empty() {
+        return;
+    }
     let Some(definitions) = active.get(&definitions) else {
         return;
     };
@@ -74,7 +84,10 @@ pub(super) fn sample_current_guest_need_observations(
         return;
     }
     let interval = generation.need_survey.check_interval_ns as f32 * 1e-9;
-    let delta = time.timestep().as_secs_f32();
+    let step = definitions
+        .authored_timekeeper_policy()
+        .map_or(time.timestep(), |policy| policy.slow.interval)
+        .as_secs_f32();
     for (
         (world, task, instruction, pending_failure),
         archetype,
@@ -100,6 +113,10 @@ pub(super) fn sample_current_guest_need_observations(
         let Some(definition) = definitions.find_guest(archetype.0) else {
             continue;
         };
+        let Some(count) = ticks.get(&world.root) else {
+            continue;
+        };
+        let delta = step * *count as f32;
         let Ok(mut cadence) = cadences.get_mut(world.root) else {
             continue;
         };
@@ -210,6 +227,7 @@ mod tests {
         .collect();
         app.init_resource::<Assets<WorldDefinitionAsset>>()
             .insert_resource(Time::<Fixed>::from_hz(10.0))
+            .add_message::<ZooSlowTickElapsed>()
             .add_systems(Update, sample_current_guest_need_observations);
         let handle = app
             .world_mut()
@@ -243,6 +261,8 @@ mod tests {
         let (mut app, root) = fixture();
         for _ in 0..20 {
             app.world_mut().get_mut::<ZooClock>(root).unwrap().tick += 1_000;
+            app.world_mut()
+                .write_message(ZooSlowTickElapsed { root, count: 1 });
             app.update();
         }
         let survey = app
@@ -305,6 +325,8 @@ mod tests {
                 GuestSatisfaction(500, 0),
             ))
             .id();
+        app.world_mut()
+            .write_message(ZooSlowTickElapsed { root, count: 1 });
         app.update();
         let observations = app
             .world()
@@ -316,6 +338,8 @@ mod tests {
             app.world().get::<GuestSurveyNeedCadence>(root).unwrap().0,
             5.0
         );
+        app.world_mut()
+            .write_message(ZooSlowTickElapsed { root, count: 1 });
         app.update();
         assert_eq!(
             app.world()
@@ -327,6 +351,8 @@ mod tests {
         app.world_mut().entity_mut(guest).insert(Frozen);
         let before = *app.world().get::<GuestSurveyNeedCadence>(root).unwrap();
         let experience = *app.world().get::<GuestSurveyExperience>(guest).unwrap();
+        app.world_mut()
+            .write_message(ZooSlowTickElapsed { root, count: 1 });
         app.update();
         assert_eq!(
             *app.world().get::<GuestSurveyNeedCadence>(root).unwrap(),

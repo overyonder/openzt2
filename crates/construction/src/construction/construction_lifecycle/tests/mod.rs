@@ -225,6 +225,7 @@ fn a_partial_commit_restores_the_applied_domain_and_refunds_the_charge() {
         (Account::External, Account::Zoo, Money(500))
     );
     app.world_mut().write_message(TransactionCompleted {
+        domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Player,
         operation: refund.operation,
         debit: refund.debit,
         credit: refund.credit,

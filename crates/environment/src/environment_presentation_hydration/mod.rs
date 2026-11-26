@@ -12,9 +12,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::{
     daylight_environment_sampling::collect_authored_environment_light_kind_ranks,
-    environment_presentation_types::{
-        AboveWaterFog, EnvironmentPresentationPending, EnvironmentRendererReady, EnvironmentSky,
-    },
+    environment_presentation_types::{AboveWaterFog, EnvironmentSky},
     environment_visual_construction::{
         convert_authored_sky_keyframe_tint_to_bevy_color,
         create_environment_texture_renderer_components,
@@ -24,10 +22,7 @@ use super::{
 
 pub(super) fn hydrate_bevy_renderer_entities_for_new_world_environment(
     mut commands: Commands,
-    environments: Query<
-        (Entity, &WorldEnvironment, &WorldMember),
-        Without<EnvironmentRendererReady>,
-    >,
+    environments: Query<(Entity, &WorldEnvironment, &WorldMember), Without<AboveWaterFog>>,
     worlds: Query<&SelectedWorldTerrainAssetHandle>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -132,10 +127,8 @@ pub(super) fn hydrate_bevy_renderer_entities_for_new_world_environment(
             &mut meshes,
             &mut materials,
         );
-        commands.entity(environment_entity).insert((
-            EnvironmentRendererReady,
-            EnvironmentPresentationPending,
-            AboveWaterFog::default(),
-        ));
+        commands
+            .entity(environment_entity)
+            .insert(AboveWaterFog::default());
     }
 }

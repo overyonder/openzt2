@@ -78,11 +78,24 @@ pub(super) fn lower_animation_action_source_node(
             "BFBehAnimate playback policy is not yet mapped",
         ));
     }
-    let animation_clip_asset_key = animation_action_source_node
+    let clip = animation_action_source_node
         .attribute("targetAnim")
         .filter(|key| !key.trim().is_empty())
         .ok_or_else(|| invalid_behavior_source_data("BFBehAnimate has no targetAnim"))?
         .to_owned();
+    let animation = lower_clip_settings(animation_action_source_node, clip)?;
+    let keys = lower_behavior_animation_text_keys(animation_action_source_node)?;
+    Ok(Some(if keys.is_empty() {
+        BehaviorAction::AnimationClip(animation)
+    } else {
+        BehaviorAction::AnimationWithTextKeys { animation, keys }
+    }))
+}
+
+fn lower_clip_settings(
+    animation_action_source_node: &DataNode,
+    animation_clip_asset_key: String,
+) -> io::Result<BehaviorAnimationClipAction> {
     let play_duration_seconds = match (
         read_optional_float_attribute(animation_action_source_node, "playTime")?,
         read_optional_float_attribute(animation_action_source_node, "playtime")?,
@@ -131,7 +144,7 @@ pub(super) fn lower_animation_action_source_node(
         .attribute("groundFit")
         .map(|_| read_boolean_attribute_or_false(animation_action_source_node, "groundFit"))
         .transpose()?;
-    let animation = BehaviorAnimationClipAction {
+    Ok(BehaviorAnimationClipAction {
         animation_clip_asset_key,
         looping: read_boolean_attribute_or_false(animation_action_source_node, "loopFlag")?,
         physical_object: animation_action_source_node
@@ -151,13 +164,7 @@ pub(super) fn lower_animation_action_source_node(
         ground_fit,
         blend_duration_seconds,
         playback_speed,
-    };
-    let keys = lower_behavior_animation_text_keys(animation_action_source_node)?;
-    Ok(Some(if keys.is_empty() {
-        BehaviorAction::AnimationClip(animation)
-    } else {
-        BehaviorAction::AnimationWithTextKeys { animation, keys }
-    }))
+    })
 }
 
 fn lower_animation_switch(node: &DataNode) -> io::Result<BehaviorAction> {
@@ -178,6 +185,7 @@ fn lower_animation_switch(node: &DataNode) -> io::Result<BehaviorAction> {
     for row in table.element_children() {
         let clip = super::source_value_reading::read_optional_trimmed_string_attribute(row, "anim")
             .ok_or_else(|| invalid_behavior_source_data("BFBehAnimateSwitch row requires anim"))?;
+        let clip = lower_clip_settings(row, clip)?;
         if row.name.eq_ignore_ascii_case("default") {
             action.default_clip = Some(clip);
         } else {

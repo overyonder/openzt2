@@ -128,6 +128,7 @@ pub(super) struct RestoredTransportComponents {
     running: Option<&'static mut CircuitRunning>,
     direction: Option<&'static mut CircuitDirection>,
     fare: Option<&'static mut Price>,
+    crossing: Option<&'static mut openzt2_transport::transport_tours::SkyStationCrossing>,
     tower: Option<&'static mut SkyTowerHeight>,
     track_profile: Option<&'static mut TrackProfile>,
     segment: Option<&'static mut TrackSegment>,
@@ -161,11 +162,18 @@ pub(super) fn restore_transport_sections(
             circuit.remove::<ReopenRestoredTransportCircuit>();
         }
         let definition = record.transport_definition_identifier;
-        let fare = graph
-            .fares
+        let fare = if let Ok(index) = graph
+            .fares_dollars
             .binary_search_by_key(&record.persistent_identifier.0, |(id, _)| *id)
-            .ok()
-            .map_or(0, |index| graph.fares[index].1);
+        {
+            Money::from_dollars(graph.fares_dollars[index].1).ok_or(Missing)?
+        } else {
+            graph
+                .fares
+                .binary_search_by_key(&record.persistent_identifier.0, |(id, _)| *id)
+                .ok()
+                .map_or(Money::ZERO, |index| Money::from_cents(graph.fares[index].1))
+        };
         restore_optional_component(
             &mut circuit,
             current.definition,
@@ -187,7 +195,7 @@ pub(super) fn restore_transport_sections(
             Some(CircuitRunning(record.is_running)),
             false,
         );
-        restore_optional_component(&mut circuit, current.fare, Some(Price(Money(fare))), false);
+        restore_optional_component(&mut circuit, current.fare, Some(Price(fare)), false);
         restore_optional_component(
             &mut circuit,
             current.direction,
@@ -233,6 +241,22 @@ pub(super) fn restore_transport_sections(
             false,
         );
         member.insert(CircuitMember(resolve(circuit)?));
+    }
+
+    for saved in graph.sky_station_crossings {
+        let vehicle = resolve(PersistentId(saved.vehicle))?;
+        let route = resolve(PersistentId(saved.next_route))?;
+        let current = live.get_mut(vehicle).map_err(|_| Missing)?;
+        restore_optional_component(
+            &mut commands.entity(vehicle),
+            current.crossing,
+            Some(openzt2_transport::transport_tours::SkyStationCrossing {
+                next_track: route,
+                reverse: saved.reverse,
+                distance: saved.distance,
+            }),
+            false,
+        );
     }
 
     for (id, height) in graph.junctions {

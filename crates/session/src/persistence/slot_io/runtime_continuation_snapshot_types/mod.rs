@@ -27,14 +27,22 @@ pub(super) struct RuntimeDomainContinuation {
     pub disease: DiseaseContinuation,
     pub eggs: Vec<EggContinuation>,
     pub fossils: Option<super::fossil_continuation_snapshot::FossilContinuation>,
+    #[serde(skip)]
+    pub breeding_center_births: Vec<(u64, f32)>,
+    #[serde(skip)]
+    pub water_filter_cleanup: Vec<(u64, u64)>,
+    #[serde(skip)]
+    pub guests: Vec<super::guest_continuation_snapshot::GuestContinuation>,
     pub trick_popularity: Option<std::collections::BTreeMap<openzt2_game_data::AssetId, f32>>,
 }
 
-#[derive(Debug, Clone, Copy, Default, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
 pub(super) struct DiseaseContinuation {
     pub funding: Option<f32>,
     pub exposure_deadline: Option<u64>,
     pub active: Option<(openzt2_game_data::AssetId, u64)>,
+    #[serde(skip)]
+    pub assignments: Vec<(u64, openzt2_game_data::AssetId)>,
 }
 
 #[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]

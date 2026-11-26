@@ -16,6 +16,7 @@ use super::{
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
+use openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorTokenEconomyTerms;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
@@ -30,6 +31,13 @@ use openzt2_game_data::{
     AssetId,
 };
 
+use openzt2_zoo_state::donations::donation_payment_types::{
+    DonationCategoryTotals, DonationCompleted, DonationTotal,
+};
+
+#[derive(Component)]
+pub(super) struct AuthoredDonationCategory(AssetId);
+
 pub(super) fn start_authored_behavior_transactions(
     activation: On<WhenBehaviorAction<RunBehaviorEconomy>>,
     mut commands: Commands,
@@ -37,6 +45,7 @@ pub(super) fn start_authored_behavior_transactions(
         &openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken,
         With<openzt2_zoo_state::economy::experience_donation::ExperienceDonation>,
     >,
+    token_terms: Query<&BehaviorTokenEconomyTerms>,
     tasks: Query<
         (
             &BehaviorTaskExecutionState,
@@ -61,6 +70,7 @@ pub(super) fn start_authored_behavior_transactions(
     {
         return;
     }
+    let terms = task.object.and_then(|token| token_terms.get(token).ok());
     commands
         .entity(actor)
         .insert(RunningBehaviorEconomyTransaction {
@@ -68,7 +78,9 @@ pub(super) fn start_authored_behavior_transactions(
             facility: task.target.unwrap_or(actor),
             target: task.target,
             transaction: running_action.transaction,
-            cost_override: running_action.cost_override,
+            cost_override: terms
+                .map(|terms| terms.cost_override)
+                .or(running_action.cost_override),
             payment: None,
             next_transaction: None,
         });
@@ -93,7 +105,10 @@ pub(super) fn execute_authored_behavior_transaction_steps(
         Option<&super::saved_world_economy_trackers::WorldEconomyTrackerIndex>,
     )>,
     asset_server: Res<AssetServer>,
-    trackers: Query<&BehaviorEconomyTracker>,
+    (trackers, token_terms): (
+        Query<&BehaviorEconomyTracker>,
+        Query<&BehaviorTokenEconomyTerms>,
+    ),
     mut wallets: Query<&mut Wallet>,
     mut tasks: Query<
         (
@@ -135,10 +150,34 @@ pub(super) fn execute_authored_behavior_transaction_steps(
         {
             continue;
         }
-        let tracker = if running.general || running.tracker.is_some() {
-            let key = running
-                .tracker
-                .unwrap_or_else(|| AssetId::from_key("general"));
+        let object = objects
+            .get(pending.facility)
+            .ok()
+            .and_then(|(id, price)| definitions.find_object(id.0).map(|object| (object, price)));
+        let token_terms = task.object.and_then(|token| token_terms.get(token).ok());
+        let donation_category = token_terms.and_then(|terms| {
+            object
+                .as_ref()?
+                .0
+                .transactions
+                .iter()
+                .any(|transaction| {
+                    transaction.name == running.transaction
+                        && transaction.category == AssetId::from_key("donations_income")
+                })
+                .then_some(terms.tracker)
+        });
+        let tracker_key = running
+            .tracker
+            .or_else(|| running.general.then(|| AssetId::from_key("general")))
+            .or_else(|| {
+                donation_category
+                    .is_none()
+                    .then_some(token_terms)
+                    .flatten()
+                    .map(|terms| terms.tracker)
+            });
+        let tracker = if let Some(key) = tracker_key {
             let configuration = tracker_indexes.get(member.root).ok();
             let entity = configuration.and_then(|(_, index)| index?.0.get(&key).copied());
             let Some((entity, tracker)) = entity
@@ -165,10 +204,6 @@ pub(super) fn execute_authored_behavior_transaction_steps(
         } else {
             None
         };
-        let object = objects
-            .get(pending.facility)
-            .ok()
-            .and_then(|(id, price)| definitions.find_object(id.0).map(|object| (object, price)));
         let records = tracker
             .map(|(_, tracker)| tracker.transactions.as_slice())
             .or_else(|| {
@@ -189,7 +224,9 @@ pub(super) fn execute_authored_behavior_transaction_steps(
             );
             continue;
         };
-        let base_price = object.as_ref().map_or(0, |(object, _)| object.price_cents);
+        let base_price = object.as_ref().map_or(Money::ZERO, |(object, _)| {
+            Money::from_cents(object.price_cents)
+        });
         let price = object.and_then(|(_, price)| price);
         let account_recipient = if let Some(key) = transaction.target {
             if key == AssetId::from_key("subject") {
@@ -254,7 +291,6 @@ pub(super) fn execute_authored_behavior_transaction_steps(
                 || !transaction.track_on_parent
                 || transaction.next_transaction.is_some()
                 || object.is_none()
-                || running.keeper_refill.is_none()
                 || amount <= 0.0)
         {
             fail_transaction(
@@ -309,16 +345,21 @@ pub(super) fn execute_authored_behavior_transaction_steps(
                     .id();
                 if let Some(current_job) = keeper_refill {
                     commands.entity(operation).insert(
-                        super::keeper_refill_settlement::StagedBehaviorRefill {
+                        super::keeper_refill_settlement::KeeperRefillPayment {
                             job: current_job.job(),
                             definition: object.expect("validated refill object").0.id,
-                            continuation: running
-                                .keeper_refill
-                                .expect("validated refill continuation"),
                         },
                     );
                 }
-                let owner = if running.general || transaction.track_on_parent {
+                if let Some(category) = donation_category {
+                    commands
+                        .entity(operation)
+                        .insert(AuthoredDonationCategory(category));
+                }
+                let owner = if donation_category.is_some()
+                    || running.general
+                    || transaction.track_on_parent
+                {
                     Account::Zoo
                 } else if let Some((tracker, _)) = tracker {
                     Account::Entity(tracker)
@@ -333,11 +374,16 @@ pub(super) fn execute_authored_behavior_transaction_steps(
                     (owner, Account::Entity(account_recipient))
                 };
                 payments.write(TransactionRequest {
+                    domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Simulation,
                     operation,
                     debit,
                     credit,
                     amount,
-                    kind: TransactionKind::Service,
+                    kind: if donation_category.is_some() {
+                        TransactionKind::Donation
+                    } else {
+                        TransactionKind::Service
+                    },
                     subject: Some(pending.facility),
                 });
                 pending.payment = Some(operation);
@@ -479,8 +525,11 @@ pub(super) fn finish_settled_behavior_transactions(
     operations: Query<(
         &BehaviorTransactionPayment,
         &WorldMember,
-        Has<super::keeper_refill_settlement::StagedBehaviorRefill>,
+        Option<&AuthoredDonationCategory>,
     )>,
+    mut category_totals: Query<&mut DonationCategoryTotals>,
+    mut acceptor_totals: Query<&mut DonationTotal>,
+    mut donation_receipts: Option<MessageWriter<DonationCompleted>>,
     mut tasks: Query<
         (
             &BehaviorTaskExecutionState,
@@ -490,17 +539,51 @@ pub(super) fn finish_settled_behavior_transactions(
         Without<PendingBehaviorTaskFailure>,
     >,
 ) {
+    let mut retired = bevy::ecs::entity::EntityHashSet::default();
+    let mut new_donations = HashMap::<Entity, DonationCategoryTotals>::new();
+    let mut new_acceptor_totals = HashMap::<Entity, DonationTotal>::new();
     for payment in completed.read() {
-        let Ok((owner, member, refill)) = operations.get(payment.operation) else {
+        let Ok((owner, member, category)) = operations.get(payment.operation) else {
             continue;
         };
+        if !retired.insert(payment.operation) {
+            continue;
+        }
+        if let Some(category) = category {
+            let acceptor = owner.facility;
+            let amount = payment.amount;
+            let mut current = category_totals.get_mut(acceptor).ok();
+            let totals = current
+                .as_deref_mut()
+                .unwrap_or_else(|| new_donations.entry(acceptor).or_default());
+            if totals
+                .accumulate_completed_donation(category.0, amount)
+                .is_some()
+            {
+                if let Some(next) = totals.aggregate_for_category(None) {
+                    if let Ok(mut total) = acceptor_totals.get_mut(acceptor) {
+                        total.set_if_neq(next);
+                    } else {
+                        new_acceptor_totals.insert(acceptor, next);
+                    }
+                }
+                if let Some(receipts) = donation_receipts.as_mut() {
+                    receipts.write(DonationCompleted {
+                        guest: owner.actor,
+                        acceptor,
+                        subject: acceptor,
+                        amount,
+                    });
+                }
+            }
+        }
         if let Ok((task, instruction, mut pending)) = tasks.get_mut(owner.actor) {
             if pending.payment == Some(payment.operation) {
                 let next = pending.next_transaction;
                 if let Some(clock) = clocks
                     .get(member.root)
                     .ok()
-                    .filter(|_| !refill && pending.owns(task, instruction))
+                    .filter(|_| pending.owns(task, instruction))
                 {
                     finish_transaction_step(
                         owner.actor,
@@ -520,9 +603,12 @@ pub(super) fn finish_settled_behavior_transactions(
         commands.entity(payment.operation).despawn();
     }
     for payment in rejected.read() {
-        let Ok((owner, _, _)) = operations.get(payment.operation) else {
+        let Ok((owner, ..)) = operations.get(payment.operation) else {
             continue;
         };
+        if !retired.insert(payment.operation) {
+            continue;
+        }
         if let Ok((task, instruction, pending)) = tasks.get_mut(owner.actor) {
             if pending.payment == Some(payment.operation) {
                 if pending.owns(task, instruction) {
@@ -540,6 +626,12 @@ pub(super) fn finish_settled_behavior_transactions(
             }
         }
         commands.entity(payment.operation).despawn();
+    }
+    for (acceptor, totals) in new_donations {
+        commands.entity(acceptor).try_insert_if_new(totals);
+    }
+    for (acceptor, total) in new_acceptor_totals {
+        commands.entity(acceptor).try_insert_if_new(total);
     }
 }
 

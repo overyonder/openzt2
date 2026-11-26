@@ -192,6 +192,7 @@ pub(super) fn lower_source_ui_widget_to_canonical_widget_record(
                 grid: grid_record(&list.grid),
                 included_kinds,
                 excluded_kinds,
+                non_remembered_root_types: super::authored_ui_widget_record_lowering::non_remembered_root_types(list),
                 row_document: AssetId::from_virtual_path(&list_row_document_path("purchaseicon")),
                 filters,
             }

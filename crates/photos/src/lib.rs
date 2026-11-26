@@ -17,7 +17,6 @@ mod photo_challenge_lua_scoring;
 mod photo_challenge_lua_scoring_types;
 mod photo_challenge_lua_virtual_machine_invalidation;
 mod photo_challenge_scoring;
-pub use photo_challenge_scoring::PhotoChallengeHalfStars;
 mod photo_configuration;
 mod photo_mode_presentation_lifecycle;
 mod photo_subject_evidence_collection;

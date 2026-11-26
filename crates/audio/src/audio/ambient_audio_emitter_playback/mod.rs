@@ -122,3 +122,34 @@ pub(super) fn play_changed_allowed_ambient_audio_emitters(
         }
     }
 }
+
+#[derive(Message, Clone, Copy)]
+pub struct AddAwardAmbientCue {
+    pub root: Entity,
+    pub cue: AssetId,
+}
+
+pub(super) fn play_awarded_ambient_cues(
+    mut requests: MessageReader<AddAwardAmbientCue>,
+    mut voices: MessageWriter<ProducedAudioRequest<AMBIENT_EMITTER>>,
+    worlds: Query<(), With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>>,
+    catalogue: Res<AudioAssets>,
+    assets: Res<Assets<AudioAsset>>,
+) {
+    let view = catalogue.get(&assets);
+    for request in requests.read() {
+        if worlds.contains(request.root) && view.is_some_and(|view| view.cue(request.cue).is_some())
+        {
+            voices.write(ProducedAudioRequest::PlayOwned(
+                PlayAudioCue {
+                    cue: request.cue,
+                    emitter: None,
+                    selection: request.root.to_bits(),
+                    priority: 32,
+                    force_looped: false,
+                },
+                request.root,
+            ));
+        }
+    }
+}

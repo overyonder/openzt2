@@ -1,5 +1,5 @@
 mod challenge_offer_execution;
-mod challenge_offer_lua_validation;
+pub(crate) mod challenge_offer_lua_validation;
 mod challenge_offer_presentation;
 pub mod challenge_offer_types;
 mod profile_scenario_variable_application;
@@ -23,7 +23,6 @@ mod scenario_lua_virtual_machine;
 mod scenario_lua_virtual_machine_invalidation;
 mod scenario_objective_lua_execution;
 mod scenario_objective_progression;
-mod scenario_photo_challenge_selection;
 mod scenario_resolution;
 mod scenario_rule_visibility;
 mod scenario_selection_ui_action_routing;
@@ -74,10 +73,11 @@ impl Plugin for ScenarioPlugin {
             .add_message::<CreateScenarioChallengeOfferFromLuaSourcePathRequest>()
             .add_message::<ScenarioTerminalResult>()
             .add_message::<ScenarioObjectiveStatusChanged>()
+            .register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, scenario_objective_progression::ScenarioObjectiveDeadlines>()
             .add_message::<scenario_objective_lua_execution::EvaluatedScenarioTerminal>()
             .add_message::<scenario_objective_lua_execution::ScenarioEvaluationDue>()
             .add_message::<openzt2_zoo_state::scenario::scenario_objective_types::ShowScenarioRuleRequest>()
-            .add_message::<scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest>()
+            .register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, openzt2_interface_state::photos::photo_challenge_types::CurrentPhotoChallengeSet>()
             .add_systems(
                 Update,
                 scenario_lua_virtual_machine_invalidation::
@@ -107,7 +107,7 @@ impl Plugin for ScenarioPlugin {
                         route_scenario_selection_and_start_ui_actions,
                 )
                     .in_set(GameSet::Intent)
-                    .run_if(in_state(GamePhase::InGame).or_else(in_state(GamePhase::MapSelection))),
+                    .run_if(in_state(GamePhase::InGame).or_else(in_state(GamePhase::MapSelection)).or_else(in_state(GamePhase::MainMenu))),
             )
             .add_systems(
                 Update,
@@ -127,7 +127,7 @@ impl Plugin for ScenarioPlugin {
                         create_challenge_offers_requested_by_scenario_scripts,
                     challenge_offer_execution::validate_and_apply_requested_challenge_responses,
                     challenge_offer_presentation::apply_authored_challenge_panel_requests,
-                    scenario_photo_challenge_selection::select_requested_current_photo_challenge_sets,
+                    challenge_offer_execution::project_award_program_suspension,
                 )
                     .chain()
                     .in_set(GameSet::Intent)
@@ -162,14 +162,18 @@ impl Plugin for ScenarioPlugin {
                 FixedUpdate,
                 (
                     scenario_objective_progression::
-                        expire_active_objectives,
+                        expire_active_objectives
+                        .after_ignore_deferred(scenario_objective_progression::index_changed_objective_deadlines),
+                    scenario_objective_progression::index_changed_objective_deadlines
+                        .after_ignore_deferred(scenario_objective_lua_execution::evaluate_due_scenario_rules),
                     scenario_objective_lua_execution::rebuild_scenario_rule_binding_indexes,
                     scenario_objective_lua_execution::advance_scenario_script_timers
                         .after(scenario_objective_lua_execution::rebuild_scenario_rule_binding_indexes),
                     scenario_objective_lua_execution::evaluate_due_scenario_rules
                         .after_ignore_deferred(scenario_objective_lua_execution::advance_scenario_script_timers)
                         .before_ignore_deferred(scenario_objective_progression::expire_active_objectives),
-                    scenario_objective_progression::remove_expired_challenge_offers,
+                    scenario_objective_progression::remove_expired_challenge_offers
+                        .in_set(openzt2_world_state::application_schedule::ZooSlowTick),
                 )
                     .in_set(ScenarioFixedUpdateStage::EvaluateObjectiveAndChallengeScripts)
                     .run_if(in_state(GamePhase::InGame)),

@@ -1,4 +1,10 @@
 use bevy::prelude::{Commands, Entity, MessageWriter, Query, With};
+use openzt2_shows::shows::{
+    show_timing_operations::RunningShowPhaseTimer, ShowMixerTimeSlot, ShowMixerWait,
+};
+use openzt2_zoo_state::shows::running_show_types::{
+    RunningShow, RunningShowFromRow, RunningShowOnStage,
+};
 
 use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
@@ -40,6 +46,7 @@ pub(super) fn apply_show_snapshot_records_to_live_show_stages_and_schedule(
     persistent_identifier_allocator: &mut PersistentIdAllocator,
     show_platform_upgrade_restore_requests: &mut MessageWriter<RestoreShowPlatformUpgrade>,
 ) -> Result<(), WorldSnapshotPersistenceFailure> {
+    let mut running = std::collections::BTreeMap::new();
     for show_stage_snapshot_record in show_snapshot_records.stage_records {
         let show_stage_entity = identities
             .get(
@@ -47,6 +54,9 @@ pub(super) fn apply_show_snapshot_records_to_live_show_stages_and_schedule(
                 show_stage_snapshot_record.persistent_identifier,
             )
             .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+        if let Some(saved) = show_stage_snapshot_record.running {
+            running.insert(saved.row_id, saved);
+        }
         let (_, _, show_stage_open_state, show_name) = show_stages_with_mutable_snapshot_state
             .get_mut(show_stage_entity)
             .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
@@ -124,11 +134,7 @@ pub(super) fn apply_show_snapshot_records_to_live_show_stages_and_schedule(
                     .map(|performer| {
                         (
                             ScheduledTrickPerformer(performer),
-                            ScheduledShowTrickPerformance {
-                                trick: performance_snapshot_record.trick_definition_identifier,
-                                duration_ticks: performance_snapshot_record
-                                    .duration_simulation_ticks,
-                            },
+                            *performance_snapshot_record,
                         )
                     })
                     .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)
@@ -161,8 +167,23 @@ pub(super) fn apply_show_snapshot_records_to_live_show_stages_and_schedule(
                 },
             ))
             .id();
-        for (performer, trick) in scheduled_trick_performances {
-            commands.spawn((ShowTrickSlotOf(row), performer, trick));
+        if let Some(saved) = running.remove(&scheduled_show_snapshot_record.persistent_identifier.0)
+        {
+            restore_show_phase(commands, row, show_stage_entity, world_root_entity, saved)?;
+        }
+        for (performer, cell) in scheduled_trick_performances {
+            let mut slot = commands.spawn((ShowTrickSlotOf(row), performer));
+            if let Some(time_slot) = cell.time_slot {
+                slot.insert(ShowMixerTimeSlot(time_slot));
+            }
+            if let Some(trick) = cell.trick_definition_identifier {
+                slot.insert(ScheduledShowTrickPerformance {
+                    trick,
+                    duration_ticks: cell.duration_simulation_ticks,
+                });
+            } else {
+                slot.insert(ShowMixerWait(cell.duration_simulation_ticks));
+            }
         }
     }
 
@@ -185,20 +206,57 @@ pub(super) fn apply_show_snapshot_records_to_live_show_stages_and_schedule(
         persistent_identifier_allocator
             .reserve_imported(scheduled_break_snapshot_record.persistent_identifier)
             .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
-        commands.spawn((
-            scheduled_break_snapshot_record.persistent_identifier,
-            ScheduledShowRow {
-                stage: show_stage_entity,
-            },
-            ScheduledShowBreakRow {
-                duration_ticks: scheduled_break_snapshot_record.duration_simulation_ticks,
-            },
-            ShowScheduleRowOrder(scheduled_break_snapshot_record.schedule_row_order),
-            WorldMember {
-                root: world_root_entity,
-            },
-        ));
+        let row = commands
+            .spawn((
+                scheduled_break_snapshot_record.persistent_identifier,
+                ScheduledShowRow {
+                    stage: show_stage_entity,
+                },
+                ScheduledShowBreakRow {
+                    duration_ticks: scheduled_break_snapshot_record.duration_simulation_ticks,
+                },
+                ShowScheduleRowOrder(scheduled_break_snapshot_record.schedule_row_order),
+                WorldMember {
+                    root: world_root_entity,
+                },
+            ))
+            .id();
+        if let Some(saved) =
+            running.remove(&scheduled_break_snapshot_record.persistent_identifier.0)
+        {
+            restore_show_phase(commands, row, show_stage_entity, world_root_entity, saved)?;
+        }
     }
 
+    if !running.is_empty() {
+        return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+    }
+    Ok(())
+}
+
+fn restore_show_phase(
+    commands: &mut Commands,
+    row: Entity,
+    stage: Entity,
+    root: Entity,
+    saved: super::show_snapshot_types::RunningShowSnapshot,
+) -> Result<(), WorldSnapshotPersistenceFailure> {
+    let phase = saved
+        .phase()
+        .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
+    commands.spawn((
+        WorldMember { root },
+        RunningShowOnStage(stage),
+        RunningShowFromRow(row),
+        RunningShow {
+            phase,
+            current_slot: saved.current_slot as usize,
+            trick_score: saved.trick_score,
+            stars: saved.stars,
+            completed_tricks: saved.completed_tricks,
+            failed_tricks: saved.failed_tricks,
+        },
+        RunningShowPhaseTimer::from_remaining(std::time::Duration::from_nanos(saved.remaining_ns)),
+    ));
     Ok(())
 }

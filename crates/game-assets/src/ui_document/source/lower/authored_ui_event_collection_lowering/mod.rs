@@ -202,9 +202,9 @@ pub(super) fn flatten_event<'a>(
         let mut operands = event
             .string
             .as_deref()
+            .or(event.value.as_deref())
             .unwrap_or_default()
-            .split(' ')
-            .filter(|token| !token.is_empty());
+            .split_ascii_whitespace();
         let (Some(context), Some(path), Some(entry)) =
             (operands.next(), operands.next(), operands.next())
         else {

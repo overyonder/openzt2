@@ -64,11 +64,11 @@ pub(super) fn capture_economy_snapshot_records_from_live_world(
                     .expect("query requires persistent identity"),
                 complete_component_state: true,
                 opening_zoo_day: opening.map(|opening| opening.0),
-                profit: profit.map(|profit| (profit.total.0, profit.transactions)),
+                profit: profit.map(|profit| (profit.total, profit.transactions)),
                 price_index: price_index.map(|price| price.0),
                 maintenance_schedule_index: maintenance.map(|schedule| schedule.0),
-                wallet: wallet.map(|wallet| wallet.0 .0),
-                price: price.map(|price| price.0 .0),
+                wallet: wallet.map(|wallet| wallet.0),
+                price: price.map(|price| price.0),
                 service: service.map(|service| ServiceFacilitySnapshot {
                     definition: service.definition,
                     capacity: service.capacity,
@@ -91,23 +91,26 @@ pub(super) fn capture_economy_snapshot_records_from_live_world(
         .collect::<Vec<_>>();
     entity_economy_records.sort_unstable_by_key(|record| record.persistent_identifier.0);
 
+    let lifetime_money =
+        |metric| match history.finance_metric_value(metric, FinancePeriod::Lifetime) {
+            FinanceValue::Money(amount) => amount,
+            FinanceValue::Users(_) => Money::ZERO,
+        };
     Ok(EconomySnapshotRecords {
         zoo_cash: cash.0,
         unlimited_cash: Some(policy.is_some_and(|policy| policy.0)),
         admission_price: price.adult,
         admissions_open: admissions.0,
         current_calendar_month: history.current_calendar_month_ordinal(),
-        lifetime_income: Money(
-            history.finance_metric_value(FinanceMetric::Income, FinancePeriod::Lifetime),
-        ),
-        lifetime_expenses: Money(
-            history.finance_metric_value(FinanceMetric::Expenses, FinancePeriod::Lifetime),
-        ),
-        lifetime_donation_income: Money(
-            history.finance_metric_value(FinanceMetric::DonationIncome, FinancePeriod::Lifetime),
-        ),
-        lifetime_users: history
-            .finance_metric_value(FinanceMetric::TotalUsers, FinancePeriod::Lifetime),
+        lifetime_income: lifetime_money(FinanceMetric::Income),
+        lifetime_expenses: lifetime_money(FinanceMetric::Expenses),
+        lifetime_donation_income: lifetime_money(FinanceMetric::DonationIncome),
+        lifetime_users: match history
+            .finance_metric_value(FinanceMetric::TotalUsers, FinancePeriod::Lifetime)
+        {
+            FinanceValue::Users(count) => count,
+            FinanceValue::Money(_) => 0,
+        },
         monthly_finance_history_initialized: history.has_initialized_month(),
         monthly_finance_records: history.retained_month_finance_records().copied().collect(),
         entity_economy_records,

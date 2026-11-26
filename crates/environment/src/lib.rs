@@ -49,8 +49,8 @@ impl Plugin for EnvironmentPlugin {
             .add_observer(sky_vertex_color_interpolation::unlink_removed_sky_vertex_color_mesh)
             .add_observer(sky_vertex_color_interpolation::invalidate_discarded_sky_tree_parent)
             .add_observer(sky_vertex_color_interpolation::restore_unlinked_sky_base_mesh)
-            .add_observer(environment_visual_construction::attach_pending_sun_visual_to_existing_joint)
-            .add_observer(environment_visual_construction::attach_pending_sun_visuals_to_inserted_joint)
+            .add_observer(environment_visual_construction::attach_sun_visual_when_position_model_is_ready)
+            .add_observer(environment_visual_construction::attach_sun_visual_to_single_node_position_model)
             .add_systems(
                 Update,
                 world_environment_initialization::initialize_world_environment_from_loaded_scenario_and_definitions

@@ -8,12 +8,12 @@ use crate::world_scenario::world_scenario_source_reference_resolution::{
 };
 
 use openzt2_game_data::{
+    AssetId,
     world_scenario::{
         StartingFenceRecord, StartingPathRecord, StartingTopologyNodeRecord,
         StartingZooEntityTransform, StartingZooRecord, StartingZooSpawnEntityFlags,
         StartingZooSpawnEntityRecord,
     },
-    AssetId,
 };
 
 use crate::source_coordinate_conversion::{
@@ -35,6 +35,7 @@ pub(super) fn lower_starting_zoo_entities_paths_and_fences_into_record(
     actor_scene_paths: &BTreeMap<String, String>,
     starting_zoo_record: &mut StartingZooRecord,
     former_fence_types: &mut BTreeMap<(AssetId, u64), AssetId>,
+    original_saved_entity_handles: &mut BTreeMap<u32, u64>,
 ) -> io::Result<()> {
     let roots = document.root.element_children().collect::<Vec<_>>();
     let manager = descendants(&roots)
@@ -165,7 +166,8 @@ pub(super) fn lower_starting_zoo_entities_paths_and_fences_into_record(
             }
         }
     }
-    let mut persistent_id =
+    let importing_save = local(&document.root.name) == "saveRoot";
+    let mut allocate_persistent_id =
         |entity: &OrderedSourceDocumentNode, retain_source: bool| -> io::Result<u64> {
             if retain_source {
                 if let Some(raw) = entity.attribute("globalID") {
@@ -195,10 +197,31 @@ pub(super) fn lower_starting_zoo_entities_paths_and_fences_into_record(
             next_id = next_id.checked_add(1).unwrap_or(u64::MAX);
             Ok(assigned)
         };
+    let mut persistent_id =
+        |entity: &OrderedSourceDocumentNode, retain_source: bool| -> io::Result<u64> {
+            let id = allocate_persistent_id(entity, retain_source)?;
+            if importing_save && retain_source {
+                if let Some(raw) = entity
+                    .attribute("safehandledobjid")
+                    .filter(|value| *value != "-1")
+                {
+                    let handle = raw
+                        .parse::<u32>()
+                        .map_err(|_| at(document, entity, "invalid saved entity safe handle"))?;
+                    if original_saved_entity_handles.insert(handle, id).is_some() {
+                        return Err(at(document, entity, "duplicate saved entity safe handle"));
+                    }
+                }
+            }
+            Ok(id)
+        };
 
     let mut source_indexes = BTreeMap::new();
     for (index, (entity, ..)) in renderables.iter().enumerate() {
-        if let Some(handle) = entity.attribute("safehandledobjid") {
+        if let Some(handle) = entity
+            .attribute("safehandledobjid")
+            .filter(|value| *value != "-1")
+        {
             if source_indexes
                 .insert(handle.to_owned(), index as u32)
                 .is_some()
@@ -422,6 +445,9 @@ pub(super) fn lower_starting_zoo_entities_paths_and_fences_into_record(
     starting_zoo_record.paths = paths;
     starting_zoo_record.topology_nodes = topology_nodes;
     starting_zoo_record.fences = fences;
+    if importing_save {
+        starting_zoo_record.next_persistent_identifier = Some(next_id);
+    }
     Ok(())
 }
 

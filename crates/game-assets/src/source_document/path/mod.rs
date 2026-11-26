@@ -98,7 +98,10 @@ pub(crate) fn authored_source_reference_paths(
 }
 
 pub(crate) fn is_authored_file_reference(reference: &str) -> bool {
-    reference.contains(['/', '\\']) || Path::new(reference.trim()).extension().is_some()
+    reference.contains(['/', '\\'])
+        || Path::new(reference.trim())
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("xml"))
 }
 
 fn canonicalize(path: &str) -> String {

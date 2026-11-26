@@ -1,3 +1,5 @@
+use std::{collections::BTreeMap, time::Duration};
+
 use bevy::{ecs::relationship::RelationshipTarget, platform::collections::HashSet, prelude::*};
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
@@ -24,14 +26,27 @@ use openzt2_zoo_state::{
 };
 
 use super::show_timing_operations::{
-    convert_authored_nanoseconds_to_fixed_simulation_ticks, RunningShowPhaseTimer,
+    RunningShowPhaseTimer, convert_authored_nanoseconds_to_fixed_simulation_ticks,
 };
-use super::{scheduled_trick_execution::ShowTrickTokens, ShowMixerTimeSlot, ShowMixerWait};
+use super::{ShowMixerTimeSlot, ShowMixerWait, scheduled_trick_execution::ShowTrickTokens};
 
 #[derive(Component)]
-pub(super) struct ShowRunSlotOrder(Vec<Vec<Entity>>);
+pub struct ShowRunSlotOrder(pub Vec<Vec<Entity>>);
 
 impl ShowRunSlotOrder {
+    fn from_plan(slots: Option<&ShowTrickSlots>, times: &Query<&ShowMixerTimeSlot>) -> Self {
+        let mut columns = BTreeMap::<u16, Vec<Entity>>::new();
+        for (index, slot) in slots
+            .into_iter()
+            .flat_map(RelationshipTarget::iter)
+            .enumerate()
+        {
+            let time = times.get(slot).map_or(index as u16, |slot| slot.0);
+            columns.entry(time).or_default().push(slot);
+        }
+        Self(columns.into_values().collect())
+    }
+
     pub(super) fn slots(&self) -> impl Iterator<Item = Entity> + '_ {
         self.0.iter().flatten().copied()
     }
@@ -39,14 +54,24 @@ impl ShowRunSlotOrder {
 
 #[derive(Component)]
 #[relationship(relationship_target = ActiveShowTricks)]
-pub(super) struct ActiveShowTrickOf(pub(super) Entity);
+pub struct ActiveShowTrickOf(pub Entity);
 
 #[derive(Component)]
 #[relationship_target(relationship = ActiveShowTrickOf, linked_spawn)]
-pub(super) struct ActiveShowTricks(Vec<Entity>);
+pub struct ActiveShowTricks(Vec<Entity>);
 
 #[derive(Component)]
-pub(super) struct ShowColumnWait(Timer);
+pub struct ShowColumnWait(Timer);
+
+impl ShowColumnWait {
+    pub fn from_remaining(remaining: Duration) -> Self {
+        Self(Timer::new(remaining, TimerMode::Once))
+    }
+
+    pub fn remaining(&self) -> Duration {
+        self.0.remaining()
+    }
+}
 
 #[derive(Component, Default)]
 pub(super) struct ShowScheduleCursor(Option<u16>);
@@ -65,11 +90,55 @@ pub(super) struct ShowRunCancelled {
 }
 
 pub(super) fn initialize_show_schedule_cursors(
-    stages: Query<Entity, (With<ShowStage>, Without<ShowScheduleCursor>)>,
+    stages: Query<
+        (Entity, Option<&StageRunningShow>),
+        (With<ShowStage>, Without<ShowScheduleCursor>),
+    >,
+    running: Query<&RunningShowFromRow>,
+    ordering: Query<&ShowScheduleRowOrder>,
     mut commands: Commands,
 ) {
-    for stage in &stages {
-        commands.entity(stage).insert(ShowScheduleCursor::default());
+    for (stage, active) in &stages {
+        let cursor = active
+            .and_then(|active| running.get(*active.collection()).ok())
+            .and_then(|row| ordering.get(row.0).ok())
+            .map(|order| order.0);
+        commands.entity(stage).insert(ShowScheduleCursor(cursor));
+    }
+}
+
+pub(super) fn hydrate_restored_show_columns(
+    runs: Query<
+        (
+            Entity,
+            &RunningShow,
+            &RunningShowFromRow,
+            &RunningShowPhaseTimer,
+            Has<ShowRunSlotOrder>,
+            Has<ShowColumnWait>,
+        ),
+        Or<(Without<ShowRunSlotOrder>, Without<ShowColumnWait>)>,
+    >,
+    rows: Query<Option<&ShowTrickSlots>, With<ShowScheduleRowOrder>>,
+    times: Query<&ShowMixerTimeSlot>,
+    mut commands: Commands,
+) {
+    for (entity, run, row, phase, has_order, has_wait) in &runs {
+        let Ok(slots) = rows.get(row.0) else {
+            continue;
+        };
+        let remaining = if run.phase == ShowPhase::Conducting {
+            phase.remaining()
+        } else {
+            Duration::ZERO
+        };
+        let mut entity = commands.entity(entity);
+        if !has_order {
+            entity.insert(ShowRunSlotOrder::from_plan(slots, &times));
+        }
+        if !has_wait {
+            entity.insert(ShowColumnWait::from_remaining(remaining));
+        }
     }
 }
 
@@ -137,23 +206,14 @@ pub(super) fn start_next_stage_show_or_break(
             },
             |interval| (ShowPhase::BetweenShows, interval.duration_ticks),
         );
-        let mut columns = BTreeMap::<u16, Vec<Entity>>::new();
-        for (index, slot) in slots
-            .into_iter()
-            .flat_map(RelationshipTarget::iter)
-            .enumerate()
-        {
-            let time = time_slots.get(slot).map_or(index as u16, |slot| slot.0);
-            columns.entry(time).or_default().push(slot);
-        }
         let show = commands
             .spawn((
                 *world,
                 RunningShowOnStage(stage),
                 RunningShowFromRow(row),
-                ShowRunSlotOrder(columns.into_values().collect()),
+                ShowRunSlotOrder::from_plan(slots, &time_slots),
                 RunningShowPhaseTimer::new(time.timestep(), remaining_ticks),
-                ShowColumnWait(Timer::new(std::time::Duration::ZERO, TimerMode::Once)),
+                ShowColumnWait::from_remaining(Duration::ZERO),
                 RunningShow {
                     phase,
                     current_slot: 0,
@@ -349,4 +409,3 @@ pub(super) fn advance_running_stage_shows(
         }
     }
 }
-use std::collections::BTreeMap;

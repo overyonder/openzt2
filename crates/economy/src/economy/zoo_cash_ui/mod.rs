@@ -14,11 +14,11 @@ use openzt2_game_assets::{
     ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
 };
 use openzt2_game_data::{
+    AssetId,
     localization::LocalizationFormatArgument,
     ui_document::{
         action::economy::UiEconomyAction, node_property_binding::UiTextPropertyBindingSource,
     },
-    AssetId,
 };
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiEconomyActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
@@ -75,14 +75,14 @@ pub(super) fn project_zoo_cash_balance_into_authored_ui_text(
             }
             selected_format = *positive_format;
         } else {
-            let dollars = cash.0 .0 / 100;
+            let dollars = cash.0.dollars().trunc() as i64;
             // The original groups thousands: "$100,000".
             if dollars < 0 {
                 text.0.push('-');
             }
             openzt2_zoo_state::economy::currency_formatting::write_whole_dollar_currency_with_thousands_separators(
                 &mut text.0,
-                (cash.0 .0 / 100 * 100).saturating_abs(),
+                dollars.saturating_mul(100).saturating_abs(),
             );
             selected_format = if dollars < 0 {
                 *negative_format
@@ -168,7 +168,7 @@ pub(super) fn request_cash_grant_transactions_from_authored_ui_actions(
             let UiEconomyAction::GrantZooCash { amount } = &record.action else {
                 continue;
             };
-            let amount = Money(*amount);
+            let amount = Money::from_cents(*amount);
             if amount.is_positive() {
                 let operation = commands.spawn((
                     UiCashGrantPendingTransaction,
@@ -176,6 +176,7 @@ pub(super) fn request_cash_grant_transactions_from_authored_ui_actions(
                     openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction::CashGrant,
                 )).id();
                 transactions.write(TransactionRequest {
+                    domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Player,
                     operation,
                     debit: Account::External,
                     credit: Account::Zoo,

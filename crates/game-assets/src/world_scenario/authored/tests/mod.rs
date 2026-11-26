@@ -162,7 +162,35 @@ fn children_wrapper_preserves_manager_sequencing_between_groups() {
         assert_eq!(groups[1].members, [rules[2].id, rules[3].id]);
         assert_eq!(groups[2].members, [groups[0].id, groups[1].id]);
         assert_eq!(authored.scenario_nodes[&groups[2].id].chain, chain);
+        assert_eq!(
+            authored.objective_roots[&document.scenarios[0].id],
+            [groups[2].id]
+        );
         assert_eq!(rules[1].name, rules[3].name);
         assert_ne!(rules[1].id, rules[3].id);
     }
+}
+
+#[test]
+fn root_rules_and_empty_groups_keep_authored_order_and_state() {
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("scenario/goals/ordered.xml"),
+        br#"<scenario>
+            <BFScenarioRule name="completed" state="1" sticky="true"/>
+            <BFScenarioGroup optional="true" persist="true"/>
+            <BFScenarioRule name="next"/>
+        </scenario>"#,
+    )
+    .expect("valid scenario source");
+    let (document, authored) =
+        lower_documents(&[&source], &[], &BTreeMap::new(), None).expect("valid scenario");
+    let scenario = &document.scenarios[0];
+    let first = scenario.objectives[0].id;
+    let empty = scenario.objective_groups[0].id;
+    let last = scenario.objectives[1].id;
+    assert_eq!(authored.objective_roots[&scenario.id], [first, empty, last]);
+    assert_eq!(authored.scenario_nodes[&first].initial_state, Some(1));
+    assert_eq!(authored.scenario_nodes[&first].sticky, Some(true));
+    assert_eq!(authored.scenario_nodes[&empty].optional, Some(true));
+    assert!(authored.scenario_nodes[&empty].update_when_paused);
 }

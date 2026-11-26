@@ -1,3 +1,4 @@
+use super::text_replacement_operations::currency_cents;
 use bevy::{
     ecs::{relationship::RelationshipTarget, system::SystemParam},
     prelude::*,
@@ -355,8 +356,9 @@ pub(crate) fn project_live_world_entities_to_visible_information_list_rows(
                             projection_candidate.months_open =
                                 opened.map_or(0, |opened| zoo_day.0.saturating_sub(opened.0) / 30);
                             if let Some(profit) = profit {
-                                projection_candidate.profit_cents = profit.total.0;
-                                projection_candidate.average_profit_cents = profit.average().0;
+                                projection_candidate.profit_cents = currency_cents(profit.total);
+                                projection_candidate.average_profit_cents =
+                                    currency_cents(profit.average());
                             }
                             projection_candidates.push(projection_candidate);
                         },
@@ -370,14 +372,23 @@ pub(crate) fn project_live_world_entities_to_visible_information_list_rows(
                         projection_candidate.months_open =
                             opened.map_or(0, |opened| zoo_day.0.saturating_sub(opened.0) / 30);
                         if let Some(donation_total) = donation_total {
-                            projection_candidate.profit_cents = donation_total.amount.0;
+                            projection_candidate.profit_cents =
+                                currency_cents(donation_total.amount);
                             projection_candidate.average_profit_cents = (donation_total.count != 0)
-                                .then(|| donation_total.amount.0 / i64::from(donation_total.count))
+                                .then(|| {
+                                    currency_cents(
+                                        donation_total
+                                            .amount
+                                            .checked_scale((donation_total.count as f32).recip())
+                                            .unwrap_or_default(),
+                                    )
+                                })
                                 .unwrap_or(0);
                         }
                         if let Some(profit) = profit {
-                            projection_candidate.profit_cents = profit.total.0;
-                            projection_candidate.average_profit_cents = profit.average().0;
+                            projection_candidate.profit_cents = currency_cents(profit.total);
+                            projection_candidate.average_profit_cents =
+                                currency_cents(profit.average());
                         }
                         projection_candidates.push(projection_candidate);
                     }),
@@ -566,9 +577,5 @@ fn apply_requested_sort_direction_to_ordering(
     value: std::cmp::Ordering,
     descending: bool,
 ) -> std::cmp::Ordering {
-    if descending {
-        value.reverse()
-    } else {
-        value
-    }
+    if descending { value.reverse() } else { value }
 }

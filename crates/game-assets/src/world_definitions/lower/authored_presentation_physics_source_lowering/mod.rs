@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use openzt2_game_data::{
-    world_definitions::world_objects::WorldObjectPresentationCausticPolicy, AssetId,
+    AssetId, world_definitions::world_objects::WorldObjectPresentationCausticPolicy,
 };
 
 use openzt2_game_data::world_definitions::world_objects::AuthoredTraversalAnimationManifest;
@@ -23,6 +23,36 @@ use super::{
     },
     world_definition_source_value_reading_and_conversion::element_bool,
 };
+
+pub(super) fn lower_authored_environment_map_swap(
+    record: &RecordView<'_, '_>,
+) -> Option<openzt2_game_data::world_definitions::world_objects::WorldObjectEnvironmentMapSwap> {
+    use openzt2_game_data::world_definitions::world_objects::WorldObjectEnvironmentMapSwap;
+    let swap = authored_type_family_elements_named(record, "BFEnvMapSwapComponent")
+        .into_iter()
+        .next()?;
+    let effect = swap.attribute_named_any(&["effect", "effectFile", "effectName"])?;
+    let texture_parameter = swap
+        .attribute_named_any(&["textureParameter", "parameter"])?
+        .trim();
+    let effect = crate::source_document::path::AssetPath::new(effect).key();
+    if effect.is_empty() || texture_parameter.is_empty() {
+        return None;
+    }
+    Some(WorldObjectEnvironmentMapSwap {
+        effect: AssetId::from_virtual_path(&effect),
+        texture_parameter: texture_parameter.to_owned(),
+    })
+}
+
+pub(super) fn authored_environment_map_target_node(record: &RecordView<'_, '_>) -> Option<AssetId> {
+    let component = authored_type_family_elements_named(record, "BFEnvMapSwapComponent")
+        .into_iter()
+        .next()?;
+    let name = component.attribute_named_any(&["nodeName"])?.trim();
+    let key = canonicalize_source_document_record_key(name);
+    (!key.is_empty()).then(|| AssetId::from_key(&key))
+}
 
 #[derive(Default)]
 struct AuthoredBinderPhysics {

@@ -376,6 +376,7 @@ pub(super) fn distribute_saved_snapshot_sections(
 
 pub(super) fn restore_research_projects(
     mut commands: Commands,
+    time: Res<Time<Fixed>>,
     mut operations: Query<(
         Entity,
         &RestoreRuntimeContinuation,
@@ -402,6 +403,7 @@ pub(super) fn restore_research_projects(
                 &mut allocator,
                 &research_items,
                 &mut active_research,
+                time.timestep(),
             )
         });
     let mut operation = commands.entity(operation);

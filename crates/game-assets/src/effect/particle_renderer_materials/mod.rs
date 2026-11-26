@@ -21,6 +21,7 @@ pub(super) fn project_particle_renderer_materials(
     graphics: Option<Res<GraphicsSettings>>,
     mut material_events: MessageReader<AssetEvent<MaterialAsset>>,
     mut pass_events: MessageReader<AssetEvent<EffectPassMaterial>>,
+    mut document_events: MessageReader<AssetEvent<ParticleEffectDocumentAsset>>,
     changed_emitters: Query<Entity, Changed<LiveParticleEffectInstance>>,
     emitter_sources: Query<(Entity, &LiveParticleEffectInstance)>,
     mut emitters: Query<(
@@ -35,14 +36,21 @@ pub(super) fn project_particle_renderer_materials(
         .is_some_and(|settings| settings.is_changed());
     let changed_materials: HashSet<_> = material_events.read().filter_map(changed_asset).collect();
     let changed_passes: HashSet<_> = pass_events.read().filter_map(changed_asset).collect();
+    let changed_documents: HashSet<_> = document_events.read().filter_map(changed_asset).collect();
     let quality = graphics
         .as_ref()
         .map_or(GraphicsEffectQuality::High, |settings| settings.effects);
     let mut selected: HashSet<_> = changed_emitters.iter().collect();
     if quality_changed {
         selected.extend(emitter_sources.iter().map(|(entity, _)| entity));
-    } else if !changed_materials.is_empty() || !changed_passes.is_empty() {
+    } else if !changed_documents.is_empty()
+        || !changed_materials.is_empty()
+        || !changed_passes.is_empty()
+    {
         selected.extend(emitter_sources.iter().filter_map(|(entity, emitter)| {
+            if changed_documents.contains(&emitter.effect_asset.id()) {
+                return Some(entity);
+            }
             let prepared = documents
                 .get(&emitter.effect_asset)?
                 .prepared_emitters

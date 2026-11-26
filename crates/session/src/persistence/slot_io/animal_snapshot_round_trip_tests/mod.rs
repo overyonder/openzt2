@@ -20,7 +20,10 @@ use super::{
 };
 use bevy::{ecs::system::SystemState, prelude::*};
 use openzt2_animals::animal_lifecycle::animal_spawn_resolution_types::ResolvedAnimalSpawnComponents;
-use openzt2_animals::animal_welfare::need_timing_types::NeedAdjustmentCadence;
+use openzt2_animals::animal_welfare::{
+    need_latch_types::{AnimalNeedLatchBundle, AnimalNeedLatches},
+    need_timing_types::NeedAdjustmentCadence,
+};
 use openzt2_game_data::{
     species::{LifeStage, Sex, SpeciesFlags, SpeciesVariantFlags},
     AssetId,
@@ -84,7 +87,7 @@ fn spawn_named_animal(
             openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng::from_raw([42, 3]),
         ),
         WelfareBand::Poor,
-        NeedTriggerState(0x505),
+        AnimalNeedLatchBundle::from_saved_mask(0x505),
         CumulativeNeedPoints {
             good: 123.5,
             bad: 71.25,
@@ -99,10 +102,14 @@ fn spawn_named_animal(
 }
 
 fn capture(world: &mut World) -> Vec<AnimalSnapshotRecord> {
-    let mut state =
-        SystemState::<(AnimalSnapshotEntities, PendingTokenSnapshotEntities)>::new(world);
-    let (animals, tokens) = state.get(world).unwrap();
-    capture_animal_snapshot_records(&animals, &tokens).unwrap()
+    let mut state = SystemState::<(
+        AnimalSnapshotEntities,
+        PendingTokenSnapshotEntities,
+        Query<AnimalNeedLatches>,
+        Query<&PersistentId>,
+    )>::new(world);
+    let (animals, tokens, latches, identities) = state.get(world).unwrap();
+    capture_animal_snapshot_records(&animals, &tokens, &latches, &identities).unwrap()
 }
 
 fn resolved_components(record: &AnimalSnapshotRecord) -> ResolvedAnimalSpawnComponents {

@@ -1,11 +1,12 @@
 use std::io::{Cursor, Read};
 
-use openzt2_zoo_state::economy::{
-    money_types::Money,
-    monthly_finance_types::{FinanceMetric, FinancePeriod, MonthlyFinance, MonthlyFinanceHistory},
+use openzt2_zoo_state::economy::monthly_finance_types::{
+    FinanceMetric, FinancePeriod, FinanceValue, MonthlyFinance, MonthlyFinanceHistory,
 };
 
 use super::super::persistence_failure_types::WorldSnapshotPersistenceFailure;
+
+use super::money_snapshot_encoding::{decode_money, encode_money};
 
 pub(super) const MONTHLY_FINANCE_RECORD_BYTE_COUNT: usize = 140;
 const HISTORY_HEADER_BYTE_COUNT: usize = 41;
@@ -32,7 +33,7 @@ pub(super) fn append_monthly_finance_record(bytes: &mut Vec<u8>, month: &Monthly
         month.staff_salaries,
         month.upkeep,
     ] {
-        bytes.extend_from_slice(&value.0.to_le_bytes());
+        bytes.extend_from_slice(&encode_money(value));
     }
     bytes.extend_from_slice(&month.active_users.to_le_bytes());
     bytes.extend_from_slice(&month.total_users.to_le_bytes());
@@ -40,6 +41,7 @@ pub(super) fn append_monthly_finance_record(bytes: &mut Vec<u8>, month: &Monthly
 
 pub(super) fn decode_monthly_finance_record(
     bytes: &[u8],
+    dollars: bool,
 ) -> Result<MonthlyFinance, WorldSnapshotPersistenceFailure> {
     if bytes.len() != MONTHLY_FINANCE_RECORD_BYTE_COUNT {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
@@ -47,22 +49,22 @@ pub(super) fn decode_monthly_finance_record(
     let mut reader = Cursor::new(bytes);
     Ok(MonthlyFinance {
         month_ordinal: u32::from_le_bytes(read_bytes(&mut reader)?),
-        opening_cash: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
-        closing_cash: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
-        income: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
-        expenses: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
-        admission_income: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
-        cash_grants: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
-        donation_income: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
-        food_drink_sales: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
-        recycling_income: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
-        gift_sales: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
-        animal_adoption: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
-        animal_upkeep: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
-        construction: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
-        research: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
-        staff_salaries: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
-        upkeep: Money(i64::from_le_bytes(read_bytes(&mut reader)?)),
+        opening_cash: decode_money(read_bytes(&mut reader)?, dollars)?,
+        closing_cash: decode_money(read_bytes(&mut reader)?, dollars)?,
+        income: decode_money(read_bytes(&mut reader)?, dollars)?,
+        expenses: decode_money(read_bytes(&mut reader)?, dollars)?,
+        admission_income: decode_money(read_bytes(&mut reader)?, dollars)?,
+        cash_grants: decode_money(read_bytes(&mut reader)?, dollars)?,
+        donation_income: decode_money(read_bytes(&mut reader)?, dollars)?,
+        food_drink_sales: decode_money(read_bytes(&mut reader)?, dollars)?,
+        recycling_income: decode_money(read_bytes(&mut reader)?, dollars)?,
+        gift_sales: decode_money(read_bytes(&mut reader)?, dollars)?,
+        animal_adoption: decode_money(read_bytes(&mut reader)?, dollars)?,
+        animal_upkeep: decode_money(read_bytes(&mut reader)?, dollars)?,
+        construction: decode_money(read_bytes(&mut reader)?, dollars)?,
+        research: decode_money(read_bytes(&mut reader)?, dollars)?,
+        staff_salaries: decode_money(read_bytes(&mut reader)?, dollars)?,
+        upkeep: decode_money(read_bytes(&mut reader)?, dollars)?,
         active_users: i32::from_le_bytes(read_bytes(&mut reader)?),
         total_users: i32::from_le_bytes(read_bytes(&mut reader)?),
     })
@@ -73,7 +75,7 @@ pub(super) fn encode_monthly_finance_history(history: &MonthlyFinanceHistory) ->
         HISTORY_HEADER_BYTE_COUNT
             + history.retained_month_finance_records().len() * MONTHLY_FINANCE_RECORD_BYTE_COUNT,
     );
-    bytes.push(u8::from(history.has_initialized_month()));
+    bytes.push(0x80 | u8::from(history.has_initialized_month()));
     bytes.extend_from_slice(&history.current_calendar_month_ordinal().to_le_bytes());
     for metric in [
         FinanceMetric::Income,
@@ -82,9 +84,10 @@ pub(super) fn encode_monthly_finance_history(history: &MonthlyFinanceHistory) ->
         FinanceMetric::TotalUsers,
     ] {
         bytes.extend_from_slice(
-            &history
-                .finance_metric_value(metric, FinancePeriod::Lifetime)
-                .to_le_bytes(),
+            &match history.finance_metric_value(metric, FinancePeriod::Lifetime) {
+                FinanceValue::Money(amount) => encode_money(amount),
+                FinanceValue::Users(users) => users.to_le_bytes(),
+            },
         );
     }
     let months = history.retained_month_finance_records();
@@ -102,15 +105,17 @@ pub(super) fn decode_monthly_finance_history(
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
     let mut reader = Cursor::new(bytes);
-    let initialized = match read_bytes::<1>(&mut reader)?[0] {
+    let flags = read_bytes::<1>(&mut reader)?[0];
+    let dollars = flags & 0x80 != 0;
+    let initialized = match flags & !0x80 {
         0 => false,
         1 => true,
         _ => return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection),
     };
     let calendar_month = u32::from_le_bytes(read_bytes(&mut reader)?);
-    let lifetime_income = Money(i64::from_le_bytes(read_bytes(&mut reader)?));
-    let lifetime_expenses = Money(i64::from_le_bytes(read_bytes(&mut reader)?));
-    let lifetime_donation_income = Money(i64::from_le_bytes(read_bytes(&mut reader)?));
+    let lifetime_income = decode_money(read_bytes(&mut reader)?, dollars)?;
+    let lifetime_expenses = decode_money(read_bytes(&mut reader)?, dollars)?;
+    let lifetime_donation_income = decode_money(read_bytes(&mut reader)?, dollars)?;
     let lifetime_users = i64::from_le_bytes(read_bytes(&mut reader)?);
     let month_count = u32::from_le_bytes(read_bytes(&mut reader)?) as usize;
     if month_count > MAX_RETAINED_MONTHS {
@@ -121,7 +126,7 @@ pub(super) fn decode_monthly_finance_history(
     }
     let months = bytes[HISTORY_HEADER_BYTE_COUNT..]
         .chunks_exact(MONTHLY_FINANCE_RECORD_BYTE_COUNT)
-        .map(decode_monthly_finance_record)
+        .map(|record| decode_monthly_finance_record(record, dollars))
         .collect::<Result<Vec<_>, _>>()?;
     let mut history = MonthlyFinanceHistory::default();
     if !history.restore_saved_monthly_finance_history(
@@ -152,16 +157,21 @@ fn read_bytes<const N: usize>(
 mod tests {
     use super::*;
     use openzt2_zoo_state::economy::account_transaction_types::TransactionKind;
+    use openzt2_zoo_state::economy::money_types::Money;
 
     #[test]
     fn logical_history_round_trip_preserves_rotated_months_totals_and_presence() {
         let mut history = MonthlyFinanceHistory::default();
-        let mut cash = Money(10_000);
+        let mut cash = Money::from_cents(10_000);
         for month in 0..126 {
             history.enter_calendar_month(month, cash);
             history.record_guest_arrival();
-            cash.0 += 125;
-            history.record_completed_transaction(TransactionKind::Reward, 125, cash);
+            cash = cash.saturating_add(Money::from_cents(125));
+            history.record_completed_transaction(
+                TransactionKind::Reward,
+                Money::from_cents(125),
+                cash,
+            );
             if month % 2 == 0 {
                 history.record_guest_departure();
             }

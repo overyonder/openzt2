@@ -35,6 +35,7 @@ pub(super) fn create_construction_payment_request(
     }
     let payment_operation = payment_operation.id();
     Some(TransactionRequest {
+        domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Player,
         operation: payment_operation,
         debit: debit_account,
         credit: credit_account,

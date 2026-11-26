@@ -20,7 +20,8 @@ use openzt2_interface_state::{
     },
 };
 use openzt2_ui::animation::{
-    UiAnimationPlaybackOperation, UiAnimationPlaybackRequest, UiShowHideAnimation,
+    UiAnimationDirection, UiAnimationPlaybackOperation, UiAnimationPlaybackRequest,
+    UiShowHidePlayback,
 };
 use openzt2_world_state::world_spawn::{
     world_load_completion_marker::WorldLoadCompleted,
@@ -32,9 +33,6 @@ use super::photo_mode_presentation_lifecycle::{PhotoChallengeGoalList, PhotoChal
 #[derive(Resource)]
 pub(super) struct PhotoChallengeItemFragment(Handle<UiDocumentAsset>);
 
-#[derive(Component, PartialEq, Eq)]
-pub(super) struct PhotoChallengeGoalRow(Entity);
-
 pub(super) fn load_photo_challenge_item_fragment(mut commands: Commands, server: Res<AssetServer>) {
     commands.insert_resource(PhotoChallengeItemFragment(
         server.load("ui/layout/photochallengeitem.xml"),
@@ -43,20 +41,16 @@ pub(super) fn load_photo_challenge_item_fragment(mut commands: Commands, server:
 
 pub(super) fn project_selected_photo_challenge_goals(
     worlds: Query<
-        (Entity, Ref<PhotoChallengeCatalogueIndex>),
+        (
+            Entity,
+            Ref<PhotoChallengeCatalogueIndex>,
+            Ref<CurrentPhotoChallengeSet>,
+        ),
         (With<WorldRoot>, With<WorldLoadCompleted>),
     >,
-    selected: Query<(
-        &WorldMember,
-        Ref<PhotoChallengeSet>,
-        Ref<CurrentPhotoChallengeSet>,
-    )>,
+    selected: Query<(&WorldMember, Ref<PhotoChallengeSet>)>,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
-    challenges: Query<(
-        Ref<PhotoChallenge>,
-        Ref<PhotoChallengeProgress>,
-        Option<Ref<super::PhotoChallengeHalfStars>>,
-    )>,
+    challenges: Query<(Ref<PhotoChallenge>, Ref<PhotoChallengeProgress>)>,
     fallback_fragment: Res<PhotoChallengeItemFragment>,
     documents: Res<Assets<UiDocumentAsset>>,
     localizations: Res<Assets<LocalizationAsset>>,
@@ -69,11 +63,7 @@ pub(super) fn project_selected_photo_challenge_goals(
         ),
         With<PhotoChallengeGoalList>,
     >,
-    mut rows: Query<(
-        Ref<UiListRow>,
-        &UiDocumentMembers,
-        Option<&mut PhotoChallengeGoalRow>,
-    )>,
+    rows: Query<(Ref<UiListRow>, Ref<UiDocumentMembers>)>,
     mut fields: Query<
         (
             &Name,
@@ -85,24 +75,34 @@ pub(super) fn project_selected_photo_challenge_goals(
         Without<PhotoChallengeGoals>,
     >,
     mut goals: Query<
-        (Entity, &mut Visibility, Has<UiShowHideAnimation>),
+        (
+            Entity,
+            &mut Visibility,
+            Option<&UiAnimationDirection>,
+            Has<UiShowHidePlayback>,
+        ),
         With<PhotoChallengeGoals>,
     >,
-    mut commands: Commands,
     mut animations: MessageWriter<UiAnimationPlaybackRequest>,
 ) {
     if goals.is_empty() && lists.is_empty() {
         return;
     }
-    let source = worlds.single().ok().and_then(|(world, catalogue)| {
-        let (_, set, selection) = selected.iter().find(|(member, ..)| member.root == world)?;
-        let set_record = scenarios
-            .get(&set.source)?
-            .document
-            .find_photo_challenge_set(set.id)?;
-        let changed = set.is_changed() || selection.is_changed() || catalogue.is_changed();
-        Some((catalogue, set_record, changed))
-    });
+    let source = worlds
+        .single()
+        .ok()
+        .and_then(|(world, catalogue, selection)| {
+            let (member, set) = selected.get(selection.0?).ok()?;
+            if member.root != world {
+                return None;
+            }
+            let set_record = scenarios
+                .get(&set.source)?
+                .document
+                .find_photo_challenge_set(set.id)?;
+            let changed = set.is_changed() || selection.is_changed() || catalogue.is_changed();
+            Some((catalogue, set_record, changed))
+        });
     let members = source
         .as_ref()
         .map_or(&[][..], |(_, set, _)| set.members.as_slice());
@@ -124,8 +124,8 @@ pub(super) fn project_selected_photo_challenge_goals(
             .as_ref()
             .and_then(|handle| documents.get(handle));
         for row_entity in children.into_iter().flat_map(RelationshipTarget::iter) {
-            let (Some((catalogue, _, _)), Ok((row, fields_in_row, current))) =
-                (source.as_ref(), rows.get_mut(row_entity))
+            let (Some((catalogue, _, _)), Ok((row, fields_in_row))) =
+                (source.as_ref(), rows.get(row_entity))
             else {
                 continue;
             };
@@ -136,7 +136,7 @@ pub(super) fn project_selected_photo_challenge_goals(
             else {
                 continue;
             };
-            let Ok((challenge, progress, precise_rating)) = challenges.get(goal) else {
+            let Ok((challenge, progress)) = challenges.get(goal) else {
                 continue;
             };
             let Some(rule) = scenarios
@@ -146,20 +146,11 @@ pub(super) fn project_selected_photo_challenge_goals(
                 continue;
             };
             populated = true;
-            let changed = if let Some(mut current) = current {
-                current.set_if_neq(PhotoChallengeGoalRow(goal))
-            } else {
-                commands
-                    .entity(row_entity)
-                    .insert(PhotoChallengeGoalRow(goal));
-                true
-            };
-            if !changed
-                && !data_changed
+            if !data_changed
                 && !row.is_changed()
+                && !fields_in_row.is_changed()
                 && !challenge.is_changed()
                 && !progress.is_changed()
-                && !precise_rating.as_ref().is_some_and(Ref::is_changed)
             {
                 continue;
             }
@@ -193,9 +184,7 @@ pub(super) fn project_selected_photo_challenge_goals(
                         });
                     }
                     "stars" => {
-                        let half_stars = precise_rating
-                            .as_ref()
-                            .map_or(progress.rating_stars.saturating_mul(2), |rating| rating.0);
+                        let half_stars = progress.rating_half_stars;
                         visibility.set_if_neq(if progress.completed && half_stars > 0 {
                             Visibility::Inherited
                         } else {
@@ -221,19 +210,26 @@ pub(super) fn project_selected_photo_challenge_goals(
             }
         }
     }
-    for (entity, mut visibility, animates) in &mut goals {
+    for (entity, mut visibility, direction, playing) in &mut goals {
         let visible = count > 0 && populated;
-        if visibility.set_if_neq(if visible {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        }) {
-            if animates {
+        if let Some(direction) = direction {
+            if direction.0 != visible {
+                if visible {
+                    visibility.set_if_neq(Visibility::Inherited);
+                }
                 animations.write(UiAnimationPlaybackRequest {
                     entity,
                     operation: UiAnimationPlaybackOperation::Transition(visible),
                 });
+            } else if !playing && !visible {
+                visibility.set_if_neq(Visibility::Hidden);
             }
+        } else {
+            visibility.set_if_neq(if visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            });
         }
     }
 }

@@ -83,16 +83,22 @@ pub(super) fn activate_authored_pointer_events(
             emit(event.entity, UiTrigger::Enter);
         }
     }
-    for event in presses
-        .read()
-        .filter(|event| event.pointer.id.is_mouse() && event.button == PointerButton::Primary)
-    {
-        let Ok((focusable, button, mut last_press)) = controls.get_mut(event.entity) else {
-            continue;
-        };
+    for event in presses.read().filter(|event| event.pointer.id.is_mouse()) {
         if !enabled(event.entity) {
             continue;
         }
+        if event.button == PointerButton::Secondary {
+            if controls.contains(event.entity) {
+                emit(event.entity, UiTrigger::SecondaryPress);
+            }
+            continue;
+        }
+        if event.button != PointerButton::Primary {
+            continue;
+        }
+        let Ok((focusable, button, mut last_press)) = controls.get_mut(event.entity) else {
+            continue;
+        };
         if focusable && focus.get() != Some(event.entity) {
             focus.set(event.entity, FocusCause::Pressed);
         }

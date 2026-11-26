@@ -6,7 +6,6 @@ use openzt2_zoo_state::economy::{
 
 use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
 use openzt2_zoo_state::economy::guest_admission_types::ZooAdmissionsOpen;
-use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory;
 use openzt2_zoo_state::economy::zoo_cash_types::{UnlimitedZooCash, ZooCash};
 
@@ -92,7 +91,7 @@ pub(super) fn apply_economy_snapshot_records(
             entity.remove::<(ObjectEconomyFactsResolved, ServiceFacilityFactsResolved)>();
         }
         let profit = record.profit.map(|(profit, transactions)| FacilityProfit {
-            total: Money(profit),
+            total: profit,
             transactions,
         });
         let service = record.service.map(|service| ServiceFacility {
@@ -128,18 +127,8 @@ pub(super) fn apply_economy_snapshot_records(
                 .map(MaintenanceScheduleIndex),
             remove,
         );
-        restore_optional_component(
-            &mut entity,
-            live.wallet,
-            record.wallet.map(|wallet| Wallet(Money(wallet))),
-            remove,
-        );
-        restore_optional_component(
-            &mut entity,
-            live.price,
-            record.price.map(|price| Price(Money(price))),
-            remove,
-        );
+        restore_optional_component(&mut entity, live.wallet, record.wallet.map(Wallet), remove);
+        restore_optional_component(&mut entity, live.price, record.price.map(Price), remove);
         restore_optional_component(&mut entity, live.service, service, remove);
         restore_optional_component(&mut entity, live.inventory, inventory, remove);
         restore_optional_component(

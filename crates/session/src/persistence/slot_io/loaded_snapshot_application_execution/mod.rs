@@ -242,7 +242,11 @@ pub(in crate::persistence) fn restore_pending_snapshots() -> ScheduleConfigs<Sch
         )
             .chain()
             .after(continuation::runtime_continuation_is_restored),
+        super::animal_snapshot_application::restore_animal_treatments
+            .after(continuation::resume_snapshot_actors)
+            .run_if(any_with_component::<super::animal_snapshot_application::PendingSavedAnimalTreatment>),
         finish_snapshot_restore
+            .after(super::animal_snapshot_application::restore_animal_treatments)
             .after(baseline::retire_world_once_saved_assets_are_ready)
             .after(super::behavior_snapshot_application::state_application::bind_restored_behavior_instruction_state),
     )

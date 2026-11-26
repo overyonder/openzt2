@@ -3,9 +3,9 @@ use std::fmt;
 use crate::AssetId;
 
 use super::{
-    LocalizationCatalog, LocalizationDateFormatToken, LocalizationEntry,
-    LocalizationFormatArgument, LocalizationFormatArgumentKind, LocalizationFormatError,
-    LocalizationFormatToken, LocalizationRichContentNode, LocalizationTextPresentation,
+    LocalizationCatalog, LocalizationEntry, LocalizationFormatArgument,
+    LocalizationFormatArgumentKind, LocalizationFormatError, LocalizationFormatToken,
+    LocalizationRichContentNode, LocalizationTextPresentation,
 };
 
 impl LocalizationCatalog {
@@ -28,27 +28,7 @@ impl LocalizationCatalog {
             .map(|entry| entry.plain_localized_text.as_str())
     }
 
-    /// Writes a localized entry with typed substitutions.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed formatting error for a missing key or argument, an
-    /// argument type mismatch, or a target writer failure.
-    pub fn write_localized_text_with_format_arguments(
-        &self,
-        localization_entry_id: AssetId,
-        format_arguments: &[LocalizationFormatArgument<'_>],
-        target_writer: &mut impl fmt::Write,
-    ) -> Result<(), LocalizationFormatError> {
-        self.write_localized_text_with_currency_formatter(
-            localization_entry_id,
-            format_arguments,
-            target_writer,
-            |cents, writer| self.write_localized_currency_amount(cents, true, writer),
-        )
-    }
-
-    /// Formats an entry using the active catalogue's currency symbol.
+    /// Formats an entry using the supplied currency formatter.
     ///
     /// # Errors
     ///
@@ -136,128 +116,6 @@ impl LocalizationCatalog {
         self.find_localization_entry(localization_entry_id)
             .map(|entry| entry.localized_rich_content_nodes.as_slice())
     }
-
-    /// Writes localized currency without allocating an intermediate string.
-    ///
-    /// # Errors
-    ///
-    /// Returns the target writer's formatting error.
-    pub fn write_localized_currency_amount(
-        &self,
-        currency_amount_cents: i64,
-        include_fractional_currency_cents: bool,
-        target_writer: &mut impl fmt::Write,
-    ) -> fmt::Result {
-        let currency_symbol = self
-            .find_plain_localized_text(AssetId::from_key("locale:currency_symbol"))
-            .unwrap_or("$");
-
-        Self::write_currency_amount_with_symbol_and_comma_grouped_whole_dollars(
-            currency_symbol,
-            currency_amount_cents,
-            include_fractional_currency_cents,
-            target_writer,
-        )
-    }
-
-    /// Writes currency using the native English-locale thousands grouping.
-    ///
-    /// # Errors
-    ///
-    /// Returns the target writer's formatting error.
-    pub fn write_currency_amount_with_symbol_and_comma_grouped_whole_dollars(
-        currency_symbol: &str,
-        currency_amount_cents: i64,
-        include_fractional_currency_cents: bool,
-        target_writer: &mut impl fmt::Write,
-    ) -> fmt::Result {
-        let whole_dollars = currency_amount_cents.unsigned_abs() / 100;
-
-        if currency_amount_cents < 0 {
-            target_writer.write_str("-")?;
-        }
-        target_writer.write_str(currency_symbol)?;
-
-        let mut remaining_dollars = whole_dollars;
-        let mut group_divisor = 1_u64;
-        while remaining_dollars >= 1_000 {
-            remaining_dollars /= 1_000;
-            group_divisor *= 1_000;
-        }
-        write!(target_writer, "{remaining_dollars}")?;
-        while group_divisor > 1 {
-            group_divisor /= 1_000;
-            write!(
-                target_writer,
-                ",{:03}",
-                whole_dollars / group_divisor % 1_000
-            )?;
-        }
-
-        if include_fractional_currency_cents {
-            write!(
-                target_writer,
-                ".{:02}",
-                currency_amount_cents.unsigned_abs() % 100
-            )?;
-        }
-
-        Ok(())
-    }
-
-    #[must_use]
-    pub fn localized_month_abbreviation(&self, month_number: u8) -> Option<&str> {
-        const LOCALIZATION_MONTH_KEYS: [&str; 12] = [
-            "locale:january",
-            "locale:february",
-            "locale:march",
-            "locale:april",
-            "locale:may",
-            "locale:june",
-            "locale:july",
-            "locale:august",
-            "locale:september",
-            "locale:october",
-            "locale:november",
-            "locale:december",
-        ];
-
-        month_number
-            .checked_sub(1)
-            .and_then(|month_index| LOCALIZATION_MONTH_KEYS.get(usize::from(month_index)))
-            .and_then(|month_key| self.find_plain_localized_text(AssetId::from_key(month_key)))
-    }
-
-    /// Writes a localized month and year without allocating an intermediate string.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed error for an invalid month or target writer failure.
-    pub fn write_localized_month_and_year(
-        &self,
-        month_number: u8,
-        year: u16,
-        target_writer: &mut impl fmt::Write,
-    ) -> Result<(), LocalizationFormatError> {
-        let month_abbreviation = self
-            .localized_month_abbreviation(month_number)
-            .ok_or(LocalizationFormatError::MissingKey)?;
-
-        for month_year_token in &self.localized_month_and_year_format_tokens {
-            match month_year_token {
-                LocalizationDateFormatToken::Literal(literal_text) => {
-                    target_writer.write_str(literal_text)
-                }
-                LocalizationDateFormatToken::MonthAbbreviation => {
-                    target_writer.write_str(month_abbreviation)
-                }
-                LocalizationDateFormatToken::Year => write!(target_writer, "{year:02}"),
-            }
-            .map_err(LocalizationFormatError::Write)?;
-        }
-
-        Ok(())
-    }
 }
 
 impl fmt::Display for LocalizationFormatError {
@@ -274,21 +132,3 @@ impl fmt::Display for LocalizationFormatError {
 }
 
 impl std::error::Error for LocalizationFormatError {}
-
-#[cfg(test)]
-mod tests {
-    use super::LocalizationCatalog;
-
-    #[test]
-    fn currency_amounts_use_native_comma_thousands_grouping() -> std::fmt::Result {
-        let mut output = String::new();
-        LocalizationCatalog::write_currency_amount_with_symbol_and_comma_grouped_whole_dollars(
-            "$",
-            -12_345_678,
-            true,
-            &mut output,
-        )?;
-        assert_eq!(output, "-$123,456.78");
-        Ok(())
-    }
-}

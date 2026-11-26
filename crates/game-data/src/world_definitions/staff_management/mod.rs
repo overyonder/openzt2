@@ -44,6 +44,8 @@ pub struct StaffJobCapabilityFlags(u32);
 )]
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct StaffRoleDefinition {
+    #[serde(default)]
+    pub caffeine_factors: crate::CaffeineFactors,
     pub id: AssetId,
     pub object: AssetId,
     pub name_pool: AssetId,
@@ -302,6 +304,25 @@ pub struct StaffRequestControllerDefinition {
     /// Defaults to `false`; currently unused.
     pub trigger_on_destruction: bool,
     pub request: StaffRequestData,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StaffRequestProperty {
+    Boolean(AssetId),
+    Number(AssetId),
+}
+
+impl StaffRequestControllerDefinition {
+    #[must_use]
+    pub const fn tracked_property(&self) -> Option<StaffRequestProperty> {
+        let Some(key) = self.attribute_key else {
+            return None;
+        };
+        Some(match self.threshold {
+            StaffRequestThresholdValue::Boolean(_) => StaffRequestProperty::Boolean(key),
+            StaffRequestThresholdValue::Number(_) => StaffRequestProperty::Number(key),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Deserialize, PartialEq, Eq, serde::Serialize)]

@@ -29,6 +29,19 @@ pub struct LegacyNifParticleEffect {
     pub emitter_block: i32,
     pub mesh_particles: bool,
     pub modifiers: Vec<LegacyNifParticleModifier>,
+    #[serde(default)]
+    pub spawn_policy: LegacyNifParticleSpawnPolicy,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyNifParticleSpawnPolicy {
+    pub maximum_generation: u16,
+    pub probability: f32,
+    pub multiplier: u16,
+    pub speed_chaos: f32,
+    pub direction_chaos: f32,
+    pub on_death: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

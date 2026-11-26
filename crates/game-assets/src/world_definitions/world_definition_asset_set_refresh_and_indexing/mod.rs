@@ -10,25 +10,25 @@ use bevy::{
     asset::{AssetLoadFailedEvent, LoadState},
     prelude::*,
 };
-use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
+use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
 
 use crate::asset_source::{
+    ArchiveOverlayChanged, AssetArchives,
     archive_entry_asset_path::{
         archive_entry_asset_path, archive_entry_asset_source_path,
         definition_archive_entry_asset_path,
     },
-    ArchiveOverlayChanged, AssetArchives,
 };
 
 use super::{
     ground_path_surface_images::GROUND_PATH_SURFACE_IMAGE_EXTENSION,
     world_definition_asset_set_state_and_borrowing_queries::{
-        kind_range, DefinitionKind, DefinitionRow, SingletonKind, WorldDefinitions,
+        DefinitionKind, DefinitionRow, SingletonKind, WorldDefinitions, kind_range,
     },
     world_definition_document_asset_and_demand_loaded_dependency_paths::{
-        WorldDefinitionAsset, AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS,
+        AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS, WorldDefinitionAsset,
     },
-    world_definition_load_queue::{request_world_definition_loads, WorldDefinitionLoadCompletion},
+    world_definition_load_queue::{WorldDefinitionLoadCompletion, request_world_definition_loads},
 };
 
 pub(crate) fn world_definition_source_path(
@@ -127,6 +127,36 @@ pub(crate) fn is_fossil_puzzle_source(path: &Path, root: &Path) -> bool {
             .is_some_and(|extension| extension.eq_ignore_ascii_case("xml"))
 }
 
+pub(super) fn world_definition_sources_changed(
+    archives: Res<AssetArchives>,
+    mut messages: MessageReader<ArchiveOverlayChanged>,
+) -> bool {
+    let binders = archives.authored_binder_sources();
+    let puzzles = archives.fossil_puzzle_root();
+    let changed = messages
+        .read()
+        .flat_map(|message| &message.changes)
+        .any(|change| {
+            let path = &change.normalized_asset_path;
+            world_definition_source_path(path, binders.directories())
+                || puzzles
+                    .as_deref()
+                    .is_some_and(|root| is_fossil_puzzle_source(path, root))
+                || path.starts_with("biomes/autoplacement")
+                || path.starts_with("xpinfo")
+                || matches!(
+                    path.to_str(),
+                    Some(
+                        "config/gamectxt.xml"
+                            | "config/puzzlemgr.xml"
+                            | "config/ztshowtimermanager.xml"
+                    )
+                )
+        });
+    messages.clear();
+    changed
+}
+
 pub(super) fn discover_world_definition_catalogue_sources(
     archives: Res<AssetArchives>,
     server: Res<AssetServer>,
@@ -135,7 +165,6 @@ pub(super) fn discover_world_definition_catalogue_sources(
     mut overlay_changes: MessageReader<ArchiveOverlayChanged>,
 ) {
     let (binder_sources, sources) = archives.world_definition_sources();
-    let mut sources_changed = definitions.binder_sources.is_none();
     let mut binder_inputs_changed = false;
     let mut zoopedia_changed = false;
     let mut adoption_changed = false;
@@ -145,10 +174,6 @@ pub(super) fn discover_world_definition_catalogue_sources(
     let puzzle_root = archives.fossil_puzzle_root();
     for change in overlay_changes.read().flat_map(|change| &change.changes) {
         let path = &change.normalized_asset_path;
-        sources_changed |= world_definition_source_path(path, binder_sources.directories())
-            || puzzle_root
-                .as_deref()
-                .is_some_and(|root| is_fossil_puzzle_source(path, root));
         puzzle_manager_changed |= path == Path::new("config/puzzlemgr.xml");
         binder_inputs_changed |= path == Path::new("config/gamectxt.xml")
             || binder_sources.contains_path(path)
@@ -162,14 +187,6 @@ pub(super) fn discover_world_definition_catalogue_sources(
             biome_changed |= path.starts_with("biomes/autoplacement");
             show_timer_changed |= path == Path::new("config/ztshowtimermanager.xml");
         }
-    }
-    if !(sources_changed
-        || binder_inputs_changed
-        || adoption_changed
-        || biome_changed
-        || show_timer_changed)
-    {
-        return;
     }
     if definitions.server.is_none() {
         definitions.server = Some(server.clone());
@@ -213,8 +230,8 @@ pub(super) fn discover_world_definition_catalogue_sources(
             2
         }
     });
-    definitions.source_generation += 1;
-    let generation = definitions.source_generation;
+    let generation = archives.overlay_generation();
+    definitions.requested_overlay_generation = generation;
     let base_sources = sources
         .iter()
         .map(|source| (&source.normalized_asset_path, source))
@@ -235,13 +252,13 @@ pub(super) fn discover_world_definition_catalogue_sources(
                         .as_deref()
                         .is_some_and(|root| is_fossil_puzzle_source(path, root)));
             let previous = definitions.routed_sources.get(&base_path);
-            let binder_dependency_changed = binder_inputs_changed
-                && previous.is_some_and(|path| {
-                    server
-                        .get_handle::<WorldDefinitionAsset>(path.clone())
-                        .and_then(|handle| assets.get(&handle))
-                        .is_none_or(|asset| asset.authored_binder_sources.is_some())
-                });
+            let binder_dependency_changed = binder_inputs_changed && {
+                let path = previous.unwrap_or(&base_path);
+                server
+                    .get_handle::<WorldDefinitionAsset>(path.clone())
+                    .and_then(|handle| assets.get(&handle))
+                    .is_none_or(|asset| asset.authored_binder_sources.is_some())
+            };
             let routed_path = if binder_dependency_changed || supplements_changed {
                 definition_archive_entry_asset_path(source, generation)
             } else {
@@ -293,6 +310,7 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
     mut load_failures: MessageReader<AssetLoadFailedEvent<WorldDefinitionAsset>>,
     mut events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
     mut definitions: ResMut<WorldDefinitions>,
+    mut publication: MessageWriter<super::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionSourcesPublished>,
 ) {
     let operation = definitions.active_load.as_ref().map(Handle::id);
     let published = completed
@@ -312,6 +330,7 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
         })
         .collect::<BTreeSet<_>>();
     settled.extend(load_failures.read().map(|failure| failure.id));
+    let changed_sources = settled.clone();
     if let Some(completion) = published {
         definitions.active_load = None;
         if definitions.next_load_paths.is_some() {
@@ -368,10 +387,19 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
     }
     let mut animation_binder_rigs = BTreeMap::new();
     for handle in &definitions.handles {
-        let Some(asset) = assets.get(handle) else {
+        let Some(asset) = assets
+            .get(handle)
+            .filter(|_| !definitions.failed.contains(&handle.id()))
+        else {
             continue;
         };
         for (index, rig) in asset.animation_binder_rigs().iter().enumerate() {
+            if records
+                .get(&(DefinitionKind::Object, rig.definition))
+                .is_some_and(|row| row.handle.id() != handle.id())
+            {
+                continue;
+            }
             animation_binder_rigs.insert(
                 (rig.definition, rig.binder),
                 DefinitionRow {
@@ -400,6 +428,10 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
         for (kind, dependencies) in [
             (DefinitionKind::TextureDependency, &asset.textures),
             (DefinitionKind::MaterialDependency, &asset.materials),
+            (
+                DefinitionKind::TankWaterMaterialDependency,
+                &asset.tank_water_material_sources,
+            ),
             (DefinitionKind::ModelDependency, &asset.models),
             (DefinitionKind::EffectDependency, &asset.effects),
             (DefinitionKind::SceneDependency, &asset.scenes),
@@ -526,6 +558,34 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
         })
         .cloned()
         .collect();
+    let mut changed_objects = BTreeSet::new();
+    for kind in [DefinitionKind::Object, DefinitionKind::FacilityByObject] {
+        let previous = definitions.records.range(kind_range(kind));
+        let next = records.range(kind_range(kind));
+        for (&(_, id), row) in previous {
+            if records.get(&(kind, id)) != Some(row) || changed_sources.contains(&row.handle.id()) {
+                changed_objects.insert(id);
+            }
+        }
+        for (&(_, id), _) in next {
+            if !definitions.records.contains_key(&(kind, id)) {
+                changed_objects.insert(id);
+            }
+        }
+    }
+    for (&object, row) in &definitions.show_stages_by_object {
+        if show_stages_by_object.get(&object) != Some(row)
+            || changed_sources.contains(&row.handle.id())
+        {
+            changed_objects.insert(object);
+        }
+    }
+    changed_objects.extend(
+        show_stages_by_object
+            .keys()
+            .filter(|id| !definitions.show_stages_by_object.contains_key(id))
+            .copied(),
+    );
     definitions.records = records;
     definitions.show_stages_by_object = show_stages_by_object;
     definitions.animation_binder_rigs = animation_binder_rigs;
@@ -539,6 +599,11 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
     definitions.maximum_ground_path_width_cm = maximum_ground_path_width_cm;
     definitions.complete = true;
     refresh_ground_path_surface_image_dependencies(&mut definitions, &assets, &server);
+    publication.write(super::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionSourcesPublished {
+        overlay_generation: published.map(|_| definitions.requested_overlay_generation),
+        changed_objects: changed_objects.into_iter().collect(),
+        failed_sources: definitions.failed.iter().copied().collect(),
+    });
 }
 
 fn refresh_ground_path_surface_image_dependencies(

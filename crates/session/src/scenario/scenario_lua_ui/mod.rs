@@ -59,6 +59,8 @@ pub(super) enum ScenarioUiCommand {
     },
     NextScenario(Option<String>),
     Overhead,
+    OverheadMotion(openzt2_interface_state::camera::camera_control_message_types::ScriptedOverheadCameraOperation),
+    FossilPuzzle(Option<AssetId>),
     Select(Option<Entity>),
     TutorialRuleActive(bool),
     FencePlacementMode(openzt2_zoo_state::scenario::scenario_session_types::SetScenarioFencePlacementMode),
@@ -126,6 +128,7 @@ pub(super) fn register(app: &mut App) {
                 presentation::apply_scenario_tank_requests,
                 presentation::apply_scenario_zoo_messages,
                 presentation::apply_scenario_tutorial_status,
+                presentation::bind_challenge_result_panels,
             ).in_set(openzt2_interface_state::ui::UiSet::DomainProjection),
         )
         .add_systems(Update, presentation::preload_scenario_ui_documents
@@ -223,6 +226,34 @@ pub(super) fn create_mode_adapter<'scope, 'env: 'scope>(
         scope.create_function(
             move |_, (_, message, value): (Table, String, mlua::Value)| {
                 match message.as_str() {
+                    "ZT_CAMERA_PAN" => {
+                        use openzt2_interface_state::camera::camera_control_message_types::ScriptedOverheadCameraOperation;
+                        let mlua::Value::Table(point) = value else {
+                            return Err(mlua::Error::runtime("camera pan expects a world position"));
+                        };
+                        let source = Vec3::new(point.get("x")?, point.get("y")?, point.get("z")?);
+                        if !source.is_finite() {
+                            return Err(mlua::Error::runtime("camera position must be finite"));
+                        }
+                        commands.borrow_mut().push(ScenarioUiCommand::OverheadMotion(
+                            ScriptedOverheadCameraOperation::Pan { world: Vec3::new(source.x, source.z, -source.y) },
+                        ));
+                    }
+                    "ZT_CAMERA_ZOOM" => {
+                        use openzt2_interface_state::camera::camera_control_message_types::ScriptedOverheadCameraOperation;
+                        let distance = match value {
+                            mlua::Value::Number(value) => value as f32,
+                            mlua::Value::Integer(value) => value as f32,
+                            mlua::Value::String(value) => value.to_str()?.parse::<f32>().map_err(mlua::Error::external)?,
+                            _ => return Err(mlua::Error::runtime("camera zoom expects a distance")),
+                        };
+                        if !distance.is_finite() {
+                            return Err(mlua::Error::runtime("camera distance must be finite"));
+                        }
+                        commands.borrow_mut().push(ScenarioUiCommand::OverheadMotion(
+                            ScriptedOverheadCameraOperation::Zoom { distance },
+                        ));
+                    }
                     "ZT_SETMODE" => {
                         let mlua::Value::String(value) = value else {
                             return Err(mlua::Error::runtime("mode must be a string"));
@@ -939,10 +970,18 @@ fn run_authored_ui_scripts(
     let contained = |entity| fact_sources.contained_entities(entity);
     let direct = std::cell::RefCell::new(direct);
     let waste = |entity, value| direct.borrow_mut().waste(entity, value);
+    let photo_set = |world, set| direct.borrow_mut().current_photo_set(world, set);
+    let economy = |world, operation| direct.borrow_mut().economy(world, operation);
     let profile = |key, value: Option<Option<&str>>| direct.borrow_mut().profile(key, value);
+    let world_variable = |root, key, value: Option<Option<&str>>| {
+        direct.borrow_mut().world_variable(root, key, value)
+    };
     let mut queries = fact_sources.borrow_scenario_lua_query_facts(&contained);
     queries.waste = Some(&waste);
+    queries.photo_set = Some(&photo_set);
+    queries.economy = Some(&economy);
     queries.profile = Some(&profile);
+    queries.world_variable = Some(&world_variable);
     for request in requests.read() {
         let delivered = (|| {
             let Some((root, view_owner)) = owners.owner(request.document_root) else {
@@ -969,6 +1008,37 @@ fn run_authored_ui_scripts(
                     )
                 });
             let Some((script_path, script_handle)) = resolved else {
+                if invocation.context.eq_ignore_ascii_case("global")
+                    && invocation
+                        .authored_path
+                        .eq_ignore_ascii_case("scripts/uiutil.lua")
+                    && entry == "setReplacementText"
+                {
+                    use openzt2_game_data::localization::LocalizationFormatArgument;
+                    if let ([node, key, value], Some(locale)) =
+                        (invocation.arguments.as_slice(), queries.localization)
+                    {
+                        let argument = value
+                            .parse::<i64>()
+                            .map(LocalizationFormatArgument::Integer)
+                            .unwrap_or(LocalizationFormatArgument::Text(value));
+                        let mut text = String::new();
+                        if locale
+                            .write_localized_text_with_format_arguments(
+                                AssetId::from_key(key),
+                                &[argument],
+                                &mut text,
+                            )
+                            .is_ok()
+                        {
+                            outputs.write_timed_boundary(ScenarioUiCommand::Node {
+                                path: vec![node.clone()],
+                                operation: NodeOperation::Text(text),
+                            });
+                            return true;
+                        }
+                    }
+                }
                 warn!(path = %invocation.authored_path, "UI script does not resolve");
                 return false;
             };

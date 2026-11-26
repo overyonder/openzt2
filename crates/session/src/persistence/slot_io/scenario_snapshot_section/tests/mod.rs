@@ -204,6 +204,7 @@ fn campaign_state_round_trip_keeps_completed_rules_and_live_deadlines() {
         .insert(SelectedWorldDocumentHandles {
             map: retained_handle.clone(),
             start: retained_handle,
+            mode: None,
         });
     destination.insert_resource(Messages::<ScenarioObjectiveStatusChanged>::default());
     let mut apply_state = SystemState::<(
@@ -392,6 +393,7 @@ fn challenge_only_save_restores_offer_expiry_and_selection_stream() {
             rng: [3, 5],
             next_evaluation: Some(830),
             instant_decided: true,
+            pending_validation: None,
             candidates: BTreeMap::new(),
             offer: Some(ChallengeOfferSnapshot {
                 id: 7,

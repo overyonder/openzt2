@@ -130,6 +130,7 @@ pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
         });
         if adoption_cost.0 > 0 {
             transaction_requests.write(TransactionRequest {
+                        domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Player,
                 operation: operation_entity,
                 debit: Account::Zoo,
                 credit: Account::External,
@@ -264,6 +265,7 @@ pub(super) fn refund_paid_animal_adoptions_after_rejected_spawns(
                 ))
                 .id();
             refund_requests.write(TransactionRequest {
+                        domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Player,
                 operation,
                 debit: Account::External,
                 credit: Account::Zoo,

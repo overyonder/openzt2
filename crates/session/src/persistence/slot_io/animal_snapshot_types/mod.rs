@@ -41,6 +41,24 @@ pub(super) struct AnimalSnapshotRecord {
     pub crating_restricted: bool,
     pub death: Option<AnimalSnapshotDeath>,
     pub welfare: Option<AnimalWelfareSnapshotRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tranquilization: Option<SavedTranquilization>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub treatment: Option<SavedAnimalTreatment>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub(super) enum SavedTranquilization {
+    Dose { remaining_ns: u64, recovery_ns: u64 },
+    Recovery { remaining_ns: u64 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub(super) struct SavedAnimalTreatment {
+    pub definition: AssetId,
+    pub provider: u64,
+    pub execution_id: Option<u64>,
+    pub remaining_ns: u64,
 }
 
 /// The tuple representation preserves disease records from older snapshots.

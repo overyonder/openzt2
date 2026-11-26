@@ -16,7 +16,11 @@ impl Plugin for FeedingPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             FixedUpdate,
-            container_quantity_hydration::hydrate_food_and_drink_container_quantities_for_new_world_objects
+            (
+                container_quantity_hydration::hydrate_food_and_drink_container_quantities_for_new_world_objects,
+                container_quantity_hydration::publish_changed_container_food_levels
+                    .after(container_quantity_hydration::hydrate_food_and_drink_container_quantities_for_new_world_objects),
+            )
                 .in_set(FixedGameSet::Think)
                 .in_set(ContainerQuantityHydration)
                 .run_if(in_state(GamePhase::InGame)),

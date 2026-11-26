@@ -41,6 +41,7 @@ impl PluginGroup for OpenZt2GamePluginGroup {
             .add(openzt2_session::scenario::ScenarioPlugin)
             .add(openzt2_aquatic::aquatic::AquaticPlugin)
             .add(openzt2_audio::audio::AudioPlugin)
+            .add(crate::award_world_effects::AwardWorldEffectsPlugin)
             .add(openzt2_shows::shows::ShowsPlugin)
             .add(openzt2_transport::transport_tours::TransportToursPlugin)
             .add(openzt2_photos::PhotosPlugin)

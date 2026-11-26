@@ -13,9 +13,7 @@ use super::{
         attach_neutral_environment_fog_to_new_zoo_cameras,
         remove_camera_fog_when_environment_is_unlinked,
     },
-    environment_presentation_types::{
-        EnvironmentFog, EnvironmentOfWorld, EnvironmentPresentationPending,
-    },
+    environment_presentation_types::{EnvironmentFog, EnvironmentOfWorld},
 };
 
 fn asset_identifier_with_first_byte(first_byte: u8) -> openzt2_game_data::AssetId {
@@ -179,15 +177,12 @@ fn camera_added_after_environment_receives_renderer_owned_fog() {
             scenario: asset_identifier_with_first_byte(1),
         })
         .id();
-    let environment = application
-        .world_mut()
-        .spawn((
-            WorldEnvironment {
-                definition: asset_identifier_with_first_byte(1),
-            },
-            EnvironmentOfWorld(root),
-        ))
-        .id();
+    application.world_mut().spawn((
+        WorldEnvironment {
+            definition: asset_identifier_with_first_byte(1),
+        },
+        EnvironmentOfWorld(root),
+    ));
     let camera = application
         .world_mut()
         .spawn((
@@ -202,8 +197,4 @@ fn camera_added_after_environment_receives_renderer_owned_fog() {
         .world()
         .get::<bevy::pbr::DistanceFog>(camera)
         .is_some());
-    assert!(application
-        .world()
-        .get::<EnvironmentPresentationPending>(environment)
-        .is_none());
 }

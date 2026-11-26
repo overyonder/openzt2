@@ -1,4 +1,22 @@
 use bevy::prelude::*;
+use openzt2_game_data::AssetId;
+use openzt2_transport::transport_tours::tour_donation::TourDonationOffer;
+use openzt2_zoo_state::{
+    animal_behavior::behavior_token_types::{BehaviorSelfToken, ClaimedBehaviorSelfToken},
+    behavior_task_execution_types::{
+        running_actions::{
+            mark_behavior_task_for_failure_and_stop_navigation, BehaviorInstructionId,
+            RunBehaviorEconomy, RunningBehaviorInstruction, WhenBehaviorAction,
+        },
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+    },
+    economy::{
+        account_transaction_types::TransactionDomain,
+        behavior_transaction_state::BehaviorTransactionPayment,
+    },
+    transport_tours::transport_circuit_types::TransportCircuit,
+};
+
 use openzt2_zoo_state::donations::donation_guest_decision_types::DonationProgress;
 
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
@@ -30,7 +48,7 @@ pub(super) fn claim_authorized_direct_donation_requests_before_transfer_submissi
     opportunities: Query<&DonationOpportunity>,
 ) {
     for request in requests.read() {
-        if request.amount.0 <= 0
+        if !request.amount.is_positive()
             || request.subject != request.acceptor
             || guests.get(request.guest).is_err()
             || acceptors.get(request.acceptor).is_err()
@@ -98,12 +116,12 @@ pub(super) fn submit_validated_donation_requests_to_economy_transfers(
                 .get(request.subject)
                 .is_ok_and(|opportunity| request.amount == opportunity.amount);
         let rejection = if !(progress_matches_request || direct_settlement_matches_request)
-            || request.amount.0 <= 0
+            || !request.amount.is_positive()
         {
             Some(DonationRejection::RuleDenied)
         } else if acceptors.get(request.acceptor).is_err() {
             Some(DonationRejection::InvalidAcceptor)
-        } else if wallet.0 .0 < request.amount.0 {
+        } else if wallet.0 < request.amount {
             Some(DonationRejection::InsufficientFunds)
         } else {
             None
@@ -140,6 +158,7 @@ pub(super) fn submit_validated_donation_requests_to_economy_transfers(
             ))
             .id();
         transaction_requests.write(TransactionRequest {
+            domain: TransactionDomain::Simulation,
             operation: payment_operation,
             debit: Account::Entity(request.guest),
             credit: Account::Zoo,
@@ -166,4 +185,99 @@ fn reject_donation_request_and_clear_guest_payment_state(
             .remove::<DonationProgress>()
             .remove::<DonationPaymentRequested>();
     }
+}
+
+#[derive(Component)]
+pub(super) struct TourDonationInstruction(pub(super) BehaviorInstructionId);
+
+#[allow(clippy::type_complexity)]
+pub(super) fn submit_authored_tour_donation(
+    action: On<WhenBehaviorAction<RunBehaviorEconomy>>,
+    mut commands: Commands,
+    guests: Query<
+        (
+            &WorldMember,
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &RunBehaviorEconomy,
+        ),
+        (
+            With<Guest>,
+            Without<PendingBehaviorTaskFailure>,
+            Without<DonationPaymentRequested>,
+        ),
+    >,
+    offers: Query<(
+        &TourDonationOffer,
+        &BehaviorSelfToken,
+        &ClaimedBehaviorSelfToken,
+        &ChildOf,
+    )>,
+    acceptors: Query<&WorldMember, With<DonationAcceptor>>,
+    circuits: Query<&WorldMember, (With<TransportCircuit>, With<DonationOpportunity>)>,
+    mut payments: MessageWriter<TransactionRequest>,
+) {
+    let guest = action.entity;
+    let Ok((world, task, instruction, economy)) = guests.get(guest) else {
+        return;
+    };
+    if action.instruction != instruction.id()
+        || !instruction.is_current(task)
+        || economy.transaction != AssetId::from_key("donate")
+    {
+        return;
+    }
+    let Some((offer, token, claim, owner)) = task.object.and_then(|object| offers.get(object).ok())
+    else {
+        return;
+    };
+    if owner.parent() != guest || claim.execution_id != task.execution_id {
+        return;
+    }
+    let acceptor = task.target.filter(|&target| {
+        acceptors
+            .get(target)
+            .is_ok_and(|acceptor| acceptor.root == world.root)
+    });
+    let circuit_available = circuits
+        .get(offer.circuit)
+        .is_ok_and(|circuit| circuit.root == world.root);
+    let Some(acceptor) = acceptor.filter(|_| {
+        circuit_available
+            && offer.cost_override.is_positive()
+            && token.name == AssetId::from_key("t_donationtour")
+    }) else {
+        mark_behavior_task_for_failure_and_stop_navigation(guest, &mut commands);
+        return;
+    };
+    commands
+        .entity(guest)
+        .insert(DonationPaymentRequested { submitted: true });
+    let operation = commands
+        .spawn((
+            *world,
+            PendingDonationPayment {
+                guest,
+                acceptor,
+                subject: offer.circuit,
+                amount: offer.cost_override,
+            },
+            DonationPaymentState::Pending,
+            TourDonationInstruction(instruction.id()),
+            BehaviorTransactionPayment {
+                actor: guest,
+                facility: acceptor,
+                transaction: offer.transaction_tracker,
+            },
+        ))
+        .id();
+    payments.write(TransactionRequest {
+        domain: TransactionDomain::Simulation,
+        operation,
+        debit: Account::Entity(guest),
+        credit: Account::Zoo,
+        amount: offer.cost_override,
+        kind: TransactionKind::Donation,
+        subject: Some(acceptor),
+    });
 }

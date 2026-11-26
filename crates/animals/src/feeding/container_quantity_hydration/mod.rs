@@ -10,7 +10,7 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
-use super::container_quantity::{DrinkContainer, FoodContainer, AUTHORED_CONTAINER_CAPACITY_Q16};
+use super::container_quantity::{AUTHORED_CONTAINER_CAPACITY_Q16, DrinkContainer, FoodContainer};
 
 pub(super) fn hydrate_food_and_drink_container_quantities_for_new_world_objects(
     mut commands: Commands,
@@ -112,6 +112,42 @@ pub(super) fn hydrate_food_and_drink_container_quantities_for_new_world_objects(
                         .remove::<(FoodContainer, DrinkContainer)>();
                 }
             }
+        }
+    }
+}
+
+pub(super) fn publish_changed_container_food_levels(
+    mut commands: Commands,
+    mut containers: Query<
+        (
+            Entity,
+            Option<&FoodContainer>,
+            Option<&DrinkContainer>,
+            Option<&mut openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes>,
+        ),
+        Or<(Changed<FoodContainer>, Changed<DrinkContainer>)>,
+    >,
+) {
+    use openzt2_game_data::AssetId;
+    use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
+
+    let key = AssetId::from_key("f_foodlevel");
+    for (entity, food, drink, attributes) in &mut containers {
+        let Some(amount) = food
+            .map(|food| food.amount_q16)
+            .or_else(|| drink.map(|drink| drink.amount_q16))
+        else {
+            continue;
+        };
+        let level = amount as f32 / 65_536.0;
+        if let Some(mut attributes) = attributes {
+            if attributes.get(key) != Some(level) {
+                attributes.set(key, level);
+            }
+        } else {
+            let mut attributes = AuthoredFloatAttributes::default();
+            attributes.set(key, level);
+            commands.entity(entity).insert(attributes);
         }
     }
 }

@@ -74,9 +74,9 @@ pub(super) fn restore_snapshot_sections(
     let Some(records) = sections.as_ref() else {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     };
-    let baseline_topology = if records.topology.is_some() {
+    let baseline_topology = if let Some(saved) = &records.topology {
         topology
-            .baseline_entities(world_root_entity)
+            .baseline_entities(world_root_entity, saved.includes_paths)
             .collect::<Vec<_>>()
     } else {
         Vec::new()
@@ -189,14 +189,15 @@ pub(super) fn restore_snapshot_sections(
     let resolved_animals = super::animal_snapshot_application::resolve_saved_animal_components(
         &records.animals,
         species,
-        world_definitions.timing().ticks_per_day,
+        openzt2_simulation_time::simulation_time_world_lifecycle::zoo_day_cadence_from_world_definitions(world_definitions)
+            .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?.ticks_per_zoo_day(),
     )?;
     let baseline_scenario = if scenario_snapshot.is_some() {
         scenario.replaced_entities(world_root_entity)
     } else {
         Vec::new()
     };
-    let (maximum_persistent_identifier, complete_persistent_identifiers) =
+    let (mut maximum_persistent_identifier, mut complete_persistent_identifiers) =
         validate_loaded_snapshot_references_and_imported_persistent_identifiers(
             scenario_snapshot.as_ref(),
             &records.animals,
@@ -268,10 +269,35 @@ pub(super) fn restore_snapshot_sections(
     planned_identifiers.extend(
         records
             .topology
-            .iter()
+            .as_deref()
+            .into_iter()
             .flatten()
             .map(|record| record.id().0),
     );
+    let guests = runtime_continuation
+        .as_ref()
+        .and_then(|runtime| runtime.domain_continuation.as_ref())
+        .map_or(&[][..], |domain| domain.guests.as_slice());
+    super::guest_continuation_snapshot::validate_guest_continuation(guests, world_definitions)?;
+    for guest in guests {
+        if !complete_persistent_identifiers.insert(guest.id)
+            || !planned_identifiers.insert(guest.id)
+        {
+            return Err(WorldSnapshotPersistenceFailure::DuplicatePersistentEntityIdentifier);
+        }
+        maximum_persistent_identifier = maximum_persistent_identifier.max(guest.id);
+    }
+    for treatment in records.animals.iter().filter_map(|animal| animal.treatment) {
+        if !complete_persistent_identifiers.contains(&treatment.provider) {
+            return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+        }
+        if world_definitions
+            .find_treatment(treatment.definition)
+            .is_none()
+        {
+            return Err(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier);
+        }
+    }
     if records
         .maintenance
         .objects
@@ -285,7 +311,12 @@ pub(super) fn restore_snapshot_sections(
     let high_water_marks =
         super::runtime_continuation_snapshot_types::RuntimeContinuationIdentityHighWaterMarks {
             maximum_persistent_identifier,
-            maximum_navigation_request,
+            maximum_navigation_request: guests
+                .iter()
+                .map(|guest| guest.navigation_request())
+                .max()
+                .unwrap_or_default()
+                .max(maximum_navigation_request),
             maximum_behavior_execution,
             pending_service_request_sequences: &[],
         };
@@ -348,6 +379,13 @@ pub(super) fn restore_snapshot_sections(
     let records = sections
         .as_mut()
         .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
+    super::guest_continuation_snapshot::restore_guests(
+        commands,
+        world_root_entity,
+        guests,
+        world_definitions,
+        persistent_identifier_allocator,
+    )?;
     records.scenario = scenario_snapshot;
     records.runtime = runtime_continuation;
     let placement_records = records.placements.as_deref().unwrap_or_default();
@@ -361,7 +399,7 @@ pub(super) fn restore_snapshot_sections(
         world_root_entity,
         persistent_identifier_allocator,
     )?;
-    let retired_fence_bounds = if let Some(topology_records) = records.topology.as_deref() {
+    let retired_fence_bounds = if let Some(topology_records) = &records.topology {
         let replaced_entities = baseline_placements
             .iter()
             .copied()

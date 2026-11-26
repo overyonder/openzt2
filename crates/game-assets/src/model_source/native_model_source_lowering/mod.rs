@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use anyhow::Result;
+use openzt2_game_data::scene_prefab::ScenePrefabDocument;
 
 use super::{
     blue_fang_bfb_source::document::BlueFangBfbDocument,
@@ -176,7 +177,6 @@ pub fn lower_native_model_source(
                 &netimmerse_document,
                 &bone_lod,
                 native_model_asset_path,
-                None,
             )?;
             scene_prefab_document.automatic_placement_bounds_xz =
                 lower_netimmerse_automatic_placement_bounds(&netimmerse_document)?;
@@ -210,7 +210,7 @@ pub fn lower_native_model_source(
                 .map(|(model, _)| model)
                 .collect();
             let mut scene_prefab_document =
-                lower_blue_fang_scene_prefab(&blue_fang_document, native_model_asset_path, None)?;
+                lower_blue_fang_scene_prefab(&blue_fang_document, native_model_asset_path)?;
             scene_prefab_document.automatic_placement_bounds_xz =
                 lower_blue_fang_automatic_placement_bounds(&blue_fang_document)?;
             Ok(LoweredNativeModel {
@@ -234,6 +234,38 @@ pub fn native_model_scene_labelled_asset_path(native_model_asset_path: &str) -> 
         "{}#Scene",
         super::gltf_model_source::gltf_model_asset_path_for_source_path(&path).display()
     )
+}
+
+pub(crate) fn lower_native_physical_scene_document(
+    path: &str,
+    bytes: &[u8],
+) -> Result<ScenePrefabDocument> {
+    match Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+    {
+        Some(extension) if extension.eq_ignore_ascii_case("nif") => {
+            let document = NetImmerseNifDocument::parse(path.to_owned(), bytes)?;
+            let bone_lod = NetImmerseBoneLod::from_document(&document);
+            let mut prefab = lower_netimmerse_scene_prefab(&document, &bone_lod, path)?;
+            prefab.automatic_placement_bounds_xz =
+                lower_netimmerse_automatic_placement_bounds(&document)?;
+            Ok(prefab)
+        }
+        Some(extension) if extension.eq_ignore_ascii_case("bfb") => {
+            let document = BlueFangBfbDocument::parse(path.to_owned(), bytes)?;
+            let mut prefab = lower_blue_fang_scene_prefab(&document, path)?;
+            prefab.automatic_placement_bounds_xz =
+                lower_blue_fang_automatic_placement_bounds(&document)?;
+            Ok(prefab)
+        }
+        Some(extension)
+            if extension.eq_ignore_ascii_case("glb") || extension.eq_ignore_ascii_case("gltf") =>
+        {
+            super::gltf_model_source::gltf_model_scene_prefab(path, bytes)
+        }
+        _ => Err(ConversionError::InvalidSource("unsupported native model source").into()),
+    }
 }
 
 pub(super) fn native_model_particle_effect_labelled_asset_path(

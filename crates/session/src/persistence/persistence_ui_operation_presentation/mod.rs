@@ -16,42 +16,12 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_interface_state::ui::ui_document_asset_load_failure::UiDocumentAssetLoadFailed;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 use openzt2_ui::authored_ui_presentation_action_application::RequestUiPresentationAction;
-use openzt2_ui::cursor::SetWaitCursor;
 use openzt2_ui::save_dialog_cancellation::SaveDialogCancellationRequests;
 
-use super::{
-    persistence_ui_types::{
-        ExitApplicationAfterSave, OpenLoadSlotCatalogueAfterWorldSnapshotSave,
-        ReturnToMainMenuAfterSave, SaveDialogSnapshotSaved,
-    },
-    slot_io::{
-        persistence_slot_filesystem_task_types::PersistenceSlotOperation,
-        save_slot_catalogue_load_execution::SaveSlotCatalogueFilesystemRead,
-    },
+use super::persistence_ui_types::{
+    ExitApplicationAfterSave, OpenLoadSlotCatalogueAfterWorldSnapshotSave,
+    ReturnToMainMenuAfterSave, SaveDialogSnapshotSaved,
 };
-
-pub(super) fn update_wait_cursor_when_snapshot_operations_change(
-    operations: Query<
-        (),
-        (
-            With<PersistenceSlotOperation>,
-            Without<SaveSlotCatalogueFilesystemRead>,
-        ),
-    >,
-    added: Query<
-        (),
-        (
-            Added<PersistenceSlotOperation>,
-            Without<SaveSlotCatalogueFilesystemRead>,
-        ),
-    >,
-    mut removed: RemovedComponents<PersistenceSlotOperation>,
-    mut cursor: MessageWriter<SetWaitCursor>,
-) {
-    if removed.read().count() != 0 || !added.is_empty() {
-        cursor.write(SetWaitCursor(!operations.is_empty()));
-    }
-}
 
 pub(super) fn continue_navigation_after_matching_dialog_save(
     mut commands: Commands,

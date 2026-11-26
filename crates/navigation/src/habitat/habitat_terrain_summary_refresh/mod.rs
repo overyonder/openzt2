@@ -62,6 +62,8 @@ pub(super) fn refresh_terrain_derived_habitat_summaries(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+    indexes: Query<&openzt2_zoo_state::habitat::habitat_types::HabitatIndex>,
+    sectors: Query<&super::habitat_membership_and_containment::HabitatCellSectors>,
     mut habitats: Query<(
         Entity,
         &HabitatRegion,
@@ -96,9 +98,28 @@ pub(super) fn refresh_terrain_derived_habitat_summaries(
                 &terrain_chunks,
             )
         };
+        let index = indexes.single().ok();
+        let terrain_sectors: Vec<IVec2> = habitat_region
+            .topology_cells
+            .iter()
+            .copied()
+            .flat_map(|tile| {
+                let count = index
+                    .and_then(|index| index.cell_at(tile))
+                    .and_then(|cell| sectors.get(cell).ok())
+                    .map_or(4, |sectors| {
+                        sectors
+                            .0
+                            .iter()
+                            .filter(|&&owner| owner == Some(habitat_entity))
+                            .count()
+                    });
+                std::iter::repeat_n(tile, count)
+            })
+            .collect();
         let refreshed_summary = calculate_habitat_terrain_summary_from_topology_cells(
-            &habitat_region.topology_cells,
-            topology_cell_area_square_metres,
+            &terrain_sectors,
+            topology_cell_area_square_metres / 4.0,
             habitat_summary.boundary_is_breached,
             &mut read_terrain_cell_fact,
         );

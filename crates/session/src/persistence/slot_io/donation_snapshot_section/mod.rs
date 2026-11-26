@@ -1,3 +1,4 @@
+use super::money_snapshot_encoding::{decode_money, encode_money};
 use bevy::{ecs::query::QueryData, prelude::*};
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
@@ -62,8 +63,8 @@ fn validate_donation_records(records: &[DonationSnapshotRecord]) -> Result<(), F
         }
         if matches!(record.identifier.0, 0 | u64::MAX)
             || index > 0 && records[index - 1].identifier.0 >= record.identifier.0
-            || record.total.amount.0 < 0
-            || (record.total.amount.0 == 0) != (record.total.count == 0)
+            || record.total.amount < Money::ZERO
+            || (record.total.amount == Money::ZERO) != (record.total.count == 0)
             || record.categories.aggregate_for_category(None) != Some(record.total)
         {
             return Err(Failure::CorruptSnapshotSection);
@@ -77,19 +78,20 @@ pub(super) fn encode_donation_records(
 ) -> Result<Vec<u8>, Failure> {
     validate_donation_records(records)?;
     let mut bytes = Vec::new();
-    // Little endian acceptor rows: id:u64, cents:i64, count:u32, categories:u32;
-    // followed by category rows: id:[u8;16], cents:i64, count:u32.
-    // The legacy empty Donations section remains an empty byte slice.
+    // An invalid legacy row identity marks the dollar encoding.
+    if !records.is_empty() {
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+    }
     for record in records {
         bytes.extend_from_slice(&record.identifier.0.to_le_bytes());
-        bytes.extend_from_slice(&record.total.amount.0.to_le_bytes());
+        bytes.extend_from_slice(&encode_money(record.total.amount));
         bytes.extend_from_slice(&record.total.count.to_le_bytes());
         let mut categories: Vec<_> = record.categories.iter().collect();
         categories.sort_unstable_by_key(|(category, _)| *category);
         bytes.extend_from_slice(&(categories.len() as u32).to_le_bytes());
         for (category, total) in categories {
             bytes.extend_from_slice(&category.0);
-            bytes.extend_from_slice(&total.amount.0.to_le_bytes());
+            bytes.extend_from_slice(&encode_money(total.amount));
             bytes.extend_from_slice(&total.count.to_le_bytes());
         }
     }
@@ -106,6 +108,10 @@ pub(super) fn decode_donation_records(
         return Err(Failure::CapacityExceeded);
     }
     let mut payload = &bytes[section.payload_byte_range_within_container(bytes.len())?];
+    let dollars = payload.starts_with(&0_u64.to_le_bytes());
+    if dollars {
+        payload = &payload[8..];
+    }
     let mut records = Vec::new();
     let mut category_rows = 0_usize;
     for _ in 0..section.encoded_record_count {
@@ -115,7 +121,7 @@ pub(super) fn decode_donation_records(
         payload = rest;
         let identifier = PersistentId(u64::from_le_bytes(header[0..8].try_into().unwrap()));
         let total = DonationTotal {
-            amount: Money(i64::from_le_bytes(header[8..16].try_into().unwrap())),
+            amount: decode_money(header[8..16].try_into().unwrap(), dollars)?,
             count: u32::from_le_bytes(header[16..20].try_into().unwrap()),
         };
         let count = u32::from_le_bytes(header[20..24].try_into().unwrap()) as usize;
@@ -132,7 +138,7 @@ pub(super) fn decode_donation_records(
             categories.push((
                 AssetId(row[0..16].try_into().unwrap()),
                 DonationTotal {
-                    amount: Money(i64::from_le_bytes(row[16..24].try_into().unwrap())),
+                    amount: decode_money(row[16..24].try_into().unwrap(), dollars)?,
                     count: u32::from_le_bytes(row[24..28].try_into().unwrap()),
                 },
             ));

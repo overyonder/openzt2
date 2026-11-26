@@ -113,6 +113,29 @@ pub(super) fn project_document_on_entity(
     decorate_owner: bool,
     existing_root: Option<Entity>,
 ) -> Entity {
+    project_document_on_entity_with_nodes(
+        commands,
+        request,
+        document,
+        localization,
+        image_selection_index,
+        decorate_owner,
+        existing_root,
+    )
+    .0
+}
+
+pub(crate) fn project_document_on_entity_with_nodes(
+    commands: &mut Commands,
+    request: &ShowUiDocument,
+    document: &UiDocumentAsset,
+    localization: openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView<
+        '_,
+    >,
+    image_selection_index: Option<usize>,
+    decorate_owner: bool,
+    existing_root: Option<Entity>,
+) -> (Entity, Vec<Entity>) {
     let data = document.canonical_ui_document();
     // A source file/directory skin chooses one alternative when the screen is
     // constructed and keeps that choice for the lifetime of the projected
@@ -170,6 +193,28 @@ pub(super) fn project_document_on_entity(
         entities.push(entity);
 
         let flags = record.flags.0;
+        if data.role == UiDocumentRole::EntityInfo && record.name.eq_ignore_ascii_case("thoughts") {
+            commands
+                .entity(entity)
+                .insert(crate::notification::UiGuestThoughtList);
+        }
+        if data.role == UiDocumentRole::ZooStatus
+            && record.name.eq_ignore_ascii_case("ZTAwardPanel")
+        {
+            let parent = &data.nodes[record.parent as usize].name;
+            let persistent = if parent.eq_ignore_ascii_case("current awards layout") {
+                Some(false)
+            } else if parent.eq_ignore_ascii_case("persistent awards layout") {
+                Some(true)
+            } else {
+                None
+            };
+            commands
+                .entity(entity)
+                .insert(super::authored_list_row_projection::UiAwardPanel(
+                    persistent,
+                ));
+        }
         let (bound_visibility, bound_enabled) =
             authored_constant_visibility_and_interaction_enabled_state(&record.bindings);
         // The document root is Bevy's lifecycle/layout owner, not an authored
@@ -698,11 +743,11 @@ pub(super) fn project_document_on_entity(
     let targets = crate::authored_ui_target_lookup::ProjectedUiTargets::from_authored_node_entities(
         data.nodes
             .iter()
-            .zip(entities)
+            .zip(entities.iter().copied())
             .map(|(record, entity)| (record.id, entity)),
     );
     commands.entity(root).insert(targets);
-    root
+    (root, entities)
 }
 
 /// The inherited edit_back branch contains layout and static skin pieces.

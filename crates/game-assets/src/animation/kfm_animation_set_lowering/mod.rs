@@ -23,7 +23,7 @@ struct KfmAnimationTransitionDeclaration {
     text_key_pairs: Vec<[Option<String>; 2]>,
 }
 
-pub(super) fn lower_kfm_source_to_animation_set_document(
+pub(crate) fn lower_kfm_source_to_animation_set_document(
     animation_set_asset_path: &str,
     kfm_source_bytes: &[u8],
 ) -> io::Result<AuthoredAnimationSetDocument> {

@@ -192,13 +192,13 @@ pub(super) fn update_terrain_water_view_selection(
     mut cameras: Query<
         (
             Entity,
-            &TerrainWaterCaptureHits,
+            Ref<TerrainWaterCaptureHits>,
             &mut TerrainWaterCaptureSelection,
-            Option<&TerrainWaterCaptureRegion>,
+            Option<Ref<TerrainWaterCaptureRegion>>,
         ),
         With<ZooCamera>,
     >,
-    indexes: Query<&TerrainWaterMembershipIndex>,
+    indexes: Query<Ref<TerrainWaterMembershipIndex>>,
     mut regions: Query<(
         Entity,
         &TerrainWaterRegionVisibility,
@@ -206,16 +206,48 @@ pub(super) fn update_terrain_water_view_selection(
     )>,
     region_sources: TerrainWaterRegionQuery,
     assets: Res<Assets<TerrainAsset>>,
+    changed_regions: Query<
+        (),
+        Or<(
+            Changed<TerrainWaterRegionVisibility>,
+            Added<TerrainWaterRegionFade>,
+            ChangedWaterRegion,
+        )>,
+    >,
+    mut removed_capture: RemovedComponents<TerrainWaterCaptureRegion>,
+    mut removed_visibility: RemovedComponents<TerrainWaterRegionVisibility>,
+    mut fade_transitions: MessageReader<
+        super::terrain_water_view_transitions::WaterFadeTransitionChanged,
+    >,
 ) {
     let Ok((camera, hits, mut selection, region)) = cameras.single_mut() else {
         return;
     };
-    let Some((hits, (index, asset))) = hits.0.as_ref().zip(
-        indexes
-            .single()
-            .ok()
-            .and_then(|index| assets.get(index.terrain()).map(|asset| (index, asset))),
-    ) else {
+    let index = indexes.single().ok();
+    let capture_removed = removed_capture
+        .read()
+        .filter(|&entity| entity == camera)
+        .count()
+        != 0;
+    let visibility_removed = removed_visibility.read().count() != 0;
+    let fade_changed = fade_transitions.read().count() != 0;
+    if !hits.is_changed()
+        && !selection.is_added()
+        && !region.as_ref().is_some_and(DetectChanges::is_changed)
+        && !index.as_ref().is_some_and(DetectChanges::is_changed)
+        && !assets.is_changed()
+        && changed_regions.is_empty()
+        && !capture_removed
+        && !visibility_removed
+        && !fade_changed
+    {
+        return;
+    }
+    let Some((hits, (index, asset))) = hits
+        .0
+        .as_ref()
+        .zip(index.and_then(|index| assets.get(index.terrain()).map(|asset| (index, asset))))
+    else {
         selection.set_if_neq(TerrainWaterCaptureSelection::default());
         if region.is_some() {
             commands

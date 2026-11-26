@@ -322,6 +322,7 @@ mod tests {
         let entity = application
             .world_mut()
             .spawn((
+                UiAnimationDirection(true),
                 Node::default(),
                 Visibility::Inherited,
                 UiShowHideAnimation {
@@ -340,10 +341,6 @@ mod tests {
             ))
             .add_child(child)
             .id();
-        application
-            .world_mut()
-            .entity_mut(entity)
-            .insert(UiAnimationDirection(true));
         application
             .world_mut()
             .write_message(UiAnimationPlaybackRequest {

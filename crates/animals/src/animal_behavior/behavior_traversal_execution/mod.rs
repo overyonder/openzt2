@@ -9,6 +9,7 @@ use openzt2_game_assets::{
     },
     application_lifecycle::GamePhase,
 };
+use openzt2_world::animation_playback::traversal_animation_path_binding::ConfigureTraversalSegmentTiming;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::animation_playback::traversal_animation_path_types::TraversalAnimationPath;
 use openzt2_world_state::{
@@ -19,7 +20,7 @@ use openzt2_world_state::{
         animation_presentation_relationship_types::AnimationPresentationOwner,
     },
     animation_playback::{
-        animation_event_message_types::AnimationCompleted,
+        animation_event_message_types::{AnimationCompleted, AnimationObjectCommandDelivery},
         animation_playback_controller_types::{
             AnimationPlaybackController, AnimationPlaybackRepetitionPolicy,
         },
@@ -31,11 +32,11 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_
 use openzt2_zoo_state::{
     behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation,
     behavior_task_execution_types::{
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
         running_actions::{
             BehaviorInstructionId, RunBehaviorTraversalAnimation, RunBehaviorTraversalDock,
             RunningBehaviorInstruction,
         },
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     locomotion::locomotion_types::{
         Arrived, DockAt, NavAgent, NavigationFailed, NavigationRequestGeneration,
@@ -59,6 +60,29 @@ struct TraversalAnimation {
     attachment: Vec3,
     exit: bool,
     disabled_collider: bool,
+    previous_progress: f32,
+    clip_ended: bool,
+    segment_timing: Option<TraversalSegmentTiming>,
+}
+
+struct TraversalSegmentTiming {
+    generation: u64,
+    start: f32,
+    target: f32,
+    delay_updates: u8,
+    updates: u32,
+    segment_count: u32,
+}
+
+impl TraversalSegmentTiming {
+    fn advance(&mut self) -> f32 {
+        if self.delay_updates > 0 {
+            self.delay_updates -= 1;
+        } else if self.updates < self.segment_count {
+            self.updates += 1;
+        }
+        self.start + (self.target - self.start) * (self.updates as f32 / self.segment_count as f32)
+    }
 }
 
 pub(super) fn register_behavior_traversal_execution(app: &mut App) {
@@ -80,7 +104,10 @@ pub(super) fn register_behavior_traversal_execution(app: &mut App) {
     )
     .add_systems(
         FixedUpdate,
-        (finish_traversal_docks, animate_traversal)
+        (
+            finish_traversal_docks,
+            animate_traversal.after(AnimationObjectCommandDelivery),
+        )
             .in_set(FixedGameSet::Act)
             .run_if(in_state(GamePhase::InGame)),
     );
@@ -286,6 +313,9 @@ fn start_traversal_animation(
             attachment,
             exit: action.exit,
             disabled_collider: !collider_disabled,
+            previous_progress: 0.0,
+            clip_ended: false,
+            segment_timing: None,
         });
         if !collider_disabled {
             commands.entity(actor).insert(ColliderDisabled);
@@ -298,7 +328,7 @@ fn animate_traversal(
     clock: Single<&ZooClock>,
     mut actors: Query<(
         Entity,
-        &TraversalAnimation,
+        &mut TraversalAnimation,
         Option<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
         Has<PendingBehaviorTaskFailure>,
         &mut Transform,
@@ -315,6 +345,7 @@ fn animate_traversal(
     clips: Res<Assets<AnimationClip>>,
     sets: Res<Assets<AnimationSetAsset>>,
     mut completed: MessageReader<AnimationCompleted>,
+    mut timing_requests: MessageReader<ConfigureTraversalSegmentTiming>,
     mut rejected: MessageReader<AnimationClipPlaybackRequestRejected>,
     mut commands: Commands,
 ) {
@@ -338,25 +369,66 @@ fn animate_traversal(
         .read()
         .map(|result| (result.animation_subject_entity, result.request_id))
         .collect::<Vec<_>>();
-    for (actor, motion, step, failing, mut transform) in &mut actors {
+    for request in timing_requests.read() {
+        if request.segment_count == 0 || !request.completion_fraction.is_finite() {
+            continue;
+        }
+        let Ok((owner, controller, _)) = animations.get(request.controller) else {
+            continue;
+        };
+        if controller.playback_generation != request.playback_generation {
+            continue;
+        }
+        let actor = owner.map_or(request.controller, |owner| owner.gameplay_entity);
+        let Ok((_, mut motion, ..)) = actors.get_mut(actor) else {
+            continue;
+        };
+        if controller.explicit_clip_request_id != Some(motion.request_id) {
+            continue;
+        }
+        motion.segment_timing = Some(TraversalSegmentTiming {
+            generation: request.playback_generation,
+            start: motion.previous_progress,
+            target: request.completion_fraction.clamp(0.0, 1.0),
+            delay_updates: 5,
+            updates: 0,
+            segment_count: request.segment_count,
+        });
+    }
+    for (actor, mut motion, step, failing, mut transform) in &mut actors {
         let current = step.filter(|(task, step)| {
             !failing && motion.instruction == step.id() && step.is_current(task)
         });
-        let clip_completed = completed.contains(&(actor, motion.request_id));
+        if completed.contains(&(actor, motion.request_id)) {
+            motion.clip_ended = true;
+        }
         let clip_rejected = rejected.contains(&(actor, motion.request_id));
         let path = paths.get(motion.path).ok();
         if let (Some((_, step)), Some((path, world_transform)), false) =
             (current, path, clip_rejected)
         {
-            let progress = if clip_completed {
-                Some(1.0)
-            } else {
-                AnimationPresentations::for_subject(actor, presentations.get(actor).ok())
-                    .filter_map(|entity| animations.get(entity).ok())
-                    .find(|(_, controller, _)| {
-                        controller.explicit_clip_request_id == Some(motion.request_id)
-                    })
-                    .and_then(|(_, controller, player)| {
+            let active = AnimationPresentations::for_subject(actor, presentations.get(actor).ok())
+                .filter_map(|entity| animations.get(entity).ok())
+                .find(|(_, controller, _)| {
+                    controller.explicit_clip_request_id == Some(motion.request_id)
+                });
+            if let Some((_, controller, _)) = active {
+                if motion
+                    .segment_timing
+                    .as_ref()
+                    .is_some_and(|timing| timing.generation != controller.playback_generation)
+                {
+                    motion.segment_timing = None;
+                }
+            }
+            let owns_timing = active.is_some() || motion.clip_ended;
+            let progress =
+                if let Some(timing) = motion.segment_timing.as_mut().filter(|_| owns_timing) {
+                    Some(timing.advance())
+                } else if motion.clip_ended {
+                    Some(1.0)
+                } else {
+                    active.and_then(|(_, controller, player)| {
                         let set = sets.get(&controller.animation_set_asset)?;
                         let record = clip_sources.get(set, &controller.animation_clip_asset_key)?;
                         let (_, node) = record.graph?;
@@ -364,8 +436,9 @@ fn animate_traversal(
                         let clip = clips.get(record.clip)?;
                         Some((active.seek_time() / clip.duration()).clamp(0.0, 1.0))
                     })
-            };
+                };
             if let Some(progress) = progress {
+                motion.previous_progress = progress;
                 let t = if motion.exit {
                     1.0 - progress
                 } else {
@@ -381,13 +454,18 @@ fn animate_traversal(
                 transform.translation =
                     world_transform.transform_point(sample.translation) - attachment;
             }
-            if !clip_completed {
+            if !motion.clip_ended
+                || motion
+                    .segment_timing
+                    .as_ref()
+                    .is_some_and(|timing| timing.updates < timing.segment_count)
+            {
                 continue;
             }
-            retire_traversal_motion(actor, motion, &mut commands);
+            retire_traversal_motion(actor, &motion, &mut commands);
             step.complete(actor, clock.tick, &mut commands);
         } else {
-            retire_traversal_motion(actor, motion, &mut commands);
+            retire_traversal_motion(actor, &motion, &mut commands);
             if current.is_some() {
                 mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             }

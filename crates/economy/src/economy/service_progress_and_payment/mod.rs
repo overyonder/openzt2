@@ -47,6 +47,7 @@ pub(super) fn advance_reserved_services_and_request_completed_service_payments(
         } else {
             commands.entity(entity).try_remove::<FacilityServiceTimer>();
             payments.write(TransactionRequest {
+                domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Simulation,
                 operation: entity,
                 debit: Account::Entity(customer.0),
                 credit: Account::Zoo,

@@ -16,7 +16,7 @@ fn entry(subject: Entity, kind: GuestMemoryKind, value: i16) -> GuestMemoryEntry
         subject,
         kind,
         value_permille: value,
-        age_ticks: 0,
+        created_tick: 0,
     }
 }
 

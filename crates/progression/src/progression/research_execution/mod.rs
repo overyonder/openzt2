@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use openzt2_world_state::game_session_types::WorldSessionMode;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
+use openzt2_game_data::world_definitions::catalogue_and_progression::research_and_unlock_definition_types::ResearchDuration;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -98,10 +99,12 @@ pub(super) fn validate_start_research_requests_and_request_payments(
             ))
             .id();
         transactions.write(TransactionRequest {
+            domain:
+                openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Player,
             operation,
             debit: Account::Zoo,
             credit: Account::External,
-            amount: Money(research.cost_cents),
+            amount: Money::from_cents(research.cost_cents),
             kind: TransactionKind::Research,
             subject: None,
         });
@@ -120,18 +123,23 @@ pub(super) fn start_paid_research_projects(
     )>,
     mut ids: Query<&mut PersistentIdAllocator, With<WorldRoot>>,
     seeds: Query<&ZooSeed>,
+    time: Res<Time<Fixed>>,
     mut commands: Commands,
 ) {
     let definitions = active_definitions.get(&definitions);
+    let mut consumed = EntityHashSet::default();
     for result in completed.read() {
         let Ok(payment) = pending.get(result.operation) else {
             continue;
         };
+        if !consumed.insert(result.operation) {
+            continue;
+        }
         commands.entity(result.operation).try_despawn();
         let Ok((member, availability, duration, current_payment)) = items.get(payment.item) else {
             continue;
         };
-        if current_payment.iter().next() != Some(result.operation) {
+        if current_payment.pending_payment() != result.operation {
             continue;
         }
         let Some(definitions) = definitions else {
@@ -149,23 +157,25 @@ pub(super) fn start_paid_research_projects(
         let Ok(seed) = seeds.get(member.root) else {
             continue;
         };
-        let hz = definitions.timing().fixed_hz;
+        let step = time.timestep();
+        let required = duration
+            .0
+            .and_then(|seconds| Duration::try_from_secs_f32(seconds).ok())
+            .unwrap_or_else(|| match definition.duration {
+                ResearchDuration::Ticks(ticks) => tick_duration(step, ticks),
+                ResearchDuration::Nanoseconds(nanoseconds) => Duration::from_nanos(nanoseconds),
+                ResearchDuration::RandomDefault => {
+                    Duration::from_secs(resolve_research_duration_to_simulation_ticks(
+                        definition.duration,
+                        1,
+                        *seed,
+                        id,
+                    ))
+                }
+            })
+            .max(step);
         commands.entity(payment.item).insert((
-            ResearchProject {
-                definition: availability.item,
-                elapsed_ticks: 0,
-                required_ticks: duration.0.map_or_else(
-                    || {
-                        resolve_research_duration_to_simulation_ticks(
-                            definition.duration,
-                            hz,
-                            *seed,
-                            id,
-                        )
-                    },
-                    |seconds| (seconds * hz as f32).max(1.0) as u64,
-                ),
-            },
+            ResearchProject::new(availability.item, required),
             ResearchProjectPersistentId(id),
         ));
     }
@@ -205,12 +215,6 @@ pub(super) fn apply_research_duration_overrides(
     }
 }
 
-#[derive(Component)]
-pub(super) struct ResearchProjectClock(Timer);
-
-#[derive(Component)]
-pub(super) struct ResearchAvailabilityClock(Timer);
-
 #[derive(Component, Default, PartialEq, Eq)]
 pub struct ResearchCompletionBasisPoints(pub i64);
 
@@ -221,23 +225,20 @@ fn tick_duration(step: Duration, ticks: u64) -> Duration {
     })
 }
 
+fn research_progress(timer: &Timer) -> ResearchCompletionBasisPoints {
+    let duration = timer.duration().as_nanos();
+    let elapsed = timer.elapsed().as_nanos().min(duration);
+    ResearchCompletionBasisPoints(((elapsed * 10_000) / duration.max(1)) as i64)
+}
+
 pub(super) fn publish_restored_research_progress(
-    projects: Query<
-        (Entity, &ResearchProject),
-        (
-            Added<ResearchProject>,
-            Without<ResearchCompletionBasisPoints>,
-        ),
+    mut projects: Query<
+        (&ResearchProject, &mut ResearchCompletionBasisPoints),
+        Added<ResearchProject>,
     >,
-    mut commands: Commands,
 ) {
-    for (entity, project) in &projects {
-        commands
-            .entity(entity)
-            .insert(ResearchCompletionBasisPoints(
-                ((u128::from(project.elapsed_ticks.min(project.required_ticks)) * 10_000)
-                    / u128::from(project.required_ticks.max(1))) as i64,
-            ));
+    for (project, mut progress) in &mut projects {
+        progress.set_if_neq(research_progress(&project.timer));
     }
 }
 
@@ -247,8 +248,7 @@ pub(super) fn advance_active_research_projects(
         (
             Entity,
             &mut ResearchProject,
-            Option<&mut ResearchProjectClock>,
-            Option<&mut ResearchCompletionBasisPoints>,
+            &mut ResearchCompletionBasisPoints,
         ),
         (
             Without<ResearchProjectPaused>,
@@ -257,83 +257,25 @@ pub(super) fn advance_active_research_projects(
     >,
     mut commands: Commands,
 ) {
-    let step = time.timestep();
-    for (entity, mut project, clock, progress_values) in &mut projects {
-        let mut restored = clock.is_none().then(|| {
-            let mut timer =
-                Timer::new(tick_duration(step, project.required_ticks), TimerMode::Once);
-            timer.set_elapsed(tick_duration(
-                step,
-                project.elapsed_ticks.min(project.required_ticks),
-            ));
-            timer
-        });
-        let Some(timer) = clock
-            .map(|clock| &mut clock.into_inner().0)
-            .or(restored.as_mut())
-        else {
-            continue;
-        };
-        timer.tick(step);
-        let elapsed = (timer.elapsed().as_nanos() / step.as_nanos()) as u64;
-        if project.elapsed_ticks != elapsed {
-            project.elapsed_ticks = elapsed;
-        }
-        let progress = ResearchCompletionBasisPoints(
-            ((u128::from(elapsed) * 10_000) / u128::from(project.required_ticks.max(1))) as i64,
-        );
-        if let Some(mut current) = progress_values {
-            current.set_if_neq(progress);
-        } else {
-            commands.entity(entity).insert(progress);
-        }
-        if timer.is_finished() {
+    for (entity, mut project, mut progress) in &mut projects {
+        project.timer.tick(time.timestep());
+        progress.set_if_neq(research_progress(&project.timer));
+        if project.timer.is_finished() {
             commands.entity(entity).insert(ReadyResearchProject);
-        } else if let Some(timer) = restored {
-            commands.entity(entity).insert(ResearchProjectClock(timer));
         }
     }
 }
 
 pub(super) fn advance_research_availability_unlock_countdowns(
     time: Res<Time<Fixed>>,
-    mut countdowns: Query<(
-        Entity,
-        &mut ResearchAvailabilityUnlockCountdown,
-        Option<&mut ResearchAvailabilityClock>,
-    )>,
+    mut countdowns: Query<(Entity, &mut ResearchAvailabilityUnlockCountdown)>,
     mut commands: Commands,
 ) {
-    let step = time.timestep();
-    for (entity, mut countdown, clock) in &mut countdowns {
-        let mut restored = clock.is_none().then(|| {
-            Timer::new(
-                tick_duration(step, countdown.remaining_ticks),
-                TimerMode::Once,
-            )
-        });
-        let Some(timer) = clock
-            .map(|clock| &mut clock.into_inner().0)
-            .or(restored.as_mut())
-        else {
-            continue;
-        };
-        timer.tick(step);
-        if timer.is_finished() {
-            commands.entity(entity).remove::<(
-                ResearchAvailabilityClock,
-                ResearchAvailabilityUnlockCountdown,
-            )>();
-        } else {
-            let remaining = timer.remaining().as_nanos().div_ceil(step.as_nanos()) as u64;
-            if countdown.remaining_ticks != remaining {
-                countdown.remaining_ticks = remaining;
-            }
-            if let Some(timer) = restored {
-                commands
-                    .entity(entity)
-                    .insert(ResearchAvailabilityClock(timer));
-            }
+    for (entity, mut countdown) in &mut countdowns {
+        if countdown.timer.tick(time.timestep()).is_finished() {
+            commands
+                .entity(entity)
+                .remove::<ResearchAvailabilityUnlockCountdown>();
         }
     }
 }
@@ -379,7 +321,6 @@ pub(super) fn complete_research_projects_and_apply_authored_unlocks(
             ResearchProjectPaused,
             ResearchProjectPersistentId,
             ReadyResearchProject,
-            ResearchProjectClock,
             ResearchCompletionBasisPoints,
         )>();
     }

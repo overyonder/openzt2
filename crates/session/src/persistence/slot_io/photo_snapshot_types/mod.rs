@@ -15,6 +15,7 @@ pub(super) struct PhotoSnapshotRecord {
     pub image_width_pixels: u32,
     pub image_height_pixels: u32,
     pub rgba8_pixel_bytes: Vec<u8>,
+    pub caption: Option<String>,
     pub challenge_photo_file_identifiers: Vec<AssetId>,
 }
 
@@ -23,5 +24,5 @@ pub(super) struct PhotoChallengeProgressSnapshotRecord {
     pub challenge_definition_identifier: AssetId,
     pub completed: bool,
     pub completed_by_photo_persistent_identifier: Option<PersistentId>,
-    pub rating_stars: u8,
+    pub rating_half_stars: u8,
 }

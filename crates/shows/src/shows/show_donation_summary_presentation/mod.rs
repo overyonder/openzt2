@@ -1,5 +1,5 @@
 use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
-use openzt2_economy::economy::WorldShowDonationTotal;
+use openzt2_economy::economy::display_currency_cents;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_data::ui_document::{
     document::UiDocumentRole, node_property_binding::UiIntegerPropertyBindingSource,
@@ -10,7 +10,7 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::{
 use openzt2_world_state::world_spawn::{
     world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldRoot,
 };
-use openzt2_zoo_state::donations::donation_payment_types::DonationTotal;
+use openzt2_zoo_state::donations::donation_payment_types::{DonationTotal, ZooDonationSummary};
 
 use super::{
     show_schedule_types::{ScheduledShowRow, SelectedShowScheduleRow},
@@ -28,7 +28,7 @@ pub(super) fn project_selected_or_all_show_donation_summary_into_authored_contro
     selections: Query<Ref<SelectedShowScheduleRow>>,
     scheduled: Query<Ref<ScheduledShowRow>>,
     stages: Query<Ref<DonationTotal>, With<ShowStage>>,
-    zoo: Query<Ref<WorldShowDonationTotal>, (With<WorldRoot>, With<WorldLoadCompleted>)>,
+    zoo: Query<Ref<ZooDonationSummary>, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     mut removed: (
         RemovedComponents<SelectedShowScheduleRow>,
         RemovedComponents<DonationTotal>,
@@ -67,7 +67,10 @@ pub(super) fn project_selected_or_all_show_donation_summary_into_authored_contro
             );
         let aggregate = if row.is_some() {
             stage.as_deref().copied().unwrap_or_default()
-        } else if let Some(total) = zoo.as_ref().and_then(|zoo| zoo.0) {
+        } else if let Some(total) = zoo
+            .as_ref()
+            .and_then(|zoo| zoo.total(Some(openzt2_game_data::AssetId::from_key("show-donation"))))
+        {
             total
         } else {
             continue;
@@ -82,12 +85,15 @@ pub(super) fn project_selected_or_all_show_donation_summary_into_authored_contro
             }
             let next = match binding.0 {
                 UiIntegerPropertyBindingSource::DonationCount => i64::from(aggregate.count),
-                UiIntegerPropertyBindingSource::DonationTotalCents => aggregate.amount.0,
-                UiIntegerPropertyBindingSource::DonationAverageCents => aggregate
-                    .amount
-                    .0
-                    .checked_div(i64::from(aggregate.count))
-                    .unwrap_or_default(),
+                UiIntegerPropertyBindingSource::DonationTotalCents => {
+                    display_currency_cents(aggregate.amount)
+                }
+                UiIntegerPropertyBindingSource::DonationAverageCents => display_currency_cents(
+                    aggregate
+                        .amount
+                        .checked_scale((aggregate.count as f32).recip())
+                        .unwrap_or_default(),
+                ),
                 _ => continue,
             };
             value.set_if_neq(UiValue(next));

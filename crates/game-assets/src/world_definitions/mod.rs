@@ -27,6 +27,7 @@ use self::{
         discover_world_definition_catalogue_sources,
         index_loaded_world_definition_assets_by_identifier_and_singleton_kind,
         saved_world_economy_asset::{SavedWorldEconomyAsset, SavedWorldEconomyAssetLoader},
+        world_definition_sources_changed,
     },
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
@@ -49,17 +50,16 @@ impl Plugin for WorldDefinitionAssetPlugin {
             .init_asset_loader::<WorldDefinitionAssetLoader>()
             .init_resource::<WorldDefinitions>()
             .add_message::<ArchiveOverlayChanged>()
+            .add_message::<world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionSourcesPublished>()
             .add_systems(
                 PreUpdate,
                 (
                     discover_world_definition_catalogue_sources.run_if(
                         condition_changed_to(
                             true,
-                            in_state(GamePhase::Loading)
-                                .or_else(in_state(GamePhase::InGame))
-                                .or_else(any_with_component::<WorldAssetPreparation>),
+                            world_definitions_requested,
                         )
-                        .or_else(on_message::<ArchiveOverlayChanged>),
+                        .or_eager(world_definition_sources_changed.and_then(world_definitions_requested)),
                     ),
                     index_loaded_world_definition_assets_by_identifier_and_singleton_kind
                         .in_set(WorldDefinitionPublicationSet)
@@ -83,4 +83,11 @@ impl Plugin for WorldDefinitionAssetPlugin {
                     .after(bevy::asset::AssetTrackingSystems),
             );
     }
+}
+
+fn world_definitions_requested(
+    state: Res<State<GamePhase>>,
+    preparations: Query<(), With<WorldAssetPreparation>>,
+) -> bool {
+    matches!(state.get(), GamePhase::Loading | GamePhase::InGame) || !preparations.is_empty()
 }

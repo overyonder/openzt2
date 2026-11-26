@@ -16,6 +16,7 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::aquatic_habitats::TankDefinition;
 use openzt2_game_data::world_definitions::catalogue_and_progression::catalogue_definition_types::{
     CatalogueCategory, CatalogueEntry, CatalogueFilterFlags,
@@ -27,7 +28,6 @@ use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectAffordanceFlags, WorldObjectDefinition, WorldObjectInformationViewClass,
     WorldObjectKind, WorldObjectPropertyFlags,
 };
-use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
 fn authored_fence_traversal_blocking_flags(
@@ -257,30 +257,26 @@ pub(super) fn bind_authored_fence(
         // Each wall segment type closes a tank. It authors no depth bound or
         // filtration: depth follows the tank manager and fence mode policies,
         // and filtration comes from placed filter objects.
-        let (wall_materials, wall_materials_low) =
-            super::aquatic_habitat_source_lowering::tank_wall_materials(
-                tank_segment.and_then(|segment| segment.attribute_named_any(&["opaqueMat"])),
-            );
+        let material_attribute = |attributes: &[&str]| {
+            tank_segment.and_then(|segment| segment.attribute_named_any(attributes))
+        };
+        let materials = super::aquatic_habitat_source_lowering::tank_materials(
+            output,
+            material_attribute(&["floorMaterial", "floor"]),
+            material_attribute(&["waterMaterial", "water"]),
+            material_attribute(&["opaqueMat"]),
+        );
         output.document.tanks.push(TankDefinition {
             id: object_id,
             wall: object_id,
-            floor_material: AssetId::from_virtual_path(
-                &super::aquatic_habitat_source_lowering::tank_floor_material_path(
-                    tank_segment.and_then(|segment| {
-                        segment.attribute_named_any(&["floorMaterial", "floor"])
-                    }),
-                ),
-            ),
-            water_material: super::aquatic_habitat_source_lowering::tank_water_material_id(
-                tank_segment
-                    .and_then(|segment| segment.attribute_named_any(&["waterMaterial", "water"])),
-            ),
+            floor_material: materials.floor,
+            water_material: materials.water,
             min_depth_cm: 0,
             max_depth_cm: u16::MAX,
             capacity_litres_per_cell: 0,
             filtration_per_day: 0,
-            wall_materials,
-            wall_materials_low,
+            wall_materials: materials.wall,
+            wall_materials_low: materials.wall_low,
         });
     }
     let (presentation_caustic_policies, surface_effect_strength, traversal_animation_manifests) =

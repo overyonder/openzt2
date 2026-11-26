@@ -10,6 +10,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+openzt2_animals.workspace = true
 openzt2_game_assets.workspace = true
 openzt2_game_data.workspace = true
 openzt2_interface_state.workspace = true

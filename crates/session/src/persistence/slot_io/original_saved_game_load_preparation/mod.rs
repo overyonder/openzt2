@@ -27,7 +27,10 @@ use openzt2_interface_state::persistence::{
 use openzt2_zoo_state::economy::world_economy_configuration::WorldEconomyConfiguration;
 
 #[derive(Component)]
-#[require(PersistenceSlotOperation)]
+#[require(
+    PersistenceSlotOperation,
+    openzt2_interface_state::persistence::save_slot_types::PersistenceBusy
+)]
 pub(in crate::persistence) struct OriginalSavedGameLoadPreparation {
     source: AssetId,
     profile: AssetId,

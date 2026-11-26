@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 use openzt2_game_data::behavior::action::animation::{
-    BehaviorAnimationClipAction, BehaviorAnimationPlaybackSpeed,
+    BehaviorAnimationPlaybackSpeed,
 };
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::{
     AnimationClipPlaybackRequestStarted, AnimationReturnRouteOutcome, AnimationReturnRouteRequest,
@@ -94,7 +94,6 @@ pub(super) fn start_current_behavior_animation_clip_actions(
         if !instruction.is_current(&behavior_task) {
             continue;
         }
-        let switched_clip;
         let animation = if let Some(clip) = running_action {
             &clip.0
         } else {
@@ -125,35 +124,24 @@ pub(super) fn start_current_behavior_animation_clip_actions(
                 );
                 continue;
             };
-            switched_clip = BehaviorAnimationClipAction {
-                animation_clip_asset_key: key.clone(),
-                looping: false,
-                physical_object: None,
-                play_duration_seconds: None,
-                interrupts_current_animation: false,
-                interruptible: false,
-                ground_fit: None,
-                blend_duration_seconds: None,
-                playback_speed: None,
-            };
-            &switched_clip
+            key
         };
         // A play time repeats the clip until it elapses.
         let play_until_tick = match animation.play_duration_seconds {
             None => None,
             Some(seconds) => {
-                let Some(fixed_hz) = definitions
+                let Some(step) = definitions
                     .as_ref()
                     .zip(definition_assets.as_ref())
                     .and_then(|(definitions, assets)| definitions.get(assets))
-                    .map(|definitions| definitions.timing().fixed_hz)
+                    .and_then(|definitions| definitions.simulation_timestep())
                 else {
                     super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
                         actor, &mut commands,
                     );
                     continue;
                 };
-                let ticks = (f64::from(seconds) * f64::from(fixed_hz)).ceil();
+                let ticks = (f64::from(seconds) / step.as_secs_f64()).ceil();
                 // Lowering accepts only finite, non-negative play times.
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let ticks = ticks as u64;

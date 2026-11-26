@@ -300,6 +300,12 @@ pub struct AuthoredWorldObjectRuntime {
     pub morph_targets: Vec<(AssetId, AssetId)>,
     #[serde(default)]
     pub numeric_behavior_properties: Vec<(AssetId, f32)>,
+    #[serde(default)]
+    pub string_behavior_properties: Vec<(AssetId, String)>,
+    #[serde(default)]
+    pub boolean_behavior_properties: Vec<(AssetId, bool)>,
+    #[serde(default)]
+    pub environment_map_swap: Option<WorldObjectEnvironmentMapSwap>,
     pub egg: Option<WorldObjectEggDefinition>,
     pub fossil_assembly_surface: bool,
     pub whap_physics: Option<WorldObjectWhapPhysics>,
@@ -307,6 +313,12 @@ pub struct AuthoredWorldObjectRuntime {
     pub fall_animation_clips: WorldObjectFallAnimationClips,
     #[serde(default)]
     pub prop_rotation_offset_radians: f32,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
+pub struct WorldObjectEnvironmentMapSwap {
+    pub effect: AssetId,
+    pub texture_parameter: String,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize, PartialEq, Eq, serde::Serialize)]

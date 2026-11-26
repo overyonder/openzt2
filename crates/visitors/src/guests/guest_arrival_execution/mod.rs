@@ -1,10 +1,6 @@
-use super::guest_arrival_calculations::choose_guest_rarity;
+use super::guest_arrival_calculations::{arrival_roll_passes, displaced_from_entrance_gate, generation_delay_ns, guest_population_cap, guest_spawn_probability};
 use super::guest_definition_queries::find_guest_definition;
-use super::guest_arrival_calculations::generation_delay_ticks;
-use super::guest_arrival_calculations::guest_arrival_position;
 use super::guest_definition_queries::guest_need_rows;
-use super::guest_arrival_calculations::guest_spawn_probability;
-use super::guest_arrival_calculations::random_unit;
 use bevy::ecs::system::SystemParam;
 use super::guest_arrival_population::ArrivalPopulation;
 use super::guest_need_execution::GuestArchetypeTables;
@@ -16,16 +12,9 @@ use openzt2_game_assets::localization::{
 };
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_zoo_state::{
-    animal_health::types::Dead,
-    animal_lifecycle::types::Animal,
-    habitat::habitat_types::HabitatMember,
-    topology::topology_graph_types::PathTile,
-};
-use openzt2_world_state::world_spawn::world_entity_crating::UncratedWorldEntity;
-use super::guest_destination_and_viewing_execution::ViewingGroundSlots;
+use super::guest_viewing_area_sensor::ViewingAreaSensors;
+use openzt2_world_state::simulation_time::simulation_control_types::SimulationPaused;
 use openzt2_zoo_state::economy::facility_economy_types::Wallet;
-use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
 use openzt2_zoo_state::economy::guest_admission_types::ZooAdmissionsOpen;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
@@ -39,7 +28,7 @@ use openzt2_zoo_state::progression::fame_types::Fame;
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_world_state::simulation_time::deterministic_random_stream::RngDomain;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_world_state::simulation_time::{native_visual_random_stream::NativeVisualRandomStream, simulation_clock_types::ZooClock};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::{PersistentIdAllocator, PersistentIdError};
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
@@ -53,7 +42,7 @@ use super::guest_simulation_types::Guest;
 use super::guest_simulation_types::GuestAmusement;
 use super::guest_simulation_types::GuestArchetype;
 use super::guest_simulation_types::GuestArrivalFailed;
-use super::guest_simulation_types::GuestArrivalFailure;
+use super::guest_simulation_types::{GuestArrivalFailure, GuestReachedEntrance};
 use super::guest_simulation_types::GuestArrivalState;
 use super::guest_simulation_types::GuestDeparturePoints;
 use super::guest_simulation_types::GuestDessert;
@@ -79,7 +68,10 @@ pub(super) fn initialize_guest_arrivals(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     seed: Single<&ZooSeed>,
-    roots: Query<(Entity, &WorldRoot), (With<WorldLoadCompleted>, Without<GuestArrivalState>)>,
+    roots: Query<
+        (Entity, &WorldRoot, Has<GuestArrivalState>),
+        (With<WorldLoadCompleted>, Without<GuestArrivalSchedule>),
+    >,
     mut commands: Commands,
     mut failed: MessageWriter<GuestArrivalFailed>,
 ) {
@@ -89,11 +81,21 @@ pub(super) fn initialize_guest_arrivals(
     if definitions.has_pending_assets() {
         return;
     }
-    for (root, world) in &roots {
-        if definitions.guest_generation().is_none() {
+    for (root, world, has_arrival_state) in &roots {
+        let Some(policy) = definitions.guest_generation() else {
             failed.write(GuestArrivalFailed {
                 reason: GuestArrivalFailure::MissingPolicy,
             });
+            continue;
+        };
+        commands.entity(root).insert(GuestArrivalSchedule {
+            probability_per_thousand: (policy.base_spawn_probability * 1000.0) as i32,
+            population_cap: policy.maximum_guests_base,
+            viewability_poll_at: 0,
+            stagger_column: 0,
+            stagger_row: 0,
+        });
+        if has_arrival_state {
             continue;
         }
         let stable = u64::from_le_bytes(world.scenario.0[..8].try_into().unwrap()).max(1);
@@ -104,44 +106,92 @@ pub(super) fn initialize_guest_arrivals(
     }
 }
 
-pub(super) fn report_changed_guest_arrival_failures(
+#[derive(Component)]
+pub(super) struct GuestArrivalSchedule {
+    probability_per_thousand: i32,
+    population_cap: u32,
+    viewability_poll_at: u64,
+    stagger_column: u32,
+    stagger_row: u32,
+}
+
+impl GuestArrivalSchedule {
+    fn advance_stagger(&mut self, width: f32) -> Vec2 {
+        if self.stagger_column as f32 >= width {
+            self.stagger_column = 0;
+            self.stagger_row = self.stagger_row.wrapping_add(1);
+        }
+        self.stagger_column += 1;
+        Vec2::new(self.stagger_column as f32, self.stagger_row as f32)
+    }
+}
+
+#[derive(Component, Default)]
+pub(super) struct GuestArrivalDiagnostics(Option<GuestArrivalFailure>);
+
+pub(super) fn project_guest_arrival_failures(
     mut failures: MessageReader<GuestArrivalFailed>,
-    mut previous_failure: Local<Option<GuestArrivalFailure>>,
+    mut root: Single<&mut GuestArrivalDiagnostics, With<WorldRoot>>,
 ) {
-    for failure in failures.read() {
-        if previous_failure.as_ref() != Some(&failure.reason) {
-            warn!(reason = ?failure.reason, "guest arrival is blocked");
-            *previous_failure = Some(failure.reason);
+    if let Some(failure) = failures.read().last() {
+        root.reborrow()
+            .map_unchanged(|status| &mut status.0)
+            .set_if_neq(Some(failure.reason));
+    }
+}
+
+pub(super) fn report_changed_guest_arrival_failures(
+    roots: Query<&GuestArrivalDiagnostics, Changed<GuestArrivalDiagnostics>>,
+) {
+    for diagnostics in &roots {
+        if let Some(reason) = diagnostics.0 {
+            warn!(?reason, "guest arrival is blocked");
         }
     }
+}
+
+#[derive(Message)]
+pub struct GuestViewabilityRefreshRequested {
+    pub root: Entity,
 }
 
 pub(super) fn guest_arrivals_are_due(
     clock: Single<&ZooClock>,
     roots: Query<
-        &GuestArrivalState,
         (
-            With<WorldRoot>,
-            With<WorldLoadCompleted>,
-            With<GuestFavouriteAnimalTrend>,
+            &GuestArrivalState,
+            &GuestArrivalSchedule,
+            Option<&SimulationPaused>,
         ),
+        (With<WorldRoot>, With<WorldLoadCompleted>),
     >,
+    active: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
     mut forced: MessageReader<RequestGuestArrivals>,
 ) -> bool {
-    let forced = forced.read().count() != 0;
-    roots
-        .single()
-        .is_ok_and(|state| forced || clock.tick >= state.next_tick)
+    let requested = forced.read().count() != 0;
+    let enabled = active
+        .get(&assets)
+        .and_then(|definitions| definitions.guest_generation())
+        .is_some_and(|policy| policy.enabled);
+    roots.single().is_ok_and(|(state, schedule, paused)| {
+        requested
+            || (enabled
+                && paused.is_none_or(|paused| !paused.0)
+                && (clock.tick >= state.next_tick || clock.tick >= schedule.viewability_poll_at))
+    })
 }
 
 #[derive(SystemParam)]
 pub(crate) struct GuestArrivalParams<'w, 's> {
     clock: Single<'w, 's, &'static ZooClock>,
-    admission: Single<'w, 's, &'static AdmissionPrice>,
     admissions_open: Single<'w, 's, &'static ZooAdmissionsOpen>,
     definitions: Res<'w, Assets<WorldDefinitionAsset>>,
     active_definitions: Res<'w, WorldDefinitions>,
     archetypes: Res<'w, GuestArchetypeTables>,
+    random: ResMut<'w, NativeVisualRandomStream>,
+    localization: Option<Res<'w, LocalizationPrecedenceIndex>>,
+    localization_assets: Option<Res<'w, Assets<LocalizationAsset>>>,
     ids: Query<'w, 's, &'static mut PersistentIdAllocator>,
     roots: Query<
         'w,
@@ -149,8 +199,9 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
         (
             Entity,
             &'static mut GuestArrivalState,
-            &'static mut GuestFavouriteAnimalTrend,
-            &'static Fame,
+            &'static mut GuestArrivalSchedule,
+            Option<&'static mut GuestFavouriteAnimalTrend>,
+            Option<&'static Fame>,
             &'static ArrivalPopulation,
         ),
         (With<WorldRoot>, With<WorldLoadCompleted>),
@@ -166,33 +217,12 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
         ),
     >,
     grid: Single<'w, 's, &'static SpatialGrid>,
-    viewable_animals: Query<
-        'w,
-        's,
-        (
-            &'static GlobalTransform,
-            &'static Visibility,
-            &'static WorldMember,
-        ),
-        (
-            With<Animal>,
-            With<HabitatMember>,
-            Without<Dead>,
-            UncratedWorldEntity,
-        ),
-    >,
-    paths: Query<'w, 's, (&'static GlobalTransform, &'static WorldMember), With<PathTile>>,
-    viewing_slots: Query<
-        'w,
-        's,
-        (
-            &'static ViewingGroundSlots,
-            &'static WorldMember,
-            &'static Visibility,
-        ),
-    >,
+    viewing: ViewingAreaSensors<'w, 's>,
+    pause: Query<'w, 's, &'static SimulationPaused>,
+    viewing_refresh: MessageWriter<'w, GuestViewabilityRefreshRequested>,
     commands: Commands<'w, 's>,
     navigate: MessageWriter<'w, NavigateTo>,
+    reached_entrance: MessageWriter<'w, GuestReachedEntrance>,
     failed: MessageWriter<'w, GuestArrivalFailed>,
     requested_arrivals: MessageReader<'w, 's, RequestGuestArrivals>,
 }
@@ -200,30 +230,40 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
 pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
     let GuestArrivalParams {
         clock,
-        admission,
         admissions_open,
         definitions,
         active_definitions,
         archetypes,
+        mut random,
+        localization,
+        localization_assets,
         mut ids,
         mut roots,
         entrances,
         grid,
-        viewable_animals,
-        paths,
-        viewing_slots,
+        viewing,
+        pause,
+        mut viewing_refresh,
         mut commands,
         mut navigate,
+        mut reached_entrance,
         mut failed,
         mut requested_arrivals,
     } = params;
-    let Ok((root, mut state, mut favourite_trend, fame, counts)) = roots.single_mut() else {
+    let Ok((root, mut state, mut schedule, mut favourite_trend, fame, counts)) = roots.single_mut()
+    else {
         return;
     };
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let Some(current_fame_percent) = fame.current_percent else {
+    let (Some(policy), Some(timestep)) = (
+        definitions.guest_generation(),
+        definitions.simulation_timestep(),
+    ) else {
+        failed.write(GuestArrivalFailed {
+            reason: GuestArrivalFailure::MissingPolicy,
+        });
         return;
     };
     if definitions.has_pending_assets() {
@@ -232,100 +272,73 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
     let forced_count = requested_arrivals.read().fold(0_u32, |total, request| {
         total.saturating_add(u32::from(request.count))
     });
-    if !admissions_open.0 && forced_count == 0 {
-        return;
+    let automatic_on = policy.enabled && pause.get(root).map_or(true, |paused| !paused.0);
+    let worklist = viewing.worklists.get(root).ok();
+    let viewable =
+        worklist.is_some_and(|worklist| worklist.is_viewable(viewing.has_intersections(worklist)));
+    if automatic_on && clock.tick >= schedule.viewability_poll_at {
+        let ticks = 15_000_000_000_u128.div_ceil(timestep.as_nanos());
+        schedule.viewability_poll_at = clock
+            .tick
+            .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX));
+        if !viewable && worklist.is_some_and(|worklist| worklist.has_viewable_candidates) {
+            viewing_refresh.write(GuestViewabilityRefreshRequested { root });
+        }
     }
-    let scheduled_due = clock.tick >= state.next_tick;
+    let scheduled_due = automatic_on && clock.tick >= state.next_tick;
+    let automatic_attempt =
+        scheduled_due && arrival_roll_passes(random.next_u15(), schedule.probability_per_thousand);
     if !scheduled_due && forced_count == 0 {
         return;
     }
-    let Some(policy) = definitions.guest_generation() else {
-        failed.write(GuestArrivalFailed {
-            reason: GuestArrivalFailure::MissingPolicy,
-        });
-        return;
-    };
-    let Some(favourite_policy) = definitions.guest_favourite_animal_trend() else {
-        failed.write(GuestArrivalFailed {
-            reason: GuestArrivalFailure::MissingPolicy,
-        });
-        return;
-    };
-    let Some((_, member, entrance, gate)) = entrances
+    let anchor = entrances
         .iter()
         .filter(|(_, member, _, _)| member.root == root)
         .min_by_key(|(id, _, _, _)| id.0)
-    else {
-        failed.write(GuestArrivalFailed {
-            reason: GuestArrivalFailure::MissingEntrance,
-        });
-        return;
-    };
-    if grid.width == 0 || grid.height == 0 {
-        return;
-    }
-    if scheduled_due && forced_count == 0 && !policy.enabled {
-        state.next_tick = clock.tick.saturating_add(1);
-        return;
-    }
-    let interval = generation_delay_ticks(definitions, policy, &mut state.rng);
-    if scheduled_due {
-        state.next_tick = clock.tick.saturating_add(interval.max(1));
-    }
-    let population = counts.guests;
-    let cap = policy.maximum_guests_at_fame(fame.half_stars);
-    let scheduled_count = if scheduled_due && policy.enabled && population < cap && {
-        let probability =
-            guest_spawn_probability(policy, fame.half_stars, admission.adult.0, counts.species());
-        random_unit(&mut state.rng) < probability
-    } {
-        1
-    } else {
-        0
-    };
-    let can_view_animal = (forced_count != 0 || scheduled_count != 0)
-        && definitions.guest_viewing().is_some_and(|viewing| {
-            let range_squared = viewing.ground_range_m * viewing.ground_range_m;
-            viewable_animals.iter().any(|(animal, visibility, member)| {
-                if member.root != root || *visibility == Visibility::Hidden {
-                    return false;
-                }
-                let within_viewing_range = |position: Vec3| {
-                    animal.translation().xz().distance_squared(position.xz()) <= range_squared
-                };
-                paths.iter().any(|(path, member)| {
-                    member.root == root && within_viewing_range(path.translation())
-                }) || viewing_slots.iter().any(|(slots, member, visibility)| {
-                    member.root == root
-                        && *visibility != Visibility::Hidden
-                        && slots.positions.iter().copied().any(within_viewing_range)
-                })
-            })
-        });
-    let count = if can_view_animal {
-        forced_count.saturating_add(scheduled_count)
-    } else {
-        0
-    };
-    if scheduled_due || forced_count != 0 {
-        debug!(
-            tick = clock.tick,
-            next_tick = state.next_tick,
-            forced_count,
-            scheduled_count,
-            population,
-            cap,
-            "guest arrival check"
-        );
-    }
+        .map(|(_, _, entrance, gate)| (entrance, gate));
+    let localization = localization
+        .as_deref()
+        .zip(localization_assets.as_deref())
+        .and_then(|(index, assets)| index.borrow_loaded_localization_view(assets));
+    let half_stars = fame.map_or(0, |fame| fame.half_stars);
 
-    for _ in 0..count {
-        let rarity = choose_guest_rarity(policy.rarity_thresholds, &mut state.rng);
+    let attempts = automatic_attempt
+        .then_some(Some(true))
+        .into_iter()
+        .chain(scheduled_due.then_some(None))
+        .chain((0..forced_count).map(|_| Some(false)));
+    for attempt in attempts {
+        let Some(scheduled) = attempt else {
+            schedule.probability_per_thousand = guest_spawn_probability(policy, half_stars);
+            schedule.population_cap = guest_population_cap(policy, half_stars);
+            let delay = generation_delay_ns(policy.delay_ns, || random.next_u15());
+            let ticks = u128::from(delay).div_ceil(timestep.as_nanos());
+            state.next_tick = clock
+                .tick
+                .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX));
+            continue;
+        };
+        let stagger = if policy.stagger {
+            schedule.advance_stagger(policy.stagger_square_m)
+        } else {
+            Vec2::ZERO
+        };
+        if !admissions_open.0
+            || grid.width == 0
+            || grid.height == 0
+            || !viewable
+            || (scheduled && counts.guests >= schedule.population_cap)
+        {
+            continue;
+        }
+
         let Some(definition) = archetypes
-            .choose_archetype(rarity, &mut state.rng)
+            .choose_archetype(policy.use_test_type, policy.rarity_thresholds, || {
+                random.next_u15()
+            })
             .and_then(|id| definitions.find_guest(id))
         else {
-            break;
+            continue;
         };
         let guest_id = definition.id;
         if guest_need_rows(definition).is_none() {
@@ -362,43 +375,68 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
                 failed.write(GuestArrivalFailed {
                     reason: GuestArrivalFailure::PersistentId(reason),
                 });
-                break;
+                continue;
             }
         };
-        let cash_low = definition.starting_cash_cents[0];
-        let cash_high = definition.starting_cash_cents[1];
-        let cash_width = i64::from(cash_high) - i64::from(cash_low) + 1;
-        let cash = i64::from(cash_low) + i64::from(state.rng.next_u32()) % cash_width.max(1);
-        let position =
-            guest_arrival_position(policy, entrance.arrival, gate.rotation(), &mut state.rng);
-        let favourite = super::guest_favourite_animal_trend_execution::choose_favourite_animal_for_spawned_guest(
-            favourite_policy,
-            &mut favourite_trend,
-            definitions.animal_adoption_species_eligibility(),
-            current_fame_percent,
-            &mut state.rng,
-        );
-        debug!(tick = clock.tick, guest = ?guest_id, ?position, entrance = ?entrance.inside,
-            distance_m = position.xz().distance(entrance.inside.xz()),
-            "guest spawned for arrival at its displaced entrance point");
+        let name = localization.as_ref().and_then(|localization| {
+            let pool = localization.find_person_name_pool(definition.name_pool)?;
+            let mut draw_name_index =
+                |count: usize| (count > 0).then(|| (usize::from(random.next_u15()) % count) as u32);
+            let first = draw_name_index(pool.first_names.len());
+            let last = draw_name_index(pool.last_names.len());
+            localization
+                .render_person_name(definition.name_pool, first, last)
+                .filter(|name| !name.is_empty())
+                .map(Name::new)
+        });
+        let (position, rotation) = if policy.spawn_at_entrance {
+            let Some((entrance, gate)) = anchor else {
+                failed.write(GuestArrivalFailed {
+                    reason: GuestArrivalFailure::MissingEntrance,
+                });
+                continue;
+            };
+            let offset = policy.arrival_offset_m.map(|value| -value);
+            (
+                displaced_from_entrance_gate(entrance.arrival, gate.rotation(), offset),
+                gate.rotation() * Quat::from_rotation_y(std::f32::consts::PI),
+            )
+        } else {
+            let [x, z] = policy.default_emitter_m;
+            (
+                Vec3::new(x - stagger.x, 0.0, -z + stagger.y),
+                Quat::IDENTITY,
+            )
+        };
+        let [cash_low, cash_high] = definition.starting_cash_cents.map(i64::from);
+        let cash = cash_low + i64::from(random.next_u15()) % (cash_high - cash_low + 1).max(1);
+        let favourite = definitions.guest_favourite_animal_trend()
+            .zip(favourite_trend.as_deref_mut())
+            .and_then(|(policy, trend)| super::guest_favourite_animal_trend_execution::choose_favourite_animal_for_spawned_guest(
+                policy,
+                trend,
+                definitions.animal_adoption_species_eligibility(),
+                fame.and_then(|fame| fame.current_percent).unwrap_or(0.0),
+                || random.next_u15(),
+            ));
         let mut generation = NavigationRequestGeneration::default();
         let request_id = generation.advance();
         let entity = commands
             .spawn((
                 Guest,
-                GuestNavigationRequest(Some(request_id)),
+                GuestNavigationRequest(policy.spawn_at_entrance.then_some(request_id)),
                 generation,
                 GuestArchetype(guest_id),
                 DefinitionId(definition.object),
                 GuestFavouriteAnimal(favourite),
                 id,
-                *member,
-                Wallet(Money(cash)),
+                WorldMember { root },
+                Wallet(Money::from_cents(cash)),
                 Inspectable {
                     definition: guest_id,
                 },
                 PrefabPresentation::new(prefab),
-                Transform::from_translation(position),
+                Transform::from_translation(position).with_rotation(rotation),
                 Visibility::Inherited,
                 NavAgent {
                     radius_m: f32::from(definition.radius_cm) * 0.01,
@@ -408,21 +446,28 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
                 },
             ))
             .id();
-        if grid.cell_of(position.xz()).is_none() {
-            commands
-                .entity(entity)
-                .insert(EntranceNavigationConnection {
-                    request_id,
-                    gate: entrance.arrival,
-                    inbound: true,
-                });
+        if let Some(name) = name {
+            commands.entity(entity).insert(name);
         }
-        navigate.write(NavigateTo {
-            entity,
-            request_id,
-            destination: entrance.inside,
-            arrival_radius_m: f32::from(definition.radius_cm) * 0.01,
-        });
+        if let Some((entrance, _)) = anchor.filter(|_| policy.spawn_at_entrance) {
+            if grid.cell_of(position.xz()).is_none() {
+                commands
+                    .entity(entity)
+                    .insert(EntranceNavigationConnection {
+                        request_id,
+                        gate: entrance.arrival,
+                        inbound: true,
+                    });
+            }
+            navigate.write(NavigateTo {
+                entity,
+                request_id,
+                destination: entrance.inside,
+                arrival_radius_m: f32::from(definition.radius_cm) * 0.01,
+            });
+        } else {
+            reached_entrance.write(GuestReachedEntrance { guest: entity });
+        }
     }
 }
 

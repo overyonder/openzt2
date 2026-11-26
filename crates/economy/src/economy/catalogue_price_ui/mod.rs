@@ -63,7 +63,7 @@ pub(super) fn project_authored_catalogue_entry_prices_into_dynamic_ui_rows(
         if let Some(localization) = localization {
             let mut formatted_amount = String::new();
             let _ = localization.write_localized_currency_amount(
-                price.0,
+                super::display_currency_cents(price),
                 !omit_fractional_currency_cents,
                 &mut formatted_amount,
             );
@@ -91,7 +91,7 @@ pub(super) fn project_authored_catalogue_entry_prices_into_dynamic_ui_rows(
             continue;
         }
         value.0 = find_authored_object_or_placeable_price(world_definitions, definition)
-            .map(|price| price.0)
+            .map(super::display_currency_cents)
             .unwrap_or_default();
     }
 }

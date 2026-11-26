@@ -37,6 +37,8 @@ pub enum ShowMixerSlotChoice {
     Trick { animal: Entity, trick: AssetId },
     Wait { animal: Entity, ticks: u32 },
     Remove,
+    RemovePerformer { animal: Entity },
+    ReplacePerformer { previous: Entity, animal: Entity },
 }
 
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +120,77 @@ pub(super) fn apply_show_mixer_slot_edits(
                 })
                 .collect()
         });
+        if let ShowMixerSlotChoice::RemovePerformer { animal } = edit.choice {
+            pending.retain(|&(slot, performer, _)| {
+                if performer != Some(animal) {
+                    return true;
+                }
+                changes.insert(slot, SlotEdit::Remove);
+                false
+            });
+            continue;
+        }
+        if let ShowMixerSlotChoice::ReplacePerformer { previous, animal } = edit.choice {
+            let Ok((owner, species, training)) = performers.get(animal) else {
+                continue;
+            };
+            if owner.root != world.root
+                || pending
+                    .iter()
+                    .any(|&(_, performer, _)| performer == Some(animal))
+            {
+                continue;
+            }
+            let replacements: Option<Vec<_>> = pending
+                .iter()
+                .filter_map(|&(slot, performer, _)| (performer == Some(previous)).then_some(slot))
+                .map(|slot| {
+                    let next = match changes.get(&slot) {
+                        Some(SlotEdit::Trick { performance, .. }) => SlotEdit::Trick {
+                            animal,
+                            performance: *performance,
+                        },
+                        Some(SlotEdit::Wait { wait, .. }) => SlotEdit::Wait {
+                            animal,
+                            wait: *wait,
+                        },
+                        Some(SlotEdit::Remove) => return None,
+                        None => {
+                            let (_, _, performance, wait, _) = slots.get(slot).ok()?;
+                            if let Some(performance) = performance {
+                                SlotEdit::Trick {
+                                    animal,
+                                    performance: *performance,
+                                }
+                            } else {
+                                SlotEdit::Wait {
+                                    animal,
+                                    wait: *wait?,
+                                }
+                            }
+                        }
+                    };
+                    if let SlotEdit::Trick { performance, .. } = next {
+                        let trick = definitions.find_trick(performance.trick)?;
+                        if !trick.species.contains(&species.species)
+                            || performance_level(trick, training).is_none()
+                        {
+                            return None;
+                        }
+                    }
+                    Some((slot, next))
+                })
+                .collect();
+            if let Some(replacements) = replacements {
+                changes.extend(replacements);
+                for (_, performer, _) in pending.iter_mut() {
+                    if *performer == Some(previous) {
+                        *performer = Some(animal);
+                    }
+                }
+            }
+            continue;
+        }
         if edit
             .slot
             .is_some_and(|slot| pending.iter().all(|&(candidate, ..)| candidate != slot))
@@ -197,6 +270,8 @@ pub(super) fn apply_show_mixer_slot_edits(
                 }
             }
             ShowMixerSlotChoice::Remove => SlotEdit::Remove,
+            ShowMixerSlotChoice::RemovePerformer { .. }
+            | ShowMixerSlotChoice::ReplacePerformer { .. } => continue,
         };
         let Some(slot) = edit.slot.or_else(|| {
             let animal = match change {

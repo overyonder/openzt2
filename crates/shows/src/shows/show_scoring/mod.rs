@@ -77,9 +77,9 @@ pub(super) fn grow_trick_popularity(
 }
 
 #[derive(Component)]
-pub(super) struct ShowScoreSamples {
-    predicted: EntityHashMap<f32>,
-    actual: EntityHashMap<f32>,
+pub struct ShowScoreSamples {
+    pub predicted: EntityHashMap<f32>,
+    pub actual: EntityHashMap<f32>,
 }
 
 pub(super) fn predict_performance_scores(
@@ -101,7 +101,7 @@ pub(super) fn predict_performance_scores(
         return;
     };
     for (entity, member, order, run) in &runs {
-        if run.phase != ShowPhase::Preshow {
+        if !matches!(run.phase, ShowPhase::Preshow | ShowPhase::Conducting) {
             continue;
         }
         let predicted = order

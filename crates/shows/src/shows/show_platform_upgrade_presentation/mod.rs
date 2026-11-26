@@ -119,7 +119,7 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
                                 && purchase_cost_cents.is_some_and(|purchase_cost_cents| {
                                     budget.as_ref().is_some_and(|(cash, policy)| {
                                         policy.as_ref().is_some_and(|policy| policy.0)
-                                            || cash.0 .0 >= purchase_cost_cents
+                                            || cash.0 >= openzt2_zoo_state::economy::money_types::Money::from_cents(purchase_cost_cents)
                                     })
                                 }))
                     });

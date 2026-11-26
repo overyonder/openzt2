@@ -11,11 +11,11 @@ use crate::source_document::resolved_source_record_index::BindError;
 use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::species::LifeStage;
 use openzt2_game_data::species::Sex;
 use openzt2_game_data::species::SpeciesVariant;
 use openzt2_game_data::species::SpeciesVariantFlags;
-use openzt2_game_data::AssetId;
 
 pub(super) fn lower_species_root_actor_to_fallback_canonical_variant(
     species: &RecordView<'_, '_>,
@@ -30,7 +30,8 @@ pub(super) fn lower_species_root_actor_to_fallback_canonical_variant(
     let actorfile = actor
         .attribute_named_any(&["actorfile"])
         .ok_or_else(|| BindError::record(species, "shared animal actor has no actorfile"))?;
-    let actor_path = normalize_authored_actor_manifest_path(actorfile);
+    let actor_path = actor_manifest_resolution_index
+        .scoped_actor_manifest_key(&species.source_path(), actorfile);
     let model = actor_manifest_resolution_index
         .native_model_source_path_for_normalized_actor_manifest_key(&actor_path)
         .map(str::to_owned)
@@ -135,8 +136,8 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
         Some(value) if !authored_optional_boolean_is_true(Some(value)) => LifeStage::Young,
         _ => LifeStage::Adult,
     };
-    let stage_record = ancestors
-        .iter()
+    let stage_record = std::iter::once(candidate)
+        .chain(ancestors.iter())
         .find(|record| record.descendant_named("weights").is_some())
         .copied()
         .unwrap_or(*candidate);
@@ -148,17 +149,20 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
                 record.source_document_element(),
                 "BFActorComponent",
             )
+            .map(|actor| (record, actor))
         });
-    let Some(actorfile) = actors
-        .clone()
-        .find_map(|actor| actor.attribute_named_any(&["actorfile"]))
-    else {
+    let Some((actor_owner, actorfile)) = actors.clone().find_map(|(record, actor)| {
+        actor
+            .attribute_named_any(&["actorfile"])
+            .map(|file| (record, file))
+    }) else {
         return Ok(None);
     };
     let scale = actors
-        .filter_map(|actor| actor.attribute_named_any(&["scale"]))
+        .filter_map(|(_, actor)| actor.attribute_named_any(&["scale"]))
         .next();
-    let actor_path = normalize_authored_actor_manifest_path(actorfile);
+    let actor_path = actor_manifest_resolution_index
+        .scoped_actor_manifest_key(&actor_owner.source_path(), actorfile);
     let model = actor_manifest_resolution_index
         .native_model_source_path_for_normalized_actor_manifest_key(&actor_path)
         .map(str::to_owned)
@@ -174,15 +178,16 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
             &stage_record,
             species,
         )?;
+    let base_probability = find_authored_base_species_variant_probability(&stage_record);
+    let variant_probability =
+        find_authored_species_variant_probability(&stage_record, candidate.key);
     let probability = if ["b_Super", "b_Old", "b_Sickly"]
         .into_iter()
         .any(|flag| authored_optional_boolean_is_true(effective(flag)))
     {
         0
     } else {
-        find_authored_numbered_species_variant_probability(&stage_record, candidate.key)
-            .or_else(|| find_authored_base_species_variant_probability(&stage_record))
-            .unwrap_or(100)
+        variant_probability.or(base_probability).unwrap_or(100)
     };
     Ok(Some(SpeciesVariant {
         need_points: lower_need_point_policy(candidate)?,
@@ -213,7 +218,7 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
         scale: [parse_positive_authored_scale_or_default(scale); 2],
         weight_kg: [0.0; 2],
         probability,
-        flags: if candidate.key.ends_with('2') {
+        flags: if variant_probability.zip(base_probability).is_some_and(|(variant, base)| variant < base) {
             SpeciesVariantFlags::RARE
         } else {
             SpeciesVariantFlags::DEFAULT
@@ -231,33 +236,22 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
     }))
 }
 
-fn find_authored_numbered_species_variant_probability(
-    stage: &RecordView<'_, '_>,
-    key: &str,
-) -> Option<u16> {
-    let extension = key
-        .chars()
-        .rev()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect::<String>();
-    (!extension.is_empty())
-        .then_some(extension)
-        .and_then(|extension| {
-            stage
-                .descendant_named("weights")?
-                .element_children()
-                .find_map(|row| {
-                    (source_document_names_are_semantically_equal(row.name.as_str(), "variant")
-                        && row
-                            .attribute_named_any(&["extension"])
-                            .is_some_and(|value| value.trim() == extension))
-                    .then(|| row.attribute_named_any(&["weight"])?.parse().ok())
-                    .flatten()
-                })
+fn find_authored_species_variant_probability(stage: &RecordView<'_, '_>, key: &str) -> Option<u16> {
+    stage
+        .descendant_named("weights")?
+        .element_children()
+        .filter(|row| source_document_names_are_semantically_equal(&row.name, "variant"))
+        .filter_map(|row| {
+            let extension =
+                canonicalize_source_document_record_key(row.attribute_named_any(&["extension"])?);
+            if extension.is_empty() || !key.ends_with(extension.as_str()) {
+                return None;
+            }
+            let weight = row.attribute_named_any(&["weight"])?.parse::<u16>().ok()?;
+            Some((extension.len(), weight))
         })
+        .max_by_key(|(length, _)| *length)
+        .map(|(_, weight)| weight)
 }
 
 fn find_authored_base_species_variant_probability(stage: &RecordView<'_, '_>) -> Option<u16> {
@@ -276,12 +270,4 @@ fn parse_positive_authored_scale_or_default(value: Option<&str>) -> f32 {
         .and_then(|value| value.parse().ok())
         .filter(|value: &f32| value.is_finite() && *value > 0.0)
         .unwrap_or(1.0)
-}
-
-fn normalize_authored_actor_manifest_path(value: &str) -> String {
-    value
-        .trim()
-        .replace('\\', "/")
-        .trim_start_matches('/')
-        .to_ascii_lowercase()
 }

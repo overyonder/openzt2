@@ -7,7 +7,9 @@ use openzt2_zoo_state::animal_behavior::interaction_container_membership::reques
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::prefab_source_asset_handle::PrefabSourceAssetHandle;
-use openzt2_world::world_spawn::prefab_world_instance_spawning::hydrate_loaded_scene_prefab_into_world_instance_root;
+use openzt2_world::world_spawn::prefab_world_instance_spawning::{
+    hydrate_loaded_scene_prefab_into_world_instance_root, PrefabWorldInstanceRootValues,
+};
 use openzt2_game_data::world_definitions::world_objects::WorldObjectDetachDestination;
 
 #[derive(Component, Default)]
@@ -108,7 +110,7 @@ pub(super) fn hydrate_detach_created_objects(
         (
             Entity,
             &mut PendingDetachCreatedObject,
-            &DefinitionId,
+            &mut DefinitionId,
             &WorldMember,
             &PersistentId,
             &GlobalTransform,
@@ -221,6 +223,11 @@ pub(super) fn hydrate_detach_created_objects(
             hydrate_loaded_scene_prefab_into_world_instance_root(
                 &mut commands,
                 pending_entity,
+                PrefabWorldInstanceRootValues {
+                    transform,
+                    visibility,
+                    definition: Some(definition),
+                },
                 prefab,
                 prefab_handle.clone(),
                 world.root,

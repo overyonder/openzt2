@@ -153,6 +153,34 @@ pub struct WorldScenariosView<'a> {
 }
 
 impl<'a> WorldScenariosView<'a> {
+    pub fn manager_for_path(
+        self,
+        path: &str,
+        archives: &crate::asset_source::AssetArchives,
+        server: &AssetServer,
+    ) -> Option<(
+        &'a WorldScenarioDocumentAsset,
+        &'a openzt2_game_data::world_scenario::ScenarioDefinitionRecord,
+    )> {
+        let source =
+            std::path::PathBuf::from(crate::source_document::path::AssetPath::new(path).key());
+        if let Some(winner) = archives.resolved_winning_entry(&source)
+            && winner.normalized_asset_path == source
+            && let Some(handle) = self
+                .owner
+                .sources
+                .get(&(winner.archive_priority_index, winner.zip_entry_ordinal))
+        {
+            let asset = self.assets.get(handle)?;
+            return Some((asset, asset.manager()?));
+        }
+        let path =
+            super::world_scenario_document_loading::scenario_manager_asset_path(archives, path);
+        let handle = server.get_handle::<WorldScenarioDocumentAsset>(path)?;
+        let asset = self.assets.get(&handle)?;
+        Some((asset, asset.manager()?))
+    }
+
     pub fn with_document(mut self, handle: &'a Handle<WorldScenarioDocumentAsset>) -> Option<Self> {
         let document = self.assets.get(handle)?;
         if self

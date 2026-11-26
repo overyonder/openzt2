@@ -1,6 +1,6 @@
 //! NetImmerse NIF graph, controller, light, effect, and LOD scene lowering.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use openzt2_game_data::{
     scene_prefab::{
@@ -28,6 +28,7 @@ use super::super::{
     netimmerse_bone_level_of_detail_selection::NetImmerseBoneLod,
     netimmerse_nif_source::{
         block_payload::NetImmerseNifBlockPayload, document_source_types::NetImmerseNifDocument,
+        scene_object_source_types::NetImmerseNiLight,
     },
 };
 use super::{
@@ -47,7 +48,6 @@ pub(in super::super) fn lower_netimmerse_scene_prefab(
     document: &NetImmerseNifDocument,
     bone_lod: &NetImmerseBoneLod,
     source: &str,
-    animation_manifest: Option<&str>,
 ) -> Result<ScenePrefabDocument> {
     let model_path = source.to_owned();
     let mut builder = ScenePrefabDocumentAssembler::new(&model_path);
@@ -100,14 +100,48 @@ pub(in super::super) fn lower_netimmerse_scene_prefab(
             },
         );
     }
-    if let Some(path) = animation_manifest {
-        builder.dependency(
-            AssetId::from_virtual_path(path),
-            path.to_owned(),
-            ScenePrefabAssetDependencyKind::Animation,
-        );
-    }
+    bind_light_targets(document, &mut builder);
     builder.finish()
+}
+
+fn bind_light_targets(
+    document: &NetImmerseNifDocument,
+    builder: &mut ScenePrefabDocumentAssembler,
+) {
+    let mut targets = BTreeMap::<u32, Vec<u32>>::new();
+    for block in document.blocks() {
+        let Some(row) = builder.netimmerse_entity(block.index as i32) else {
+            continue;
+        };
+        if let Some(light) = source_light(&block.payload) {
+            targets.entry(row).or_default().extend(
+                light
+                    .affected_node_refs
+                    .iter()
+                    .filter_map(|&target| builder.netimmerse_entity(target)),
+            );
+        }
+        let (_, effects) = block.payload.child_and_effect_refs();
+        for &effect in effects {
+            if let Some(light) = builder.netimmerse_entity(effect) {
+                targets.entry(light).or_default().push(row);
+            }
+        }
+    }
+    for rows in targets.values_mut() {
+        rows.sort_unstable();
+        rows.dedup();
+    }
+    builder.set_light_targets(&targets);
+}
+
+fn source_light(payload: &NetImmerseNifBlockPayload) -> Option<&NetImmerseNiLight> {
+    match payload {
+        NetImmerseNifBlockPayload::NiPointLight(light) => Some(&light.light),
+        NetImmerseNifBlockPayload::NiAmbientLight(light) => Some(&light.light),
+        NetImmerseNifBlockPayload::NiDirectionalLight(light) => Some(&light.light),
+        _ => None,
+    }
 }
 
 fn visit_netimmerse_scene_block(
@@ -317,7 +351,7 @@ fn visit_netimmerse_scene_block(
                 );
             }
         }
-        NetImmerseNifBlockPayload::NiPointLight(light) => builder.light(
+        NetImmerseNifBlockPayload::NiPointLight(light) if light.light.enabled => builder.light(
             entity,
             PrefabLight {
                 kind: PrefabLightKind::Point,
@@ -332,7 +366,7 @@ fn visit_netimmerse_scene_block(
                 ]),
             },
         ),
-        NetImmerseNifBlockPayload::NiAmbientLight(light) => builder.light(
+        NetImmerseNifBlockPayload::NiAmbientLight(light) if light.light.enabled => builder.light(
             entity,
             PrefabLight {
                 kind: PrefabLightKind::Ambient,
@@ -343,17 +377,18 @@ fn visit_netimmerse_scene_block(
                 attenuation: None,
             },
         ),
-        NetImmerseNifBlockPayload::NiDirectionalLight(light) => builder.light(
-            entity,
-            PrefabLight {
-                kind: PrefabLightKind::Directional,
-                color_srgb: light.light.diffuse,
-                intensity: light.light.dimmer.max(0.0),
-                range_m: 0.0,
-                affected_rows: None,
-                attenuation: None,
-            },
-        ),
+        NetImmerseNifBlockPayload::NiDirectionalLight(light) if light.light.enabled => builder
+            .light(
+                entity,
+                PrefabLight {
+                    kind: PrefabLightKind::Directional,
+                    color_srgb: light.light.diffuse,
+                    intensity: light.light.dimmer.max(0.0),
+                    range_m: 0.0,
+                    affected_rows: None,
+                    attenuation: None,
+                },
+            ),
         NetImmerseNifBlockPayload::NiParticles(_)
         | NetImmerseNifBlockPayload::NiParticleMeshes(_) => {
             let effect = AssetId::from_key(&format!(

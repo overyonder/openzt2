@@ -1,9 +1,12 @@
 use bevy::prelude::*;
 
 use crate::input::input_execution_types::DeviceControlAxes;
-use bevy::input::mouse::AccumulatedMouseScroll;
+use openzt2_interface_state::immersive_modes::immersive_mode_state_types::{
+    EquippedInteractionTool, ImmersiveCamera,
+};
 use openzt2_interface_state::input::input_types::ActionRequest;
 use openzt2_interface_state::input::input_types::GameAction;
+use openzt2_interface_state::ui::pointer_capture_types::WorldWheelInput;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 
 use super::super::camera_runtime_state_types::CameraMode;
@@ -17,14 +20,16 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiEdgeP
 pub(crate) fn project_camera_actions_into_camera_intent(
     mut actions: MessageReader<ActionRequest>,
     axes: Res<DeviceControlAxes>,
-    scroll: Res<AccumulatedMouseScroll>,
+    input: Res<openzt2_interface_state::input::input_types::ActiveInputDevice>,
+    mut scroll: MessageReader<WorldWheelInput>,
     tool: Res<ConstructionTool>,
     placement_policy: Res<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy>,
-    capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
     commands: openzt2_ui::authored_hotkey_keyboard_activation::AuthoredHeldCameraCommands,
+    immersive_modes: Query<(&ImmersiveCamera, &EquippedInteractionTool)>,
     edge_surfaces: Query<(&UiEdgePanSurface, &InheritedVisibility, &Node)>,
     mut cameras: Query<
         (
+            Entity,
             &mut CameraIntent,
             &CameraMode,
             &CameraTuning,
@@ -49,9 +54,14 @@ pub(crate) fn project_camera_actions_into_camera_intent(
         }
     }
 
-    let turn = (axes.look.x + digital_turn).clamp(-1.0, 1.0);
-    let zoom = (axes.zoom + digital_zoom).clamp(-1.0, 1.0);
-    for (mut intent, mode, tuning, mouse_look, photo_mode) in &mut cameras {
+    let wheel_events = scroll
+        .read()
+        .map(|event| event.notches.trunc())
+        .collect::<Vec<_>>();
+    let keyboard =
+        input.source == openzt2_interface_state::input::input_types::ActionSource::KeyboardMouse;
+    let zoom = (if keyboard { 0.0 } else { axes.zoom } + digital_zoom).clamp(-1.0, 1.0);
+    for (camera, mut intent, mode, tuning, mouse_look, photo_mode) in &mut cameras {
         let mut next = *intent;
         use openzt2_game_data::{ui_document::document::UiDocumentRole, AssetId};
         let held = commands
@@ -64,15 +74,26 @@ pub(crate) fn project_camera_actions_into_camera_intent(
         let active = |name| held.contains(&AssetId::from_key(name));
         next.photo_zoom_in_command = photo_mode && active("photozoomin");
         next.photo_zoom_out_command = photo_mode && active("photozoomout");
+        let mode_policy = immersive_modes
+            .iter()
+            .find_map(|(owner, tool)| (owner.0 == camera).then_some(tool.policy))
+            .or_else(|| {
+                (*mode == CameraMode::FirstPerson).then(|| AssetId::from_key("mode_first_person"))
+            });
+        let first_person = mode_policy
+            .into_iter()
+            .flat_map(|mode| commands.first_person(mode))
+            .collect::<bevy::platform::collections::HashSet<_>>();
+        use openzt2_game_data::ui_document::action::camera::UiFirstPersonCommand as Command;
         next.first_person_commands = crate::camera::camera_execution_types::FirstPersonCommands {
-            forward: active("forward"),
-            backward: active("backward"),
-            turn_left: active("rleft"),
-            turn_right: active("rright"),
-            up: active("rforward"),
-            down: active("rbackward"),
-            crouch: active("crouch"),
-            free_mouse_look: active("freemouselook"),
+            forward: first_person.contains(&Command::Forward),
+            backward: first_person.contains(&Command::Backward),
+            turn_left: first_person.contains(&Command::TurnLeft),
+            turn_right: first_person.contains(&Command::TurnRight),
+            up: first_person.contains(&Command::Up),
+            down: first_person.contains(&Command::Down),
+            crouch: first_person.contains(&Command::Crouch),
+            free_mouse_look: first_person.contains(&Command::FreeMouseLook),
         };
         let edge = next.edge_pan.filter(|(surface, _)| {
             *mode == CameraMode::Overhead
@@ -99,14 +120,21 @@ pub(crate) fn project_camera_actions_into_camera_intent(
             } else {
                 f32::from(active("rright")) - f32::from(active("rleft"))
             };
-            next.turn = (turn + next.ui_turn + authored_turn).clamp(-1.0, 1.0);
-            next.pitch = if mouse_look { -axes.look.y } else { 0.0 };
+            let look = if keyboard && active("mouselook") {
+                axes.mouse_look
+            } else {
+                axes.look
+            };
+            next.turn = (look.x + digital_turn + next.ui_turn + authored_turn).clamp(-1.0, 1.0);
+            next.pitch = if mouse_look || active("mouselook") {
+                -look.y
+            } else {
+                0.0
+            };
             let authored_zoom = f32::from(active("up")) - f32::from(active("down"));
             next.zoom = (zoom + next.ui_zoom + authored_zoom).clamp(-1.0, 1.0);
-            if capture.wheel
-                == openzt2_interface_state::ui::pointer_capture_types::UiWheelCapture::World
-            {
-                queue_wheel_zoom(&mut next.wheel_zoom, scroll.delta.y);
+            for &notches in &wheel_events {
+                queue_wheel_zoom(&mut next.wheel_zoom, notches);
             }
         } else {
             next.pan_directions = [0.0; 4];

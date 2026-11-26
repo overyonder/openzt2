@@ -15,17 +15,17 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
 };
 use openzt2_zoo_state::{
     animal_behavior::interaction_container_membership::{
-        requests::{InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest},
         DockedAtInteractionContainer, InteractionContainerMemberships,
+        requests::{InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest},
     },
     aquatic::aquatic_simulation_types::{TankGeometry, TankWallTopHeight},
     behavior_task_execution_types::{
+        BehaviorTaskExecutionState, PendingBehaviorDockingCompletion, PendingBehaviorTaskFailure,
         running_actions::{
             BehaviorStepFixedSet, RunBehaviorDockNow, RunBehaviorDockSpline,
             RunBehaviorDockTankWall, RunBehaviorUsePortal, RunningBehaviorInstruction,
             WhenBehaviorAction,
         },
-        BehaviorTaskExecutionState, PendingBehaviorDockingCompletion, PendingBehaviorTaskFailure,
     },
     habitat::habitat_types::{HabitatMember, HabitatRegion},
     locomotion::locomotion_types::{
@@ -42,7 +42,7 @@ use openzt2_zoo_state::{
 use super::{
     behavior_container_admission::BehaviorAdmissionInstruction,
     behavior_named_nodes::NamedNodeTransforms,
-    behavior_object_attachment_execution::{detach::detach_object, ContainedObject},
+    behavior_object_attachment_execution::{ContainedObject, detach::detach_object},
     behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
 };
 
@@ -515,7 +515,8 @@ fn start_spline_dock(
     mut agents: Query<(&NavAgent, &mut NavigationRequestGeneration)>,
     mut routes: MessageWriter<NavigateTo>,
     disabled: Query<(), With<avian3d::prelude::ColliderDisabled>>,
-    motions: Query<&SplineDockMotion>,
+    mut motions: Query<&mut SplineDockMotion>,
+    mut retries: Query<&mut SplineDockRetry>,
     mut commands: Commands,
 ) {
     let actor = activation.entity;
@@ -585,12 +586,17 @@ fn start_spline_dock(
             advanced: 0.0,
         }
     };
-    commands.entity(actor).insert(SplineDockMotion {
+    let motion = SplineDockMotion {
         instruction: step.id(),
         target,
         phase,
         owns_disabled_collider: action.ignore_target_collision && !disabled.contains(actor),
-    });
+    };
+    if let Ok(mut current) = motions.get_mut(actor) {
+        *current = motion;
+    } else {
+        commands.entity(actor).insert(motion);
+    }
     if matches!(phase, SplineDockPhase::Approach(_))
         && habitats
             .get(actor)
@@ -601,10 +607,14 @@ fn start_spline_dock(
                     && subject.habitat_entity == target.habitat_entity
             })
     {
-        commands.entity(actor).insert(SplineDockRetry(Timer::new(
-            std::time::Duration::from_secs(2) + std::time::Duration::from_nanos(1),
-            TimerMode::Once,
-        )));
+        let timer = Timer::new(std::time::Duration::from_secs(2), TimerMode::Once);
+        if let Ok(mut retry) = retries.get_mut(actor) {
+            retry.0 = timer;
+        } else {
+            commands.entity(actor).insert(SplineDockRetry(timer));
+        }
+    } else if retries.contains(actor) {
+        commands.entity(actor).remove::<SplineDockRetry>();
     }
 }
 
@@ -1055,6 +1065,7 @@ fn use_portal(
     portals: Query<(&Portal, &WorldMember, Option<&Gate>)>,
     tank_portals: TankPortalDocks,
     poses: DockPoses,
+    endpoint_transforms: Query<Has<Transform>>,
     pending: Query<(), With<PendingBehaviorDockingCompletion>>,
     agents: Query<&NavAgent>,
     mut navigation: DockNavigation,
@@ -1090,7 +1101,11 @@ fn use_portal(
             tank_portals.graph_endpoint_pose(entrance, portal.destination)
         })?;
         let global = GlobalTransform::from(pose);
-        commands.entity(entrance).insert((pose, global));
+        if endpoint_transforms.get(entrance).ok()? {
+            commands.entity(entrance).insert_if_new(global);
+        } else {
+            commands.entity(entrance).insert_if_new((pose, global));
+        }
         Some(global)
     });
     let Some(place) = place else {
@@ -1255,7 +1270,7 @@ fn finish_special_docks(
                 if !transforms.contains(exit) {
                     commands
                         .entity(exit)
-                        .insert((exit_pose.compute_transform(), exit_pose));
+                        .insert_if_new((exit_pose.compute_transform(), exit_pose));
                 }
                 navigation.request(
                     event.entity,

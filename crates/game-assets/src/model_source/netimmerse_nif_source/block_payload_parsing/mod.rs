@@ -65,11 +65,13 @@ pub(super) fn parse_block_payload(
             parse_level_of_detail_node(source_bytes, cursor, source_path, encoded_version)
                 .map(NetImmerseNifBlockPayload::NiLODNode)
         }
-        "NiAmbientLight" => parse_ambient_light(source_bytes, cursor, source_path)
+        "NiAmbientLight" => parse_ambient_light(source_bytes, cursor, source_path, encoded_version)
             .map(NetImmerseNifBlockPayload::NiAmbientLight),
-        "NiDirectionalLight" => parse_directional_light(source_bytes, cursor, source_path)
-            .map(NetImmerseNifBlockPayload::NiDirectionalLight),
-        "NiPointLight" => parse_point_light(source_bytes, cursor, source_path)
+        "NiDirectionalLight" => {
+            parse_directional_light(source_bytes, cursor, source_path, encoded_version)
+                .map(NetImmerseNifBlockPayload::NiDirectionalLight)
+        }
+        "NiPointLight" => parse_point_light(source_bytes, cursor, source_path, encoded_version)
             .map(NetImmerseNifBlockPayload::NiPointLight),
         "NiZBufferProperty" => parse_depth_buffer_property(source_bytes, cursor, source_path)
             .map(NetImmerseNifBlockPayload::NiZBufferProperty),

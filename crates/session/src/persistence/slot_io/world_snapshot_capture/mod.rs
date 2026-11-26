@@ -24,7 +24,7 @@ pub(super) fn capture_world_snapshot_record_from_live_world(
         .unwrap_or("Zoo");
 
     let source_document = match world_snapshot_capture_queries.world_documents.single() {
-        Ok((handles, selection)) => {
+        Ok((handles, selection, scenario)) => {
             let assets = world_snapshot_capture_queries
                 .world_scenario_assets
                 .as_deref()
@@ -41,7 +41,12 @@ pub(super) fn capture_world_snapshot_record_from_live_world(
                 .map(|(campaign, _)| campaign);
             Some(
                 super::saved_world_descriptor_capture::capture_saved_world_descriptor(
-                    handles, selection, campaign, assets, server,
+                    handles,
+                    selection,
+                    campaign,
+                    scenario.map(|document| &document.0),
+                    assets,
+                    server,
                 )?,
             )
         }

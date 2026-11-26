@@ -123,10 +123,10 @@ pub(super) fn route_authored_show_platform_upgrade_actions_into_selection_edits_
                         EditTransaction {
                             sequence,
                             state: TransactionState::Applied,
-                            cost: Money(transaction_cost_cents),
+                            cost: Money::from_cents(transaction_cost_cents),
                         },
                         Preparing,
-                        PreparedDomain::<ShowPlatformUpgradeEdit>::new(Money(
+                        PreparedDomain::<ShowPlatformUpgradeEdit>::new(Money::from_cents(
                             transaction_cost_cents,
                         )),
                         ShowPlatformUpgradeEdit {

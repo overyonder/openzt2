@@ -1,6 +1,7 @@
 #[cfg(feature = "dev-tools")]
 mod diagnostics;
 
+mod award_world_effects;
 mod launch;
 mod missing_game_content_screen;
 #[cfg(feature = "mod-audit")]

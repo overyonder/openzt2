@@ -173,7 +173,7 @@ fn fixture() -> (App, Entity, Handle<ScenePrefabAsset>) {
                 scenario: default(),
             },
             PersistentIdAllocator::default(),
-            ZooCash(Money(10_000)),
+            ZooCash(Money::from_cents(10_000)),
             AdmissionPrice::default(),
             ZooAdmissionsOpen::default(),
             MonthlyFinanceHistory::default(),
@@ -251,7 +251,7 @@ fn donate(app: &mut App, root: Entity, acceptor: Entity) {
     assert!(app.world().get::<DonationUsePoint>(acceptor).is_some());
     let guest = app
         .world_mut()
-        .spawn((Guest, Wallet(Money(1000)), WorldMember { root }))
+        .spawn((Guest, Wallet(Money::from_cents(1000)), WorldMember { root }))
         .id();
     let subject = app
         .world_mut()
@@ -259,14 +259,23 @@ fn donate(app: &mut App, root: Entity, acceptor: Entity) {
             WorldMember { root },
             DonationOpportunity {
                 category: AssetId::from_key("Donate_Lion"),
-                amount: Money(500),
+                amount: Money::from_cents(500),
                 interaction_ticks: 0,
             },
         ))
         .id();
-    queue_arrived_box_donation_for_test(app.world_mut(), guest, acceptor, subject, Money(500));
+    queue_arrived_box_donation_for_test(
+        app.world_mut(),
+        guest,
+        acceptor,
+        subject,
+        Money::from_cents(500),
+    );
     app.update();
-    assert_eq!(app.world().get::<Wallet>(guest).unwrap().0, Money(500));
+    assert_eq!(
+        app.world().get::<Wallet>(guest).unwrap().0,
+        Money::from_cents(500)
+    );
 }
 
 #[test]
@@ -277,12 +286,15 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
         operation: purchase,
         debit: Account::Zoo,
         credit: Account::External,
-        amount: Money(1250),
+        amount: Money::from_cents(1250),
         kind: TransactionKind::Construction,
         subject: None,
     });
     source.update();
-    assert_eq!(source.world().get::<ZooCash>(root).unwrap().0, Money(8750));
+    assert_eq!(
+        source.world().get::<ZooCash>(root).unwrap().0,
+        Money::from_cents(8750)
+    );
     let acceptor = apply_settled_placement_purchase_for_test(
         source.world_mut(),
         root,
@@ -319,12 +331,12 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
     let economy = EconomySnapshotRecords {
         unlimited_cash: Some(false),
         zoo_cash: saved_cash,
-        admission_price: Money(250),
+        admission_price: Money::from_cents(250),
         admissions_open: true,
         current_calendar_month: 0,
-        lifetime_income: Money(500),
-        lifetime_expenses: Money(1250),
-        lifetime_donation_income: Money(500),
+        lifetime_income: Money::from_cents(500),
+        lifetime_expenses: Money::from_cents(1250),
+        lifetime_donation_income: Money::from_cents(500),
         lifetime_users: 0,
         monthly_finance_history_initialized: false,
         monthly_finance_records: vec![],
@@ -332,7 +344,7 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
             persistent_identifier: PersistentId(42),
             complete_component_state: true,
             opening_zoo_day: Some(saved_age.0),
-            profit: Some((saved_profit.total.0, saved_profit.transactions)),
+            profit: Some((saved_profit.total, saved_profit.transactions)),
             price_index: None,
             maintenance_schedule_index: None,
             wallet: None,
@@ -427,7 +439,7 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
             .get::<AdmissionPrice>(restored_root)
             .unwrap()
             .adult,
-        Money(250)
+        Money::from_cents(250)
     );
     assert!(
         destination
@@ -463,7 +475,7 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
             .get::<DonationTotal>(restored_acceptor)
             .unwrap()
             .amount,
-        Money(500)
+        Money::from_cents(500)
     );
     donate(&mut destination, restored_root, restored_acceptor);
     assert_eq!(
@@ -474,7 +486,7 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
             .aggregate_for_category(Some(AssetId::from_key("Donate_Lion")))
             .unwrap()
             .amount,
-        Money(1000)
+        Money::from_cents(1000)
     );
     assert_eq!(
         destination
@@ -482,11 +494,11 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
             .get::<FacilityProfit>(restored_acceptor)
             .unwrap()
             .total,
-        Money(1000)
+        Money::from_cents(1000)
     );
     assert_eq!(
         destination.world().get::<ZooCash>(restored_root).unwrap().0,
-        Money(saved_cash.0 + 500)
+        saved_cash.saturating_add(Money::from_cents(500))
     );
 }
 

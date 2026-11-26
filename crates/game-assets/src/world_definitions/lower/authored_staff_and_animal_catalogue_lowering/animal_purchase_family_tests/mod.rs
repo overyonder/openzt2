@@ -6,8 +6,8 @@ use crate::world_definitions::world_definition_source_document_lowering::lower_r
 use openzt2_game_data::AssetId;
 
 #[test]
-fn family_purchase_documents_publish_species_and_preserve_concrete_scene_references(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn family_purchase_documents_publish_species_and_preserve_concrete_scene_references()
+-> Result<(), Box<dyn std::error::Error>> {
     // Separate source documents repeat a family hierarchy or inherit it. Each
     // concrete binder owns a button, while the species owns the shared offer.
     for explicit_inheritance in [false, true] {
@@ -98,7 +98,7 @@ fn family_purchase_documents_publish_species_and_preserve_concrete_scene_referen
                         &scenes,
                         path,
                         [0, 0],
-                        &mut None,
+                        &mut Default::default(),
                     )?
                     .ok_or_else(|| std::io::Error::other("purchase source produced no document"))
                 })
@@ -153,8 +153,8 @@ fn family_purchase_documents_publish_species_and_preserve_concrete_scene_referen
 }
 
 #[test]
-fn descendant_actor_closures_retain_offers_when_the_species_has_no_own_presentation(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn descendant_actor_closures_retain_offers_when_the_species_has_no_own_presentation()
+-> Result<(), Box<dyn std::error::Error>> {
     use crate::source_document::{
         authored_species_purchase_family_queries::find_authored_species_purchase_family_root,
         resolved_source_record_index::SourceIndex,
@@ -214,7 +214,7 @@ fn descendant_actor_closures_retain_offers_when_the_species_has_no_own_presentat
             &scenes,
             &sources[0].0,
             [0, 0],
-            &mut None,
+            &mut Default::default(),
         )?
         .ok_or_else(|| std::io::Error::other("species root produced no document"))?;
         if abstract_value == "true" {
@@ -251,7 +251,7 @@ fn descendant_actor_closures_retain_offers_when_the_species_has_no_own_presentat
                     &scenes,
                     &sources[index].0,
                     [0, 0],
-                    &mut None,
+                    &mut Default::default(),
                 )?
                 .ok_or_else(|| std::io::Error::other("child source produced no document"))?;
             assert_eq!(child.catalogue.len(), 1);

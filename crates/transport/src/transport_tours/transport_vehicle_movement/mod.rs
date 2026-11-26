@@ -1,4 +1,5 @@
 use super::ground_track_policy::{GroundTrackPolicy, GroundTrackPolicyAsset};
+use super::sky_station_travel::SkyStationTravel;
 use avian3d::prelude::{ColliderAabb, SpatialQuery};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -153,7 +154,7 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
         &TrackTravelDistances,
         &TrackProfile,
     )>,
-    transport_stations: Query<(), With<TransportStation>>,
+    transport_stations: Query<Option<&SkyStationTravel>, With<TransportStation>>,
     transport_circuits: Query<(
         &TransportCircuit,
         Option<&CircuitRunning>,
@@ -244,20 +245,58 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
                 );
                 let (exit, _) =
                     next_distances.translation_and_tangent(next_track.geometry, exit_distance);
-                let span = exit - entry;
-                let span_length = span.length();
-                let heading = span.try_normalize().unwrap_or(Vec3::Z);
+                let station = if crossing.reverse {
+                    track_segment.from()
+                } else {
+                    track_segment.to()
+                };
+                let Some((path, path_reverse)) = transport_stations
+                    .get(station)
+                    .ok()
+                    .flatten()
+                    .and_then(|travel| travel.between(entry, exit))
+                else {
+                    vehicle_velocity.set_if_neq(Velocity(Vec3::ZERO));
+                    return;
+                };
+                let span_length = path.length();
                 let reversing = moving_in_reverse != crossing.reverse;
+                let before = crossing.distance;
                 let step = if reversing {
                     -requested_travel_distance
                 } else {
                     requested_travel_distance
                 };
-                crossing.distance = (crossing.distance + step).clamp(0.0, span_length);
-                let next = entry + heading * crossing.distance;
+                let mut after = (before + step).clamp(0.0, span_length);
+                if let Some(stop) = path.stop(path_reverse ^ reversing) {
+                    let stop = if path_reverse {
+                        span_length - stop
+                    } else {
+                        stop
+                    };
+                    if (!reversing && before < stop && stop <= after)
+                        || (reversing && after <= stop && stop < before)
+                    {
+                        after = stop;
+                        arrival.0 = Some(station);
+                    }
+                }
+                if before != after {
+                    crossing.distance = after;
+                }
+                let (next, tangent) = path.pose(if path_reverse {
+                    span_length - after
+                } else {
+                    after
+                });
+                let heading = tangent.normalize_or_zero();
                 let displacement = next - vehicle_transform.translation;
                 vehicle_transform.translation = next;
-                let forward = if reversing { -heading } else { heading };
+                let forward = if reversing ^ path_reverse {
+                    -heading
+                } else {
+                    heading
+                };
                 vehicle_transform.rotation = Quat::from_rotation_arc(Vec3::Z, forward);
                 vehicle_velocity.set_if_neq(Velocity(if fixed_delta_seconds > 0.0 {
                     displacement / fixed_delta_seconds
@@ -359,9 +398,7 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
             } else {
                 track_segment.to()
             };
-            if transport_stations.contains(reached_station_entity) {
-                arrival.0 = Some(reached_station_entity);
-            }
+            let reached_station = transport_stations.contains(reached_station_entity);
             let next = if moving_in_reverse {
                 incidence
                     .incoming(reached_station_entity)
@@ -381,10 +418,13 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
                             .filter(|(_, _, circuit, _, _)| circuit.0 == circuit_member.0)
                     })
             };
+            if reached_station && distances.sky_cable().is_none() {
+                arrival.0 = Some(reached_station_entity);
+            }
             if let Some((next_segment_entity, next_track_segment, _, next_distances, _)) = next {
                 if distances.sky_cable().is_some()
                     && next_distances.sky_cable().is_some()
-                    && transport_stations.contains(reached_station_entity)
+                    && reached_station
                 {
                     commands.command_scope(|mut commands| {
                         commands.entity(vehicle_entity).insert(SkyStationCrossing {

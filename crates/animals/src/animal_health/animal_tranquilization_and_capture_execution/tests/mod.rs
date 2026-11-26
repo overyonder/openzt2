@@ -49,7 +49,9 @@ fn a_dose_batch_keeps_the_longest_sedation_and_last_recovery() {
     let mut definitions = WorldDefinitions::default();
     definitions.index_test_document(handle, &document);
     let mut app = App::new();
-    app.insert_resource(assets)
+    let step = Duration::from_millis(10);
+    app.insert_resource(Time::<Fixed>::from_duration(step))
+        .insert_resource(assets)
         .insert_resource(definitions)
         .add_message::<TranquilizeRequest>()
         .add_systems(
@@ -68,9 +70,9 @@ fn a_dose_batch_keeps_the_longest_sedation_and_last_recovery() {
             Animal,
             transform,
             Tranquilized {
-                remaining_ticks: 60,
-                recovery_ticks: 10,
+                recovery_duration: step * 10,
             },
+            TranquilizerDoseTimer(Timer::new(step * 60, TimerMode::Once)),
         ))
         .id();
     for animal in [untranquilized, tranquilized] {
@@ -87,9 +89,16 @@ fn a_dose_batch_keeps_the_longest_sedation_and_last_recovery() {
         assert_eq!(
             app.world().get::<Tranquilized>(animal),
             Some(&Tranquilized {
-                remaining_ticks: 120,
-                recovery_ticks: 5
+                recovery_duration: step * 5
             })
+        );
+        assert_eq!(
+            app.world()
+                .get::<TranquilizerDoseTimer>(animal)
+                .unwrap()
+                .0
+                .remaining(),
+            step * 120
         );
     }
 }
@@ -107,10 +116,9 @@ fn capture_app() -> (App, CaptureAnimalRequest) {
             Animal,
             WorldMember { root },
             Escaped { since_tick: 7 },
-            Rampaging { elapsed_ticks: 4 },
+            Rampaging,
             Tranquilized {
-                remaining_ticks: 20,
-                recovery_ticks: 5,
+                recovery_duration: Duration::from_millis(50),
             },
         ))
         .id();
@@ -181,10 +189,11 @@ fn cancelled_capture_preserves_emergency_state_and_releases_claim_in_either_syst
         );
         assert!(app.world().get_entity(request.job).is_err());
         assert!(app.world().get::<CurrentJob>(request.staff).is_none());
-        assert!(app
-            .world()
-            .resource::<Messages<AnimalCaptured>>()
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<Messages<AnimalCaptured>>()
+                .is_empty()
+        );
     }
 }
 

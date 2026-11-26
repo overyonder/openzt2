@@ -7,8 +7,8 @@ use std::{
 };
 
 use openzt2_game_data::{
-    world_scenario::{ScenarioDefinitionRecord, ScenarioScriptBinding},
     AssetId,
+    world_scenario::{ScenarioDefinitionRecord, ScenarioScriptBinding},
 };
 
 use crate::{
@@ -34,7 +34,14 @@ pub(super) fn resolve_legacy_world_script_paths(
     source: &mut WorldScenarioDocumentSource,
     archives: &AssetArchives,
 ) -> io::Result<()> {
-    if !source.authored.legacy_script_references {
+    let recover_scripts = source.authored.legacy_script_references;
+    if !recover_scripts
+        && source
+            .document
+            .scenarios
+            .iter()
+            .all(|scenario| source.authored.objective_roots.contains_key(&scenario.id))
+    {
         return Ok(());
     }
 
@@ -79,6 +86,9 @@ pub(super) fn resolve_legacy_world_script_paths(
     }
 
     for scenario in &mut source.document.scenarios {
+        if source.authored.objective_roots.contains_key(&scenario.id) {
+            continue;
+        }
         let Some(origins) = scenario_origins.get(&scenario.id) else {
             continue;
         };
@@ -111,7 +121,23 @@ pub(super) fn resolve_legacy_world_script_paths(
         scenario
             .objective_groups
             .clone_from(&origin.scenario.objective_groups);
-        source.authored.merge(origin.authored.clone())?;
+        let mut authored = origin.authored.clone();
+        authored.remap_scenario(origin.scenario.id, scenario.id);
+        for (id, policy) in authored.scenario_nodes {
+            source.authored.scenario_nodes.entry(id).or_insert(policy);
+        }
+        source
+            .authored
+            .objective_roots
+            .extend(authored.objective_roots);
+        source
+            .authored
+            .ui_modifications
+            .extend(authored.ui_modifications);
+    }
+
+    if !recover_scripts {
+        return Ok(());
     }
 
     for binding in &mut source.document.scenario_script_bindings {

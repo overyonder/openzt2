@@ -342,6 +342,7 @@ impl InteractionWrites<'_, '_> {
         context: PresentationContext,
         action: UiPresentationAction,
         emitted: &mut Vec<UiNodeActivated>,
+        missing: &mut bevy::ecs::entity::EntityHashMap<UiAuthoredTreeExpansion>,
     ) {
         let Self {
             targets,
@@ -471,9 +472,8 @@ impl InteractionWrites<'_, '_> {
                     if let Ok(mut current) = expanded.get_mut(node) {
                         current.set_expanded(next);
                     } else {
-                        commands
-                            .entity(node)
-                            .insert(UiAuthoredTreeExpansion::from_authored_expansion(next));
+                        missing
+                            .insert(node, UiAuthoredTreeExpansion::from_authored_expansion(next));
                     }
                 }
             }
@@ -510,7 +510,12 @@ pub(super) struct ValuesWrites<'w, 's> {
 }
 
 impl ValuesWrites<'_, '_> {
-    pub(super) fn apply(&mut self, context: PresentationContext, action: UiPresentationAction) {
+    pub(super) fn apply(
+        &mut self,
+        context: PresentationContext,
+        action: UiPresentationAction,
+        missing: &mut bevy::ecs::entity::EntityHashMap<ScrollPosition>,
+    ) {
         let Self {
             targets,
             values,
@@ -601,7 +606,7 @@ impl ValuesWrites<'_, '_> {
                     if let Ok(mut position) = scrolls.get_mut(entity) {
                         position.0 += delta;
                     } else {
-                        commands.entity(entity).insert(ScrollPosition(delta));
+                        missing.entry(entity).or_default().0 += delta;
                     }
                 }
             }
@@ -623,7 +628,12 @@ pub(super) struct DrawingWrites<'w, 's> {
 }
 
 impl DrawingWrites<'_, '_> {
-    pub(super) fn apply(&mut self, context: PresentationContext, action: UiPresentationAction) {
+    pub(super) fn apply(
+        &mut self,
+        context: PresentationContext,
+        action: UiPresentationAction,
+        missing: &mut bevy::ecs::entity::EntityHashMap<ImageNode>,
+    ) {
         let Self {
             targets,
             roots,
@@ -685,7 +695,7 @@ impl DrawingWrites<'_, '_> {
                     }
                 }
                 if !found {
-                    commands.entity(target).insert(ImageNode::new(image));
+                    missing.insert(target, ImageNode::new(image));
                 }
             }
             UiPresentationAction::SetTargetNodeLayoutPosition {

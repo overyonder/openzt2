@@ -13,7 +13,7 @@ use openzt2_zoo_state::economy::authored_price_queries::find_authored_object_or_
 use openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectRelocationSource;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_ui::animation::UiAnimationOrigin;
-use openzt2_ui::animation::{UiAnimationPlaybackOperation, UiAnimationPlaybackRequest, UiShowHideAnimation, UiShowHidePlayback};
+use openzt2_ui::animation::{UiAnimationPlaybackOperation, UiAnimationPlaybackRequest, UiShowHideAnimation};
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
@@ -54,7 +54,6 @@ pub(super) fn project_cursor_money_text_position_and_animation(
             &mut Node,
             &mut Visibility,
             &UiShowHideAnimation,
-            Has<UiShowHidePlayback>,
             Option<&mut UiAnimationOrigin>,
         ),
         With<UiDocumentRoot>,
@@ -105,7 +104,7 @@ pub(super) fn project_cursor_money_text_position_and_animation(
         let Some(root) = children.iter().find(|&child| roots.contains(child)) else {
             continue;
         };
-        let Ok((root, binding, text, font, mut node, mut visibility, animation, playing, origin)) =
+        let Ok((root, binding, text, font, mut node, mut visibility, animation, origin)) =
             roots.get_mut(root)
         else {
             continue;
@@ -160,6 +159,9 @@ pub(super) fn project_cursor_money_text_position_and_animation(
             font,
         );
         visibility.set_if_neq(Visibility::Inherited);
+        let origin_changed = origin
+            .as_deref()
+            .is_none_or(|origin| origin.0 != authored_position);
         if let Some(mut origin) = origin {
             origin.set_if_neq(UiAnimationOrigin(authored_position));
         } else {
@@ -170,21 +172,6 @@ pub(super) fn project_cursor_money_text_position_and_animation(
         node.reborrow()
             .map_unchanged(|n| &mut n.position_type)
             .set_if_neq(PositionType::Absolute);
-        node.reborrow()
-            .map_unchanged(|n| &mut n.left)
-            .set_if_neq(px(authored_position.x
-                + animation.rect_intervals[0]
-                    .map_or(animation.base_rect[0], |[_, end]| end)));
-        node.reborrow()
-            .map_unchanged(|n| &mut n.top)
-            .set_if_neq(px(authored_position.y
-                + animation.rect_intervals[1]
-                    .map_or(animation.base_rect[1], |[_, end]| end)));
-        node.reborrow()
-            .map_unchanged(|n| &mut n.width)
-            .set_if_neq(px(animation.base_rect[2]));
-        node.map_unchanged(|n| &mut n.height)
-            .set_if_neq(px(animation.base_rect[3]));
         if spend.is_some() {
             animations.write(UiAnimationPlaybackRequest {
                 entity: root,
@@ -193,10 +180,14 @@ pub(super) fn project_cursor_money_text_position_and_animation(
             commands
                 .entity(owner)
                 .remove::<PendingCursorMoneySpendAnimation>();
-        } else if playing {
+        } else if origin_changed {
             animations.write(UiAnimationPlaybackRequest {
                 entity: root,
                 operation: UiAnimationPlaybackOperation::Reset(true),
+            });
+            animations.write(UiAnimationPlaybackRequest {
+                entity: root,
+                operation: UiAnimationPlaybackOperation::Finish,
             });
         }
     }

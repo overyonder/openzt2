@@ -131,10 +131,12 @@ fn hide_actors_for_current_hide_actions(
             };
             minimum + (maximum - minimum).mul_f64(f64::from(unit))
         };
-        let ticks = duration
-            .as_nanos()
-            .saturating_mul(u128::from(definitions.timing().fixed_hz))
-            .div_ceil(1_000_000_000);
+        let ticks = duration.as_nanos().div_ceil(
+            definitions
+                .simulation_timestep()
+                .expect("simulation timing is loaded")
+                .as_nanos(),
+        );
         let until_tick = clock
             .tick
             .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX));

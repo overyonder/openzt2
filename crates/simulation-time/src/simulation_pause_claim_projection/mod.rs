@@ -78,7 +78,7 @@ fn project_hidden_ancestor_sources(
             (true, false) => {
                 commands
                     .entity(entity)
-                    .insert(Propagate(PauseAncestorHidden));
+                    .insert_if_new(Propagate(PauseAncestorHidden));
             }
             (false, true) => {
                 commands
@@ -126,7 +126,9 @@ fn project_forced_visible_authored_nodes(
     for (entity, visibility, marked) in &changed {
         match (*visibility == Visibility::Visible, marked) {
             (true, false) => {
-                commands.entity(entity).insert(AuthoredUiForcedVisible);
+                commands
+                    .entity(entity)
+                    .insert_if_new(AuthoredUiForcedVisible);
             }
             (false, true) => {
                 commands.entity(entity).remove::<AuthoredUiForcedVisible>();

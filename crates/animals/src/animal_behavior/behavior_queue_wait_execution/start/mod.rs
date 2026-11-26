@@ -266,10 +266,12 @@ pub(super) fn apply_queue_wait_admission(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             return;
         }
-        let ticks = duration
-            .as_nanos()
-            .saturating_mul(u128::from(definitions.timing().fixed_hz))
-            .div_ceil(1_000_000_000);
+        let ticks = duration.as_nanos().div_ceil(
+            definitions
+                .simulation_timestep()
+                .expect("simulation timing is loaded")
+                .as_nanos(),
+        );
         commands.entity(actor).insert(ActiveQueueWait {
             execution_id: task.execution_id,
             origin: origin.clone(),

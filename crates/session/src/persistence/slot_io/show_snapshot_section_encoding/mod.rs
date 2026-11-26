@@ -7,11 +7,12 @@ use super::super::{
     snapshot_container_types::WorldSnapshotSectionDirectoryEntry,
 };
 use super::show_snapshot_types::{
-    ScheduledShowBreakSnapshotRecord, ScheduledShowPerformanceSnapshotRecord,
+    RunningShowSnapshot, ScheduledShowBreakSnapshotRecord, ScheduledShowPerformanceSnapshotRecord,
     ScheduledShowSnapshotRecord, ShowSnapshotRecords, ShowStageSnapshotRecord,
 };
 
 const SHOW_RATINGS_EXTENSION: &[u8; 4] = b"SRAT";
+const RUNNING_SHOW_EXTENSION: &[u8; 4] = b"SRUN";
 const ABSENT_SHOW_RATING: u32 = u32::MAX;
 
 pub(super) fn append_encoded_show_snapshot_section(
@@ -45,13 +46,21 @@ pub(super) fn append_encoded_show_snapshot_section(
         bytes.extend_from_slice(&show.persistent_identifier.0.to_le_bytes());
         bytes.extend_from_slice(&show.stage_persistent_identifier.0.to_le_bytes());
         bytes.extend_from_slice(&show.schedule_row_order.to_le_bytes());
-        bytes.push(u8::from(show.is_active));
+        let cells = show
+            .performance_records
+            .iter()
+            .any(|slot| slot.time_slot.is_some());
+        bytes.push(u8::from(show.is_active) | (u8::from(cells) << 1));
         bytes.extend_from_slice(&show.performance_capacity.to_le_bytes());
         bytes.extend_from_slice(&(show.performance_records.len() as u16).to_le_bytes());
         for slot in &show.performance_records {
             bytes.extend_from_slice(&slot.performer_persistent_identifier.0.to_le_bytes());
-            bytes.extend_from_slice(&slot.trick_definition_identifier.0);
+            bytes.extend_from_slice(&slot.trick_definition_identifier.unwrap_or_default().0);
             bytes.extend_from_slice(&slot.duration_simulation_ticks.to_le_bytes());
+            if cells {
+                bytes.push(u8::from(slot.time_slot.is_some()));
+                bytes.extend_from_slice(&slot.time_slot.unwrap_or_default().to_le_bytes());
+            }
         }
     }
     for pause in breaks {
@@ -70,6 +79,28 @@ pub(super) fn append_encoded_show_snapshot_section(
                     .map_or(ABSENT_SHOW_RATING, f32::to_bits)
                     .to_le_bytes(),
             );
+        }
+    }
+    let running_count = stages
+        .iter()
+        .filter(|stage| stage.running.is_some())
+        .count() as u32;
+    if running_count != 0 {
+        bytes.extend_from_slice(RUNNING_SHOW_EXTENSION);
+        bytes.extend_from_slice(&running_count.to_le_bytes());
+        for stage in stages {
+            let Some(running) = stage.running else {
+                continue;
+            };
+            bytes.extend_from_slice(&stage.persistent_identifier.0.to_le_bytes());
+            bytes.extend_from_slice(&running.row_id.to_le_bytes());
+            bytes.push(running.phase);
+            bytes.extend_from_slice(&running.current_slot.to_le_bytes());
+            bytes.extend_from_slice(&running.trick_score.to_le_bytes());
+            bytes.extend_from_slice(&running.stars.to_le_bytes());
+            bytes.extend_from_slice(&running.completed_tricks.to_le_bytes());
+            bytes.extend_from_slice(&running.failed_tricks.to_le_bytes());
+            bytes.extend_from_slice(&running.remaining_ns.to_le_bytes());
         }
     }
 }
@@ -153,6 +184,7 @@ pub(super) fn decode_and_validate_show_snapshot_section(
             persistent_identifier: id,
             is_open: enabled,
             display_name: name,
+            running: None,
             canopy_upgrade_persistent_identifier: (canopy.0 != 0).then_some(canopy),
             television_upgrade_persistent_identifier: (television.0 != 0).then_some(television),
         });
@@ -175,11 +207,11 @@ pub(super) fn decode_and_validate_show_snapshot_section(
                 .try_into()
                 .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?,
         );
-        let enabled = match header[18] {
-            0 => false,
-            1 => true,
-            _ => return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection),
-        };
+        if header[18] & !3 != 0 {
+            return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+        }
+        let enabled = header[18] & 1 != 0;
+        let cells = header[18] & 2 != 0;
         let capacity = u16::from_le_bytes(
             header[19..21]
                 .try_into()
@@ -194,7 +226,8 @@ pub(super) fn decode_and_validate_show_snapshot_section(
         if slot_count > usize::from(capacity) {
             return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
         }
-        let mut slots = Vec::with_capacity(capacity.into());
+        let mut slots = Vec::with_capacity(slot_count);
+        let mut occupied_cells = std::collections::BTreeSet::new();
         for _ in 0..slot_count {
             let slot = payload
                 .get(cursor..cursor.saturating_add(28))
@@ -210,15 +243,31 @@ pub(super) fn decode_and_validate_show_snapshot_section(
                     .try_into()
                     .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?,
             );
-            if performer.0 == 0 || duration_ticks == 0 {
+            cursor += 28;
+            let time_slot = if cells {
+                let cell = payload
+                    .get(cursor..cursor.saturating_add(3))
+                    .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
+                cursor += 3;
+                let index = u16::from_le_bytes([cell[1], cell[2]]);
+                match cell[0] {
+                    0 if index == 0 => None,
+                    1 if occupied_cells.insert((performer.0, index)) => Some(index),
+                    _ => return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection),
+                }
+            } else {
+                None
+            };
+            let trick = (AssetId(trick) != AssetId::default()).then_some(AssetId(trick));
+            if performer.0 == 0 || duration_ticks == 0 || (trick.is_none() && time_slot.is_none()) {
                 return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
             }
             slots.push(ScheduledShowPerformanceSnapshotRecord {
                 performer_persistent_identifier: performer,
-                trick_definition_identifier: AssetId(trick),
+                trick_definition_identifier: trick,
+                time_slot,
                 duration_simulation_ticks: duration_ticks,
             });
-            cursor += 28;
         }
         if id.0 == 0
             || stage.0 == 0
@@ -299,24 +348,75 @@ pub(super) fn decode_and_validate_show_snapshot_section(
             duration_simulation_ticks: duration_ticks,
         });
     }
-    let remaining = &payload[cursor..];
-    if !remaining.is_empty() {
-        let ratings = remaining
-            .strip_prefix(SHOW_RATINGS_EXTENSION)
-            .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
-        if ratings.len() != scheduled.len().saturating_mul(size_of::<u32>()) {
-            return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
-        }
+    use WorldSnapshotPersistenceFailure::CorruptSnapshotSection;
+    let mut remaining = &payload[cursor..];
+    if let Some(data) = remaining.strip_prefix(SHOW_RATINGS_EXTENSION) {
+        let (ratings, next) = data
+            .split_at_checked(scheduled.len().saturating_mul(size_of::<u32>()))
+            .ok_or(CorruptSnapshotSection)?;
+        remaining = next;
         for (row, bits) in scheduled.iter_mut().zip(ratings.as_chunks::<4>().0) {
             let bits = u32::from_le_bytes(*bits);
             if bits != ABSENT_SHOW_RATING {
                 let rating = f32::from_bits(bits);
                 if !rating.is_finite() {
-                    return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+                    return Err(CorruptSnapshotSection);
                 }
                 row.rating = Some(rating);
             }
         }
+    }
+    if let Some(data) = remaining.strip_prefix(RUNNING_SHOW_EXTENSION) {
+        let (header, data) = data.split_at_checked(4).ok_or(CorruptSnapshotSection)?;
+        let count =
+            u32::from_le_bytes(header.try_into().map_err(|_| CorruptSnapshotSection)?) as usize;
+        const RUNNING_SHOW_BYTES: usize = 45;
+        if count == 0
+            || count > stages.len()
+            || data.len() != count.saturating_mul(RUNNING_SHOW_BYTES)
+        {
+            return Err(CorruptSnapshotSection);
+        }
+        for row in data.chunks_exact(RUNNING_SHOW_BYTES) {
+            let u64_at = |offset| u64::from_le_bytes(row[offset..offset + 8].try_into().unwrap());
+            let u32_at = |offset| u32::from_le_bytes(row[offset..offset + 4].try_into().unwrap());
+            let stage_id = u64_at(0);
+            let running = RunningShowSnapshot {
+                row_id: u64_at(8),
+                phase: row[16],
+                current_slot: u32_at(17),
+                trick_score: f32::from_bits(u32_at(21)),
+                stars: f32::from_bits(u32_at(25)),
+                completed_tricks: u32_at(29),
+                failed_tricks: u32_at(33),
+                remaining_ns: u64_at(37),
+            };
+            let stage = stages
+                .binary_search_by_key(&stage_id, |stage| stage.persistent_identifier.0)
+                .ok()
+                .map(|index| &mut stages[index])
+                .ok_or(CorruptSnapshotSection)?;
+            let matches_row = |id: PersistentId, owner: PersistentId| {
+                id.0 == running.row_id && owner.0 == stage_id
+            };
+            if stage.running.is_some()
+                || running.phase().is_none()
+                || !running.stars.is_finite()
+                || !running.trick_score.is_finite()
+                || !(scheduled.iter().any(|row| {
+                    matches_row(row.persistent_identifier, row.stage_persistent_identifier)
+                }) || breaks.iter().any(|row| {
+                    matches_row(row.persistent_identifier, row.stage_persistent_identifier)
+                }))
+            {
+                return Err(CorruptSnapshotSection);
+            }
+            stage.running = Some(running);
+        }
+        remaining = &[];
+    }
+    if !remaining.is_empty() {
+        return Err(CorruptSnapshotSection);
     }
     Ok(ShowSnapshotRecords {
         stage_records: stages,

@@ -19,3 +19,10 @@ pub struct UiPointerCapture {
     pub target: Option<Entity>,
     pub wheel: UiWheelCapture,
 }
+
+/// Vertical wheel input admitted to the world by UI picking.
+#[derive(Message, Clone, Copy, Debug)]
+pub struct WorldWheelInput {
+    pub window: Entity,
+    pub notches: f32,
+}

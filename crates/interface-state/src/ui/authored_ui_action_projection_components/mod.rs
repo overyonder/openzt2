@@ -136,3 +136,28 @@ define_ui_action_projection_component!(
 );
 define_ui_action_projection_component!(UiSimulationActions, UiSimulationActionRecord, Simulation);
 define_ui_action_projection_component!(UiScriptActions, UiScriptActionRecord, Script);
+
+impl UiScriptActions {
+    /// Borrow invocations and their resolved dependency in authored order.
+    pub fn invocations<'a>(
+        &self,
+        document: &'a UiDocumentAsset,
+        trigger: openzt2_game_data::ui_document::action::UiTrigger,
+    ) -> impl Iterator<
+        Item = (
+            &'a UiScriptActionRecord,
+            Option<
+                &'a bevy::prelude::Handle<
+                    openzt2_game_assets::lua_script::lua_script_asset_loading::LuaScriptAsset,
+                >,
+            >,
+        ),
+    > {
+        self.authored_action_records(document)
+            .filter(move |invocation| invocation.trigger == trigger)
+            .map(move |invocation| {
+                let handle = invocation.script.and_then(|id| document.script_handle(id));
+                (invocation, handle)
+            })
+    }
+}

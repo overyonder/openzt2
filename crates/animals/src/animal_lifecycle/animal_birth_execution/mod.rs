@@ -24,7 +24,7 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::animal_lineage::{
-    insert_animal_parentage, AnimalMate, PregnancyFather,
+    AnimalMate, PregnancyFather, insert_animal_parentage,
 };
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation;
@@ -199,9 +199,9 @@ pub(super) fn spawn_children_for_authored_births(
             instruction.complete(mother, clock.tick, &mut commands);
             continue;
         }
-        let Some(timing) = view.simulation_timing() else {
+        if view.simulation_timing().is_none() {
             continue;
-        };
+        }
         let child = species_index.find(species.species).and_then(|definition| {
             resolve_species_and_variant_to_animal_spawn_components(
                 species_index,
@@ -209,7 +209,7 @@ pub(super) fn spawn_children_for_authored_births(
                 Some(entity),
                 None,
                 LifeStage::Young,
-                timing.ticks_per_day,
+                crate::zoo_day_cadence(view).ticks_per_zoo_day(),
                 &mut random.0,
             )
             .map(|components| (definition.id, components))

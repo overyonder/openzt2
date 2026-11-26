@@ -39,7 +39,12 @@ pub(super) fn begin_photo_album_html_and_bmp_exports(
     directories: Option<Res<PersistenceFilesystemPaths>>,
     profile: Res<ProfileOptions>,
     albums: Query<(&PersistentId, Option<&AlbumPhotos>), With<PhotoAlbum>>,
-    photos: Query<(&PersistentId, &Photo, Option<&PhotoAlbumOrder>)>,
+    photos: Query<(
+        &PersistentId,
+        &Photo,
+        Option<&PhotoAlbumOrder>,
+        Option<&openzt2_photos::PhotoCaption>,
+    )>,
     images: Res<Assets<Image>>,
     mut commands: Commands,
     mut failed: MessageWriter<PhotoAlbumHtmlAndBmpExportFailed>,
@@ -61,7 +66,7 @@ pub(super) fn begin_photo_album_html_and_bmp_exports(
             .into_iter()
             .flat_map(RelationshipTarget::iter)
             .filter_map(|entity| {
-                let (id, photo, order) = photos.get(entity).ok()?;
+                let (id, photo, order, caption) = photos.get(entity).ok()?;
                 let image = images.get(&photo.image)?;
                 let data = image.data.as_deref()?;
                 let size = image.texture_descriptor.size;
@@ -71,6 +76,7 @@ pub(super) fn begin_photo_album_html_and_bmp_exports(
                         (
                             order.map_or(photo.captured_tick, |order| order.0),
                             id.0,
+                            caption.map(|caption| caption.0.clone()),
                             bytes,
                         )
                     })
@@ -84,7 +90,7 @@ pub(super) fn begin_photo_album_html_and_bmp_exports(
         commands.spawn(PhotoAlbumHtmlAndBmpWriteTask {
             album,
             task: IoTaskPool::get().spawn(async move {
-                entries.into_iter().try_for_each(|(_, id, bytes)| {
+                entries.into_iter().try_for_each(|(_, id, _, bytes)| {
                     atomically_write_and_sync_file(
                         &directory.join(format!("photo-{id:016x}.bmp")),
                         &bytes,
@@ -117,15 +123,32 @@ pub(super) fn complete_photo_album_html_and_bmp_exports(
     }
 }
 
-fn create_photo_album_html_document(photo_entries: &[(u64, u64, Vec<u8>)]) -> String {
+fn create_photo_album_html_document(
+    photo_entries: &[(u64, u64, Option<String>, Vec<u8>)],
+) -> String {
     let mut table_rows = String::new();
-    for (photo_index, (_, persistent_photo_identifier, _)) in photo_entries.iter().enumerate() {
+    for (photo_index, (_, persistent_photo_identifier, caption, _)) in
+        photo_entries.iter().enumerate()
+    {
         if photo_index % 4 == 0 {
             table_rows.push_str("<tr>");
         }
         table_rows.push_str(&format!(
-            "<td><a href=\"photo-{persistent_photo_identifier:016x}.bmp\"><img src=\"photo-{persistent_photo_identifier:016x}.bmp\" width=\"198\" height=\"150\"></a></td>"
+            "<td><a href=\"photo-{persistent_photo_identifier:016x}.bmp\"><img src=\"photo-{persistent_photo_identifier:016x}.bmp\" width=\"198\" height=\"150\"></a>"
         ));
+        if let Some(caption) = caption {
+            table_rows.push_str("<p>");
+            for character in caption.chars() {
+                match character {
+                    '&' => table_rows.push_str("&amp;"),
+                    '<' => table_rows.push_str("&lt;"),
+                    '>' => table_rows.push_str("&gt;"),
+                    character => table_rows.push(character),
+                }
+            }
+            table_rows.push_str("</p>");
+        }
+        table_rows.push_str("</td>");
         if photo_index % 4 == 3 {
             table_rows.push_str("</tr>\n");
         }

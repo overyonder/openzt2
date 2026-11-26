@@ -29,6 +29,8 @@ use openzt2_zoo_state::locomotion::locomotion_types::{SpatialCell, SpatialCellMe
 type SpatialAgentData = (
     Entity,
     &'static GlobalTransform,
+    Option<&'static Transform>,
+    Has<ChildOf>,
     &'static WorldMember,
     Option<&'static SpatialCell>,
 );
@@ -46,6 +48,7 @@ pub(super) fn project_agent_spatial_membership(
             With<NavAgent>,
             Or<(
                 Changed<GlobalTransform>,
+                Changed<Transform>,
                 Changed<WorldMember>,
                 Added<NavAgent>,
             )>,
@@ -58,14 +61,19 @@ pub(super) fn project_agent_spatial_membership(
             commands.entity(entity).try_remove::<SpatialCell>();
         }
     }
-    let project = |(entity, transform, member, current): (
+    let project = |(entity, transform, local, parented, member, current): (
         Entity,
         &GlobalTransform,
+        Option<&Transform>,
+        bool,
         &WorldMember,
         Option<&SpatialCell>,
     )| {
+        let position = local
+            .filter(|_| !parented)
+            .map_or_else(|| transform.translation(), |local| local.translation);
         let next = grids.get(member.root).ok().and_then(|grid| {
-            grid.cell_of(transform.translation().xz())
+            grid.cell_of(position.xz())
                 .and_then(|index| grid.cells.get(index as usize).copied())
         });
         if current.map(|cell| cell.0) != next {

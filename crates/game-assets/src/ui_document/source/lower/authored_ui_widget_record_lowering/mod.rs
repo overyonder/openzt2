@@ -32,6 +32,17 @@ use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollecti
 use openzt2_game_data::AssetId;
 use std::io;
 
+pub(super) fn non_remembered_root_types(
+    list: &crate::source_document::ui::model::SourceUiTypeList,
+) -> Vec<AssetId> {
+    list.non_remembered_root_types
+        .iter()
+        .map(|kind| {
+            canonical_source_value_resolution::lower_authored_catalogue_key_to_asset_id(kind)
+        })
+        .collect()
+}
+
 pub(super) fn node_kind(
     kind: &SourceUiWidgetKind,
     widget: &SourceUiWidgetData,

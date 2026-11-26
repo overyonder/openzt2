@@ -41,6 +41,7 @@ pub(super) fn project_authored_hotkey_action_proxies(
                         hotkey.control_state,
                         matches!(&hotkey.trigger, UiDocumentHotkeyTrigger::KeyReleased),
                         hotkey.allow_repeat,
+                        hotkey.key_code == 0x11,
                     ),
                     UiDocumentOwner(root),
                     ChildOf(entities[node_index]),
@@ -59,7 +60,7 @@ pub(super) fn project_authored_hotkey_action_proxies(
     }
 }
 
-fn authored_hotkey_key_code(virtual_key_code: u32, character: &str) -> Option<KeyCode> {
+pub(crate) fn authored_hotkey_key_code(virtual_key_code: u32, character: &str) -> Option<KeyCode> {
     character
         .chars()
         .next()
@@ -84,6 +85,10 @@ fn windows_virtual_key_code(code: u32) -> Option<KeyCode> {
         0x08 => KeyCode::Backspace,
         0x09 => KeyCode::Tab,
         0x0d => KeyCode::Enter,
+        0x11 | 0xa2 => KeyCode::ControlLeft,
+        0xa3 => KeyCode::ControlRight,
+        0x2d => KeyCode::Insert,
+        0x60 => KeyCode::Numpad0,
         0x1b => KeyCode::Escape,
         0x20 => KeyCode::Space,
         0x25 => KeyCode::ArrowLeft,

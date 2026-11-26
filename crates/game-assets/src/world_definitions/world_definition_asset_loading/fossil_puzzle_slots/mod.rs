@@ -5,10 +5,10 @@ use bevy::{
     gltf::Gltf,
 };
 use openzt2_game_data::{
+    AssetId,
     world_definitions::{
         document::WorldDefinitionDocument, extinct_animal_recovery::FossilSlotDefinition,
     },
-    AssetId,
 };
 
 use crate::{
@@ -51,13 +51,12 @@ pub(super) async fn lower_fossil_puzzle_background_slots(
     let mut textures = Vec::new();
     let binder = format!("{animal}Background");
     let source = binders
-        .resolve_binder_type_source_path(archives, path, &binder)?
+        .resolve_binder_type_source_path(archives, &binder)?
         .ok_or_else(|| unresolved_reference(path, "fossil puzzle background", &binder))?;
     let source = source.to_string_lossy();
     let background = read_source_document(context, &source).await?;
     let (_, models) =
-        resolve_world_definition_presentation_models(archives, context, &source, &[background])
-            .await?;
+        resolve_world_definition_presentation_models(archives, context, &[background]).await?;
     let mut models = models.values();
     let model = models
         .next()

@@ -5,6 +5,7 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigateTo;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestGeneration;
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::ZooEntrance;
@@ -174,30 +175,37 @@ pub(crate) fn despawn_departed_guests(
     }
 }
 
-pub(crate) fn age_guest_memories(
+pub(crate) fn expire_guest_memories(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    clocks: Query<&ZooClock>,
     entities: Query<()>,
-    mut guests: Query<(&GuestArchetype, &mut GuestMemories), With<Guest>>,
+    mut guests: Query<(&WorldMember, &GuestArchetype, &mut GuestMemories), With<Guest>>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (archetype, mut memories) in &mut guests {
+    for (member, archetype, mut memories) in &mut guests {
+        let Ok(clock) = clocks.get(member.root) else {
+            continue;
+        };
         let Some((_, definition)) = find_guest_definition(definitions, archetype.0) else {
             continue;
         };
-        for entry in &mut memories.entries {
-            entry.age_ticks = entry.age_ticks.saturating_add(1);
-        }
-        memories.entries.retain(|entry| {
+        let retained = |entry: &super::guest_simulation_types::GuestMemoryEntry| {
             entities.get(entry.subject).is_ok()
-                && entry.age_ticks
-                    < find_reaction(definition, entry.kind)
-                        .map(|reaction| reaction.retention_ticks)
-                        .unwrap_or_else(|| definition.memory.retention_ticks)
-        });
-        let capacity = usize::from(memories.active_capacity).max(1);
-        memories.next = (usize::from(memories.next) % capacity) as u16;
+                && clock.tick.saturating_sub(entry.created_tick)
+                    < u64::from(
+                        find_reaction(definition, entry.kind)
+                            .map_or(definition.memory.retention_ticks, |reaction| {
+                                reaction.retention_ticks
+                            }),
+                    )
+        };
+        if memories.entries.iter().any(|entry| !retained(entry)) {
+            memories.entries.retain(retained);
+            let capacity = usize::from(memories.active_capacity).max(1);
+            memories.next = (usize::from(memories.next) % capacity) as u16;
+        }
     }
 }

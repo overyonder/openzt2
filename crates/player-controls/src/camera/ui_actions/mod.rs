@@ -120,7 +120,8 @@ pub(super) fn route_camera_ui_actions(
                         }
                     }
                 }
-                UiCameraAction::SetCommandState { .. } => {}
+                UiCameraAction::SetCommandState { .. }
+                | UiCameraAction::SetFirstPersonCommandState { .. } => {}
                 UiCameraAction::SetCameraPanDirection { direction } => {
                     let axis = match direction {
                         UiCameraPanDirection::North => Vec2::Y,

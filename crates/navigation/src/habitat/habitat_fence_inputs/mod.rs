@@ -24,7 +24,7 @@ use openzt2_zoo_state::{
 };
 
 use super::habitat_region_derivation::{
-    expand_authored_fence_segments_into_cardinal_habitat_grid_boundaries, HabitatFenceSegment,
+    split_fence_segments_at_topology_nodes, HabitatFenceSegment,
 };
 
 #[derive(Component)]
@@ -263,14 +263,12 @@ pub(super) fn project_changed_habitat_fence_inputs(
                         })
                 });
         let next = HabitatBoundaryRaster(
-            expand_authored_fence_segments_into_cardinal_habitat_grid_boundaries(&[
-                HabitatFenceSegment {
-                    fence_entity: entity,
-                    first_topology_node: a.cell.truncate(),
-                    second_topology_node: b.cell.truncate(),
-                    boundary_is_breached: !blocks || gate_open,
-                },
-            ]),
+            split_fence_segments_at_topology_nodes(&[HabitatFenceSegment {
+                fence_entity: entity,
+                first_topology_node: a.cell.truncate(),
+                second_topology_node: b.cell.truncate(),
+                boundary_is_breached: !blocks || gate_open,
+            }]),
             root,
         );
         if old

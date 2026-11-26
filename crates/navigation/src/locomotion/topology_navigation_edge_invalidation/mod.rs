@@ -97,7 +97,7 @@ pub(super) fn synchronize_fence_navigation_crossings(
         .chain(
             path_changes
                 .read()
-                .filter(|change| change.elevated)
+                .filter(|change| !change.changes.elevated_nodes.is_empty())
                 .map(|change| change.root),
         )
         .chain(removed_graphs.read())

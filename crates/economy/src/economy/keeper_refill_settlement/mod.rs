@@ -1,10 +1,7 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
-use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
+use openzt2_game_data::{AssetId, world_definitions::staff_management::StaffJobKind};
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
-use openzt2_zoo_state::behavior_task_execution_types::{
-    running_actions::BehaviorRefillContinuation, BehaviorTaskExecutionState,
-};
-use openzt2_zoo_state::feeding::container_quantity::apply_authored_container_quantity_write;
+use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::feeding::container_quantity::DrinkContainer;
 use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
 use openzt2_zoo_state::staff::staff_employment_types::Staff;
@@ -16,10 +13,9 @@ use openzt2_zoo_state::staff::staff_job_types::StaffJobCancellationPending;
 use openzt2_zoo_state::staff::staff_lifecycle_messages::CancelStaffJobRequest;
 
 #[derive(Component)]
-pub(super) struct StagedBehaviorRefill {
+pub(super) struct KeeperRefillPayment {
     pub(super) job: Entity,
     pub(super) definition: AssetId,
-    pub(super) continuation: BehaviorRefillContinuation,
 }
 
 #[derive(SystemParam)]
@@ -40,8 +36,8 @@ pub(super) struct KeeperRefillSettlement<'w, 's> {
         's,
         (
             &'static DefinitionId,
-            Option<&'static mut FoodContainer>,
-            Option<&'static mut DrinkContainer>,
+            Option<&'static FoodContainer>,
+            Option<&'static DrinkContainer>,
         ),
         With<WorldMember>,
     >,
@@ -68,11 +64,11 @@ pub(super) fn mark_staff_refill_cancellations_before_account_settlement(
 }
 
 impl KeeperRefillSettlement<'_, '_> {
-    pub(super) fn commit(
-        &mut self,
+    pub(super) fn validate(
+        &self,
         actor: Entity,
         task: &BehaviorTaskExecutionState,
-        payment: &StagedBehaviorRefill,
+        payment: &KeeperRefillPayment,
     ) -> Option<()> {
         let current = self.staff.get(actor).ok()?;
         let (job, claim, behavior) = self.jobs.get(payment.job).ok()?;
@@ -86,29 +82,15 @@ impl KeeperRefillSettlement<'_, '_> {
         {
             return None;
         }
-        let (definition, food, drink) = self.containers.get_mut(job.target).ok()?;
+        let (definition, food, drink) = self.containers.get(job.target).ok()?;
         if definition.0 != payment.definition {
             return None;
         }
         let (amount, capacity) = match (food, drink) {
-            (Some(food), None) => {
-                let food = food.into_inner();
-                (&mut food.amount_q16, food.capacity_q16)
-            }
-            (None, Some(drink)) => {
-                let drink = drink.into_inner();
-                (&mut drink.amount_q16, drink.capacity_q16)
-            }
+            (Some(food), None) => (food.amount_q16, food.capacity_q16),
+            (None, Some(drink)) => (drink.amount_q16, drink.capacity_q16),
             _ => return None,
         };
-        if capacity <= 0 || *amount < 0 || *amount >= capacity {
-            return None;
-        }
-        *amount = apply_authored_container_quantity_write(
-            *amount,
-            capacity,
-            payment.continuation.amount_q16,
-        );
-        Some(())
+        (capacity > 0 && (0..capacity).contains(&amount)).then_some(())
     }
 }

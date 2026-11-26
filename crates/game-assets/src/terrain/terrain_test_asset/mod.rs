@@ -23,6 +23,7 @@ pub fn terrain_test_asset(grid: TerrainGrid) -> TerrainAsset {
         water_scene_prefabs_by_normalized_system: Default::default(),
         water_materials_by_normalized_source_path: Default::default(),
         water_particle_effects_by_normalized_system: Default::default(),
+        named_water_particle_sources: Default::default(),
     }
 }
 

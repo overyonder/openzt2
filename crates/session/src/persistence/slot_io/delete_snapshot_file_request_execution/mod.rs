@@ -56,6 +56,7 @@ pub(in super::super) fn begin_deleting_requested_save_slot_snapshot_file(
                 persistence_operation: WorldSnapshotPersistenceOperation::DeleteFromSlot,
                 save_slot_identifier,
             },
+            openzt2_interface_state::persistence::save_slot_types::PersistenceBusy,
             PersistenceSlotFilesystemTask {
                 filesystem_task: IoTaskPool::get().spawn(async move {
                     Ok(match durably_delete_file_if_present(&save_slot_file_path) {

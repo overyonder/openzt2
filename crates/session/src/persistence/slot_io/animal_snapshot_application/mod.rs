@@ -1,12 +1,16 @@
 use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure,
-    animal_snapshot_types::{AnimalSnapshotDeath, AnimalSnapshotRecord},
+    animal_snapshot_types::{
+        AnimalSnapshotDeath, AnimalSnapshotRecord, SavedAnimalTreatment, SavedTranquilization,
+    },
 };
 use bevy::prelude::*;
 use openzt2_animals::animal_lifecycle::animal_entity_spawning::spawn_animal_entity_from_resolved_components;
 use openzt2_animals::animal_lifecycle::animal_spawn_resolution::lower_species_and_variant_to_animal_spawn_components;
 use openzt2_animals::animal_lifecycle::animal_spawn_resolution_types::ResolvedAnimalSpawnComponents;
-use openzt2_animals::animal_welfare::need_timing_types::NeedAdjustmentCadence;
+use openzt2_animals::animal_welfare::{
+    need_latch_types::AnimalNeedLatchBundle, need_timing_types::NeedAdjustmentCadence,
+};
 use openzt2_game_assets::species::species_asset_types::SpeciesView;
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_world_state::simulation_time::deterministic_random_stream::RngDomain;
@@ -21,15 +25,25 @@ use openzt2_zoo_state::animal_behavior::animal_lineage::{
 };
 use openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken;
 use openzt2_zoo_state::animal_health::types::Dead;
-use openzt2_zoo_state::animal_health::types::DeathCause;
+use openzt2_zoo_state::animal_health::types::{
+    DeathCause, RecoveringFromTranquilizer, Tranquilized, TranquilizerDoseTimer,
+    TranquilizerRecoveryTimer, Treatment, TreatmentClock, TreatmentCorrelation,
+};
 use openzt2_zoo_state::animal_lifecycle::types::*;
 use openzt2_zoo_state::animal_welfare::types::*;
 use openzt2_zoo_state::locomotion::locomotion_types::CaffeineFlags;
 
+#[derive(Component)]
+pub(super) struct PendingSavedAnimalTreatment(SavedAnimalTreatment);
+
+fn saved_timer(ns: u64) -> Timer {
+    Timer::new(std::time::Duration::from_nanos(ns), TimerMode::Once)
+}
+
 pub(super) fn resolve_saved_animal_components(
     records: &[AnimalSnapshotRecord],
     species: SpeciesView<'_>,
-    ticks_per_day: u32,
+    ticks_per_day: f64,
 ) -> Result<Vec<ResolvedAnimalSpawnComponents>, WorldSnapshotPersistenceFailure> {
     records
         .iter()
@@ -129,6 +143,30 @@ pub(super) fn spawn_saved_animals(
             };
             entity.insert(Dead { cause, since_tick });
         }
+        if let Some(tranquilization) = record.tranquilization {
+            match tranquilization {
+                SavedTranquilization::Dose {
+                    remaining_ns,
+                    recovery_ns,
+                } => {
+                    entity.insert((
+                        Tranquilized {
+                            recovery_duration: std::time::Duration::from_nanos(recovery_ns),
+                        },
+                        TranquilizerDoseTimer(saved_timer(remaining_ns)),
+                    ));
+                }
+                SavedTranquilization::Recovery { remaining_ns } => {
+                    entity.insert((
+                        RecoveringFromTranquilizer,
+                        TranquilizerRecoveryTimer(saved_timer(remaining_ns)),
+                    ));
+                }
+            }
+        }
+        if let Some(treatment) = record.treatment {
+            entity.insert(PendingSavedAnimalTreatment(treatment));
+        }
         if let Some(welfare) = &record.welfare {
             if let Some((remaining_ns, random)) = welfare.need_adjustment_timer {
                 entity.insert(NeedAdjustmentCadence::from_saved_remaining(
@@ -157,7 +195,7 @@ pub(super) fn spawn_saved_animals(
                 BathroomNeed(values[10]),
             ));
             entity.insert((
-                NeedTriggerState(welfare.triggers),
+                AnimalNeedLatchBundle::from_saved_mask(welfare.triggers),
                 AnimalWelfare(welfare.welfare),
                 CumulativeNeedPoints {
                     good: welfare.cumulative_points[0],
@@ -229,4 +267,79 @@ pub(super) fn restore_animal_relationships(
         }
     }
     Ok(())
+}
+
+pub(super) fn restore_animal_treatments(
+    mut commands: Commands,
+    mut animals: Query<(
+        Entity,
+        &WorldMember,
+        &PendingSavedAnimalTreatment,
+        Option<&mut Treatment>,
+        Option<&mut TreatmentClock>,
+    )>,
+    jobs: Query<(
+        Entity,
+        &openzt2_zoo_state::staff::staff_job_types::StaffJob,
+        &openzt2_zoo_state::staff::staff_job_types::JobClaim,
+        &openzt2_zoo_state::staff::staff_job_types::StaffJobBehaviorTask,
+    )>,
+    identities: Res<PersistentIdIndex>,
+    restores: Query<(
+        Entity,
+        &super::pending_snapshot_application_types::SnapshotRestored,
+    )>,
+) {
+    use super::pending_snapshot_application_types::{SnapshotRestoreFailed, SnapshotRestored};
+    for (entity, member, pending, treatment, clock) in &mut animals {
+        let Some((restore, _)) = restores
+            .iter()
+            .find(|(_, operation)| operation.0 == member.root)
+        else {
+            continue;
+        };
+        let saved = pending.0;
+        let resolved = identities
+            .get(member.root, PersistentId(saved.provider))
+            .and_then(|provider| {
+                let correlation = if let Some(execution_id) = saved.execution_id {
+                    let job = jobs.iter().find_map(|(job, state, claim, task)| {
+                        (state.target == entity
+                            && claim.staff == provider
+                            && task.execution_id == Some(execution_id))
+                        .then_some(job)
+                    })?;
+                    Some(TreatmentCorrelation { job, execution_id })
+                } else {
+                    None
+                };
+                Some(Treatment {
+                    definition: saved.definition,
+                    provider,
+                    correlation,
+                })
+            });
+        let mut animal = commands.entity(entity);
+        animal.remove::<PendingSavedAnimalTreatment>();
+        if let Some(resolved) = resolved {
+            use super::restored_component_values::restore_optional_component;
+            restore_optional_component(&mut animal, treatment, Some(resolved), false);
+            restore_optional_component(
+                &mut animal,
+                clock,
+                Some(TreatmentClock {
+                    timer: saved_timer(saved.remaining_ns),
+                }),
+                false,
+            );
+        } else {
+            commands
+                .entity(restore)
+                .remove::<SnapshotRestored>()
+                .insert(SnapshotRestoreFailed::DuringReplacement {
+                    reason: WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference,
+                    root_to_unload: Some(member.root),
+                });
+        }
+    }
 }

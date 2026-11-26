@@ -121,6 +121,7 @@ impl ScriptFloatAttribute {
             "hygiene" => Some(Self::AnimalNeed(NeedKind::Hygiene)),
             "bathroom" => Some(Self::AnimalNeed(NeedKind::Bathroom)),
             "reproduction" => Some(Self::AnimalNeed(NeedKind::Reproduction)),
+            "breath" | "lifespan" => Some(Self::Authored(AssetId::from_key(name))),
             _ => name.starts_with("f_").then(|| {
                 Self::Authored(AssetId::from_key(&canonicalize_source_document_record_key(
                     name,
@@ -128,6 +129,10 @@ impl ScriptFloatAttribute {
             }),
         }
     }
+}
+
+fn matches_authored_need_attribute(attribute: AssetId) -> bool {
+    attribute == AssetId::from_key("breath") || attribute == AssetId::from_key("lifespan")
 }
 
 #[derive(QueryData)]
@@ -225,6 +230,7 @@ pub(in crate::animal_behavior) struct BehaviorScriptWorldAccess<'w, 's> {
     kinship: Query<'w, 's, &'static ScriptKinshipSources>,
     kinship_links: Query<'w, 's, (&'static ScriptKinshipRole, &'static ScriptKinshipRecipient)>,
     life_stages: Query<'w, 's, &'static AnimalLifeStage>,
+    variants: Query<'w, 's, &'static openzt2_zoo_state::animal_lifecycle::types::AnimalVariant>,
     animals: Query<
         'w,
         's,
@@ -259,13 +265,9 @@ impl<'w, 's> BehaviorScriptWorldAccess<'w, 's> {
             ScriptFloatAttribute::AnimalNeed(need) => {
                 self.need(entity, need).map_or(0.0, need_distress)
             }
-            ScriptFloatAttribute::Authored(attribute) => self
-                .script_floats
-                .get(entity)
-                .ok()
-                .and_then(|values| values.get(attribute))
-                .or_else(|| self.authored_float(entity, attribute))
-                .unwrap_or_default(),
+            ScriptFloatAttribute::Authored(attribute) => {
+                self.authored_float(entity, attribute).unwrap_or_default()
+            }
         }
     }
 
@@ -304,6 +306,17 @@ impl<'w, 's> BehaviorScriptWorldAccess<'w, 's> {
     }
 
     pub(super) fn authored_float(&self, entity: Entity, attribute: AssetId) -> Option<f32> {
+        if let Some(value) = self
+            .script_floats
+            .get(entity)
+            .ok()
+            .and_then(|values| values.get(attribute))
+        {
+            return Some(value);
+        }
+        if self.animals.contains(entity) && matches_authored_need_attribute(attribute) {
+            return Some(0.0);
+        }
         let (_, definition, _, _) = self.objects.get(entity).ok()?;
         let object = self
             .definitions
@@ -645,12 +658,34 @@ impl<'w, 's> BehaviorScriptWorldAccess<'w, 's> {
             })
     }
 
+    pub(super) fn boolean(&self, entity: Entity, name: &str) -> Option<bool> {
+        match name.to_ascii_lowercase().as_str() {
+            "b_adult" => return self.is_adult(entity),
+            "b_male" => return self.is_male(entity),
+            _ => {}
+        }
+        let key = AssetId::from_key(&canonicalize_source_document_record_key(name));
+        if let Some(variant) = self.variants.get(entity).ok().and_then(|variant| {
+            self.species_index
+                .get(&self.species_assets)?
+                .find_variant(variant.0)
+        }) {
+            return Some(variant.behavior_subject_type_identifiers.contains(&key));
+        }
+        let (_, definition, _, _) = self.objects.get(entity).ok()?;
+        let object = self
+            .definitions
+            .get(&self.definition_assets)?
+            .find_object(definition.0)?;
+        Some(object.behavior_type_identifiers.contains(&key))
+    }
+
     /// `BFG_GET_ATTR_BOOLEAN` `b_Male`.
     pub(super) fn is_male(&self, entity: Entity) -> Option<bool> {
         self.animals
             .get(entity)
             .ok()
-            .map(|animal| animal.0 .0 == openzt2_game_data::species::Sex::Male)
+            .map(|animal| animal.0.0 == openzt2_game_data::species::Sex::Male)
     }
 
     /// `BFG_GET_ATTR_STRING` `s_Endangerment` and `s_name` of an animal.
@@ -875,6 +910,7 @@ impl<'w, 's> BehaviorScriptWorldAccess<'w, 's> {
                     let operation = operation.id();
                     // `ZT_GENERIC_TRANSACTION` "destroy" books an object sale.
                     commands.write_message(TransactionRequest {
+                        domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Simulation,
                         operation,
                         debit: Account::External,
                         credit: Account::Zoo,

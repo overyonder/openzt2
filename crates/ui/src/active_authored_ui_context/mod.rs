@@ -9,7 +9,9 @@ use super::{
     authored_modal_presentation::UiAuthoredModalPresentation,
     authored_reusable_list_and_table_runtime_types::UiListRow,
     authored_ui_focus_state::UiFocusable,
-    authored_ui_interaction_enabled_state::UiInteractionEnabled,
+    authored_ui_interaction_enabled_state::{
+        UiInteractionEnabled, UiInteractionRestriction, UiScenarioInteractionOverride,
+    },
     authored_ui_node_projection_components::UiDocumentOwner,
 };
 
@@ -32,6 +34,8 @@ pub(super) fn resolve_authored_focus_scope(
                 Changed<bevy::ui::ComputedStackIndex>,
                 Changed<InheritedVisibility>,
                 Changed<UiInteractionEnabled>,
+                Changed<UiInteractionRestriction>,
+                Changed<UiScenarioInteractionOverride>,
                 Changed<UiAuthoredModalPresentation>,
                 Changed<UiDocumentOwner>,
                 Changed<ChildOf>,
@@ -53,12 +57,16 @@ pub(super) fn resolve_authored_focus_scope(
         mut removed_enabled,
         mut removed_parent,
         mut removed_stack,
+        mut removed_restrictions,
+        mut removed_overrides,
     ): (
         RemovedComponents<UiFocusable>,
         RemovedComponents<UiAuthoredModalPresentation>,
         RemovedComponents<UiInteractionEnabled>,
         RemovedComponents<ChildOf>,
         RemovedComponents<bevy::ui::ComputedStackIndex>,
+        RemovedComponents<UiInteractionRestriction>,
+        RemovedComponents<UiScenarioInteractionOverride>,
     ),
     mut resolved: ResMut<AuthoredFocusScope>,
     ui_nodes: Query<(), With<Node>>,
@@ -66,7 +74,10 @@ pub(super) fn resolve_authored_focus_scope(
     let hierarchy_detached = removed_parent
         .read()
         .any(|entity| ui_nodes.contains(entity));
-    let removed = !removed_controls.is_empty()
+    let overrides_removed =
+        removed_restrictions.read().count() + removed_overrides.read().count() != 0;
+    let removed = overrides_removed
+        || !removed_controls.is_empty()
         || !removed_modals.is_empty()
         || !removed_enabled.is_empty()
         || hierarchy_detached
@@ -94,6 +105,9 @@ pub(super) fn resolve_authored_focus_scope(
     });
 }
 
+#[derive(Component, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct EffectiveUiInteraction(pub(super) bool);
+
 #[allow(clippy::type_complexity)]
 pub(super) fn project_native_widget_interaction_from_authored_enablement(
     mut commands: Commands,
@@ -102,33 +116,40 @@ pub(super) fn project_native_widget_interaction_from_authored_enablement(
         Entity,
         (
             With<Node>,
-            Or<(Changed<UiInteractionEnabled>, Changed<ChildOf>)>,
+            Or<(
+                Changed<UiInteractionEnabled>,
+                Changed<ChildOf>,
+                Changed<UiInteractionRestriction>,
+                Changed<UiScenarioInteractionOverride>,
+            )>,
         ),
     >,
     mut removed_enabled: RemovedComponents<UiInteractionEnabled>,
     mut detached: RemovedComponents<ChildOf>,
+    mut removed_restrictions: RemovedComponents<UiInteractionRestriction>,
+    mut removed_overrides: RemovedComponents<UiScenarioInteractionOverride>,
     children: Query<&Children>,
     new_widgets: Query<
         Entity,
         (
             With<UiInteractionEnabled>,
             Or<(
+                Added<UiInteractionEnabled>,
                 Added<bevy::ui_widgets::Button>,
                 Added<bevy::ui_widgets::Slider>,
                 Added<bevy::ui_widgets::TextInput>,
             )>,
         ),
     >,
-    widgets: Query<
-        Has<bevy::ui::InteractionDisabled>,
+    mut widgets: Query<
         (
-            With<UiInteractionEnabled>,
-            Or<(
-                With<bevy::ui_widgets::Button>,
-                With<bevy::ui_widgets::Slider>,
-                With<bevy::ui_widgets::TextInput>,
-            )>,
+            Has<bevy::ui::InteractionDisabled>,
+            Has<bevy::ui_widgets::Button>,
+            Has<bevy::ui_widgets::Slider>,
+            Has<bevy::ui_widgets::TextInput>,
+            Option<&mut EffectiveUiInteraction>,
         ),
+        With<UiInteractionEnabled>,
     >,
 ) {
     let mut dirty = bevy::ecs::entity::EntityHashSet::default();
@@ -137,6 +158,8 @@ pub(super) fn project_native_widget_interaction_from_authored_enablement(
         .iter()
         .chain(removed_enabled.read())
         .chain(detached.read())
+        .chain(removed_restrictions.read())
+        .chain(removed_overrides.read())
     {
         if widgets.contains(ancestor) {
             dirty.insert(ancestor);
@@ -148,10 +171,21 @@ pub(super) fn project_native_widget_interaction_from_authored_enablement(
         );
     }
     for node in dirty {
-        let Ok(disabled) = widgets.get(node) else {
+        let Ok((disabled, button, slider, text_input, previous)) = widgets.get_mut(node) else {
             continue;
         };
-        match (disabled, context.enabled(node)) {
+        let enabled = context.enabled(node);
+        if let Some(mut previous) = previous {
+            previous.set_if_neq(EffectiveUiInteraction(enabled));
+        } else {
+            commands
+                .entity(node)
+                .insert(EffectiveUiInteraction(enabled));
+        }
+        if !button && !slider && !text_input {
+            continue;
+        }
+        match (disabled, enabled) {
             (true, true) => {
                 commands
                     .entity(node)
@@ -171,7 +205,11 @@ pub struct ActiveAuthoredUiContext<'w, 's> {
     parents: Query<'w, 's, &'static ChildOf>,
     owners: Query<'w, 's, &'static UiDocumentOwner>,
     rows: Query<'w, 's, &'static UiListRow>,
+    goals: Query<'w, 's, &'static openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiScenarioGoalRow>,
+    goal_groups: Query<'w, 's, &'static openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiScenarioGoalGroup>,
     enabled: Query<'w, 's, &'static UiInteractionEnabled>,
+    restricted: Query<'w, 's, (), With<UiInteractionRestriction>>,
+    scenario_enabled: Query<'w, 's, &'static UiScenarioInteractionOverride>,
     focusables: Query<'w, 's, &'static UiFocusable>,
     visibility: Query<'w, 's, &'static InheritedVisibility>,
     layouts: Query<'w, 's, &'static Node>,
@@ -190,19 +228,31 @@ impl ActiveAuthoredUiContext<'_, '_> {
         self.visibility
             .get(entity)
             .is_ok_and(|visible| visible.get())
+            && self.enabled(entity)
             && self.ancestors(entity).all(|node| {
-                !self.enabled.get(node).is_ok_and(|enabled| !enabled.0)
-                    && !self
-                        .layouts
-                        .get(node)
-                        .is_ok_and(|node| node.display == Display::None)
+                !self
+                    .layouts
+                    .get(node)
+                    .is_ok_and(|layout| layout.display == Display::None)
             })
     }
 
-    /// No disabled node on the path to the root, whether or not it is shown.
     pub fn enabled(&self, entity: Entity) -> bool {
-        self.ancestors(entity)
-            .all(|ancestor| !self.enabled.get(ancestor).is_ok_and(|enabled| !enabled.0))
+        let mut authored_enabled = true;
+        let mut scenario = None;
+        for node in self.ancestors(entity) {
+            if self.restricted.contains(node) {
+                return false;
+            }
+            if scenario.is_none() {
+                if let Ok(override_state) = self.scenario_enabled.get(node) {
+                    scenario = Some(override_state.0 && authored_enabled);
+                } else if self.enabled.get(node).is_ok_and(|enabled| !enabled.0) {
+                    authored_enabled = false;
+                }
+            }
+        }
+        scenario.unwrap_or(authored_enabled)
     }
 
     pub fn top_modal(&self) -> Option<Entity> {
@@ -219,6 +269,14 @@ impl ActiveAuthoredUiContext<'_, '_> {
     /// second focus tree or treating each template instance as a modal.
     pub fn document_scope(&self, mut owner: Entity) -> Entity {
         while let Some(list_owner) = self.ancestors(owner).find_map(|ancestor| {
+            let goal_list = self
+                .goals
+                .get(ancestor)
+                .map(|row| row.list)
+                .or_else(|_| self.goal_groups.get(ancestor).map(|group| group.list));
+            if let Ok(list) = goal_list {
+                return self.owners.get(list).ok().map(|owner| owner.0);
+            }
             self.rows
                 .get(ancestor)
                 .ok()

@@ -1,10 +1,22 @@
 //! Last-winner model and scene resolution for parsed Blue Fang actor manifests.
 
 use std::collections::BTreeMap;
+use std::{
+    collections::BTreeSet,
+    io,
+    path::{Path, PathBuf},
+};
+
+use bevy::asset::LoadContext;
+
+use crate::asset_source::AssetArchives;
 
 use super::{
     blue_fang_source_document_format::BlueFangSourceDocumentFormat,
-    ordered_source_document_types::OrderedSourceDocument, path::AssetPath,
+    blue_fang_source_document_parsing::parse_blue_fang_source_document,
+    ordered_source_document_types::OrderedSourceDocument,
+    path::{AssetPath, authored_source_reference_paths},
+    source_document_semantic_name::source_document_names_are_semantically_equal,
 };
 
 #[derive(Default)]
@@ -12,10 +24,93 @@ pub struct BlueFangActorManifestModelAndSceneResolutionIndex {
     native_model_source_paths_by_actor_manifest_key: BTreeMap<String, String>,
     animation_set_asset_paths_by_actor_manifest_key: BTreeMap<String, String>,
     scene_asset_paths_by_authored_actor_key: BTreeMap<String, String>,
+    scoped_actor_manifests: BTreeMap<(String, String), String>,
 }
 
 impl BlueFangActorManifestModelAndSceneResolutionIndex {
-    pub fn insert_parsed_blue_fang_actor_model_manifest(
+    pub(crate) async fn load(
+        archives: &AssetArchives,
+        context: &mut LoadContext<'_>,
+        documents: &[OrderedSourceDocument],
+    ) -> io::Result<Self> {
+        let mut index = Self::default();
+        let mut loaded = BTreeSet::new();
+        for document in documents {
+            let declaring = document.path.key();
+            let mut nodes = vec![&document.root];
+            while let Some(node) = nodes.pop() {
+                nodes.extend(node.element_children());
+                if source_document_names_are_semantically_equal(
+                    &node.name,
+                    "BFTravAnimPathComponent",
+                ) {
+                    continue;
+                }
+                let Some(reference) = node
+                    .attribute_named_any(&["actorfile"])
+                    .filter(|value| !value.trim().is_empty())
+                else {
+                    continue;
+                };
+                let resolved = authored_source_reference_paths(&declaring, reference)
+                    .map(|path| PathBuf::from(path.key()))
+                    .find(|path| archives.source_exists(path))
+                    .or_else(|| archives.resolve_source_reference(Path::new(&declaring), reference))
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::NotFound,
+                            format!("{declaring} references missing actor manifest {reference}"),
+                        )
+                    })?;
+                let manifest_path = AssetPath::new(resolved.to_string_lossy()).key();
+                if loaded.insert(manifest_path.clone()) {
+                    let bytes = context
+                        .read_asset_bytes(resolved)
+                        .await
+                        .map_err(io::Error::other)?;
+                    let manifest =
+                        parse_blue_fang_source_document(AssetPath::new(&manifest_path), &bytes)
+                            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                    index.insert_parsed_blue_fang_actor_model_manifest(&manifest);
+                    if let Some(model) = index
+                        .native_model_source_paths_by_actor_manifest_key
+                        .get_mut(&manifest_path)
+                        && let Some(resolved_model) =
+                            archives.resolve_model_reference(Path::new(&manifest_path), model)
+                    {
+                        *model = AssetPath::new(resolved_model.to_string_lossy()).key();
+                        index.scene_asset_paths_by_authored_actor_key.insert(manifest_path.clone(), crate::model_source::native_model_source_lowering::native_model_scene_labelled_asset_path(model));
+                    }
+                }
+                if let Some(scene) = index
+                    .scene_asset_paths_by_authored_actor_key
+                    .get(&manifest_path)
+                    .cloned()
+                {
+                    index
+                        .scene_asset_paths_by_authored_actor_key
+                        .insert(AssetPath::new(reference).key(), scene);
+                }
+                index
+                    .scoped_actor_manifests
+                    .insert((declaring.clone(), reference.to_owned()), manifest_path);
+            }
+        }
+        Ok(index)
+    }
+
+    pub(crate) fn scoped_actor_manifest_key(
+        &self,
+        declaring_path: &str,
+        reference: &str,
+    ) -> String {
+        self.scoped_actor_manifests
+            .get(&(declaring_path.to_owned(), reference.to_owned()))
+            .cloned()
+            .unwrap_or_else(|| AssetPath::new(reference).key())
+    }
+
+    fn insert_parsed_blue_fang_actor_model_manifest(
         &mut self,
         actor_manifest: &OrderedSourceDocument,
     ) {

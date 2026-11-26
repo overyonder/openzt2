@@ -222,8 +222,7 @@ pub(super) fn create_lua_photo_exposure<'scope, 'env: 'scope>(
                     })
                 })?,
             )?;
-            let distance = (subject.semantics.position_mm.as_vec3() * 0.001)
-                .distance(evidence.camera_position);
+            let distance = subject.facts.camera_distance_squared.sqrt();
             entity.set(
                 "getDistFromCamera",
                 lua.create_function(move |_, _: Table| Ok(distance))?,

@@ -1,26 +1,25 @@
 use std::{io, path::Path};
 
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 
 use crate::{
     asset_source::{
-        archive_entry_asset_path::{
-            archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION,
-        },
         AssetArchives,
+        archive_entry_asset_path::{
+            ARCHIVE_ENTRY_ASSET_EXTENSION, archive_entry_asset_source_path,
+        },
     },
     world_definitions::world_definition_asset_loading::authored_binder_reference_resolution::resolve_binder_file_reference,
     {
         source_document::{
             blue_fang_actor_manifest_model_and_scene_resolution_index::BlueFangActorManifestModelAndSceneResolutionIndex,
-            blue_fang_source_dependency_reference_discovery::collect_blue_fang_actor_manifest_source_references,
             blue_fang_source_document_parsing::parse_blue_fang_source_document,
             ordered_source_document_collection_precedence::reorder_ordered_source_documents_by_requested_normalized_path_keys_and_last_definition_precedence,
             ordered_source_document_types::OrderedSourceDocument,
-            path::{is_authored_file_reference, AssetPath},
+            path::{AssetPath, is_authored_file_reference},
         },
         species::source::{
             collect_authored_species_type_source_references,
@@ -65,8 +64,6 @@ impl AssetLoader for SpeciesAssetLoader {
             .to_string_lossy()
             .replace('\\', "/");
         let mut documents = Vec::<OrderedSourceDocument>::new();
-        let mut actor_manifest_resolution_index =
-            BlueFangActorManifestModelAndSceneResolutionIndex::default();
         let primary = parse_blue_fang_source_document(AssetPath::new(&path), &bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         let primary_path = primary.path.key();
@@ -81,7 +78,7 @@ impl AssetLoader for SpeciesAssetLoader {
             let dependency = if is_authored_file_reference(&reference) {
                 resolve_binder_file_reference(&self.archives, &from, &reference)
             } else {
-                binders.resolve_binder_type_source_path(&self.archives, &from, &reference)?
+                binders.resolve_binder_type_source_path(&self.archives, &reference)?
             };
             let Some(dependency) = dependency else {
                 continue;
@@ -116,23 +113,13 @@ impl AssetLoader for SpeciesAssetLoader {
             &order,
         );
 
-        let mut manifests = collect_blue_fang_actor_manifest_source_references(&documents);
-        while let Some(manifest) = manifests.pop_first() {
-            let resolved = self
-                .archives
-                .resolve_source_reference(Path::new(&primary_path), &manifest)
-                .ok_or_else(|| unresolved_reference(&primary_path, "actor manifest", &manifest))?;
-            let manifest_path = resolved.to_string_lossy().replace('\\', "/");
-            let bytes = context
-                .read_asset_bytes(resolved)
-                .await
-                .map_err(io::Error::other)?;
-            let actor_manifest =
-                parse_blue_fang_source_document(AssetPath::new(&manifest_path), &bytes)
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-            actor_manifest_resolution_index
-                .insert_parsed_blue_fang_actor_model_manifest(&actor_manifest);
-        }
+        let actor_manifest_resolution_index =
+            BlueFangActorManifestModelAndSceneResolutionIndex::load(
+                &self.archives,
+                context,
+                &documents,
+            )
+            .await?;
 
         let mut variant_need_adjustments = Box::default();
         let document = lower_resolved_species_source_document_closure_to_canonical_document(
@@ -164,11 +151,4 @@ impl AssetLoader for SpeciesAssetLoader {
     fn extensions(&self) -> &[&str] {
         &["xml", ARCHIVE_ENTRY_ASSET_EXTENSION]
     }
-}
-
-fn unresolved_reference(from: &str, kind: &str, reference: &str) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::NotFound,
-        format!("{from} references missing {kind} {reference}"),
-    )
 }

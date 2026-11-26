@@ -1,3 +1,4 @@
+use super::text_replacement_operations::currency_cents;
 use bevy::{
     ecs::{relationship::RelationshipTarget, system::SystemParam},
     prelude::*,
@@ -197,29 +198,36 @@ fn project_information_list_value(
         UiIntegerPropertyBindingSource::FacilityProfitCents => facility_profits
             .get(subject)
             .ok()
-            .map(|profit| profit.total.0)
+            .map(|profit| currency_cents(profit.total))
             .or_else(|| {
                 donation_totals
                     .get(subject)
                     .ok()
-                    .map(|total| total.amount.0)
+                    .map(|total| currency_cents(total.amount))
             })
             .unwrap_or(0),
         UiIntegerPropertyBindingSource::FacilityAverageProfitCents => facility_profits
             .get(subject)
             .ok()
-            .map(|profit| profit.average().0)
+            .map(|profit| currency_cents(profit.average()))
             .or_else(|| {
                 donation_totals.get(subject).ok().map(|total| {
                     (total.count != 0)
-                        .then(|| total.amount.0 / i64::from(total.count))
+                        .then(|| {
+                            currency_cents(
+                                total
+                                    .amount
+                                    .checked_scale((total.count as f32).recip())
+                                    .unwrap_or_default(),
+                            )
+                        })
                         .unwrap_or(0)
                 })
             })
             .unwrap_or(0),
         UiIntegerPropertyBindingSource::DonationTotalCents => donation_totals
             .get(subject)
-            .map(|total| total.amount.0)
+            .map(|total| currency_cents(total.amount))
             .unwrap_or(0),
         UiIntegerPropertyBindingSource::DonationCount => donation_totals
             .get(subject)
@@ -229,7 +237,14 @@ fn project_information_list_value(
             .get(subject)
             .map(|total| {
                 (total.count != 0)
-                    .then(|| total.amount.0 / i64::from(total.count))
+                    .then(|| {
+                        currency_cents(
+                            total
+                                .amount
+                                .checked_scale((total.count as f32).recip())
+                                .unwrap_or_default(),
+                        )
+                    })
                     .unwrap_or(0)
             })
             .unwrap_or(0),

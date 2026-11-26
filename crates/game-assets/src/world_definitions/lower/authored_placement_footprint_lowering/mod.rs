@@ -14,13 +14,33 @@ use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
 use crate::source_document::ui::parser::source_scalar_and_attribute_reading::parse_source_bool;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::object_placement::{
     FootprintCell, FootprintCellFlags, PlaceableDefinition, PlacementConstraints,
 };
-use openzt2_game_data::AssetId;
 
 #[cfg(test)]
 mod tests;
+
+pub(super) fn authored_minimum_object_detail(
+    record: &RecordView<'_, '_>,
+) -> Result<Option<u8>, BindError> {
+    authored_type_family_components(record, "ZTPlacementData")
+        .into_iter()
+        .find_map(|placement| {
+            placement.attribute_named_any(&["minimumObjectDetail", "objectDetail"])
+        })
+        .or_else(|| record.value(&["minimumObjectDetail", "objectDetail"]))
+        .map(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "low" => Ok(0),
+            "med" | "medium" => Ok(1),
+            "high" => Ok(2),
+            value => value
+                .parse::<u8>()
+                .map_err(|_| BindError::record(record, "invalid minimum object detail")),
+        })
+        .transpose()
+}
 
 fn authored_headroom_policy(record: &RecordView<'_, '_>) -> Result<(f32, bool), BindError> {
     let height =
@@ -185,6 +205,7 @@ pub(super) fn bind_authored_placeable(
                 )
             });
     output.document.placeables.push(PlaceableDefinition {
+        minimum_object_detail: authored_minimum_object_detail(record)?,
         adjacent_to_water,
         id: id(record.key),
         surface_policy: authored_surface_policy(record)?,

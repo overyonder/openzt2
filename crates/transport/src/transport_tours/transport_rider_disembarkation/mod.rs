@@ -1,4 +1,7 @@
-use bevy::{ecs::entity::EntityHashSet, prelude::*};
+use bevy::{
+    ecs::entity::{EntityHashMap, EntityHashSet},
+    prelude::*,
+};
 
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
@@ -6,6 +9,7 @@ use openzt2_game_assets::world_definitions::{
 };
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::{
+    behavior_task_execution_types::running_actions::AuthoredTourRide,
     economy::{
         account_transaction_types::{Account, TransactionKind, TransactionRequest},
         facility_economy_types::{Price, Wallet},
@@ -48,6 +52,7 @@ pub(super) fn disembark_transport_riders_and_request_service_fare_transactions(
             Has<FareOperations>,
             Option<&RideTourContributions>,
             Option<&Wallet>,
+            Option<&AuthoredTourRide>,
         ),
         (With<Guest>, With<BoardedAtStation>),
     >,
@@ -71,6 +76,7 @@ pub(super) fn disembark_transport_riders_and_request_service_fare_transactions(
         return;
     };
     let mut disembarked = EntityHashSet::new();
+    let mut rating_updates = EntityHashMap::default();
     for arrival in arrivals.read() {
         let Some(station) = arrival.target else {
             continue;
@@ -107,10 +113,16 @@ pub(super) fn disembark_transport_riders_and_request_service_fare_transactions(
             });
         let mut last_rating = None;
         for guest in aboard.iter() {
-            let Ok((score, world, paying, contributions, wallet)) = riders.get(guest) else {
+            let Ok((score, world, paying, contributions, wallet, authored_ride)) =
+                riders.get(guest)
+            else {
                 continue;
             };
-            if paying || world.root != station_world.root || !disembarked.insert(guest) {
+            if paying
+                || world.root != station_world.root
+                || authored_ride.is_some_and(|ride| ride.destination != station)
+                || !disembarked.insert(guest)
+            {
                 continue;
             }
             let rating = calculate_tour_rating_from_authored_score_ranges(catalogue, score.value);
@@ -138,6 +150,7 @@ pub(super) fn disembark_transport_riders_and_request_service_fare_transactions(
                     .spawn((*world, FareGuest(guest), fare, QueuedFare::pending(price.0)))
                     .id();
                 transactions.write(TransactionRequest {
+                    domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Simulation,
                     operation,
                     debit: Account::Entity(guest),
                     credit: Account::Zoo,
@@ -166,11 +179,14 @@ pub(super) fn disembark_transport_riders_and_request_service_fare_transactions(
             commands.entity(guest).remove::<TransportRider>();
         }
         if let Some(rating) = last_rating {
-            if let Ok(mut current) = ratings.get_mut(station) {
-                current.set_if_neq(rating);
-            } else {
-                commands.entity(station).insert(rating);
-            }
+            rating_updates.insert(station, rating);
+        }
+    }
+    for (station, rating) in rating_updates {
+        if let Ok(mut current) = ratings.get_mut(station) {
+            current.set_if_neq(rating);
+        } else {
+            commands.entity(station).insert(rating);
         }
     }
 }

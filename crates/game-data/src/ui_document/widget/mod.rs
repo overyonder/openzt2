@@ -59,6 +59,8 @@ pub enum UiWidgetRecord {
         grid: UiGridRecord,
         included_kinds: Vec<AssetId>,
         excluded_kinds: Vec<AssetId>,
+        #[serde(default)]
+        non_remembered_root_types: Vec<AssetId>,
         row_document: AssetId,
         filters: Vec<AssetId>,
     },

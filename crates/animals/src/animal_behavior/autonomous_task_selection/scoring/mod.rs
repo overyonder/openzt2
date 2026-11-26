@@ -1,14 +1,14 @@
 //! Native need-reduction scoring for the supported concrete candidates.
 
 use super::candidate_facts::AnimalCandidateFactsItem;
-use openzt2_game_data::behavior::document::BehaviorTask;
 use openzt2_game_data::AssetId;
+use openzt2_game_data::behavior::document::BehaviorTask;
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
 
 pub(super) fn score_animal_task(
     task: &BehaviorTask,
     facts: &AnimalCandidateFactsItem<'_, '_>,
-    time: (u64, u32),
+    time: (u64, f64),
     outside_range_need_value: f32,
     target_distance: f32,
     target_biome: impl FnOnce() -> Option<AssetId>,
@@ -22,7 +22,8 @@ pub(super) fn score_animal_task(
         target_biome,
         |attribute| {
             if attribute == AssetId::from_key("lifespan") {
-                facts.age_q16(time.0, time.1).map(|age| (age, true))
+                facts.source_need(attribute)
+                    .or_else(|| facts.age_q16(time.0, time.1).map(|age| (age, true)))
             } else {
                 facts.source_need(attribute)
             }

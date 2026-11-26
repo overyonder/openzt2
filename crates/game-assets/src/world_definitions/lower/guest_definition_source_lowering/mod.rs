@@ -15,11 +15,11 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::{
     GuestDefinition, GuestDestinationWeight, GuestMemoryPolicy, GuestNeedDefinition, GuestNeedKind,
     GuestRarity, GuestReactionDefinition, GuestSignedNeedDefinition, MemoryReplacement,
 };
-use openzt2_game_data::AssetId;
 
 pub(super) fn bind_guest(
     record: &RecordView<'_, '_>,
@@ -93,6 +93,7 @@ pub(super) fn bind_guest(
         })
         .collect::<Result<Vec<_>, BindError>>()?;
     output.document.guests.push(GuestDefinition {
+        caffeine_factors: super::staff_role_and_job_source_lowering::lower_person_caffeine_factors(record)?,
         donation: lower_guest_donation_policy(record)?,
         id: id(record.key),
         object: asset(record, &["object", "entity"]),
@@ -287,6 +288,7 @@ fn bind_authored_guest_binder(
     }
 
     output.document.guests.push(GuestDefinition {
+        caffeine_factors: super::staff_role_and_job_source_lowering::lower_person_caffeine_factors(record)?,
         id: id(record.key),
         object: id(record.key),
         behavior_subject_type_identifiers,
@@ -343,6 +345,63 @@ fn bind_authored_guest_binder(
         },
     });
     Ok(())
+}
+
+pub(super) fn lower_guest_show_need(
+    record: &RecordView<'_, '_>,
+) -> Result<Option<super::super::world_definition_document_asset_and_demand_loaded_dependency_paths::AuthoredGuestShowNeed>, BindError>{
+    use super::super::world_definition_document_asset_and_demand_loaded_dependency_paths::AuthoredGuestShowNeed;
+    let Some(state) = authored_type_family_elements_named(record, "BFAIStateVar")
+        .into_iter()
+        .find(|state| {
+            state
+                .attribute_named_any(&["Name"])
+                .is_some_and(|name| name.eq_ignore_ascii_case("show"))
+        })
+    else {
+        return Ok(None);
+    };
+    let q16 = |authored: &str| {
+        let value = (parse::<f64>(authored, record, "show need")? * 65_536.0).round();
+        if !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&value) {
+            return Err(BindError::record(record, "show need exceeds signed Q16"));
+        }
+        Ok(value as i32)
+    };
+    let field = |name| {
+        state
+            .attribute_named_any(&[name])
+            .filter(|value| !value.trim().is_empty())
+            .map(q16)
+            .transpose()
+    };
+    let initial_q16 = if let Some(initial) = field("Value")? {
+        [initial; 2]
+    } else {
+        let minimum = field("ValueMin")?.unwrap_or_default();
+        let maximum = field("ValueMax")?.unwrap_or(minimum);
+        if maximum < minimum {
+            return Err(BindError::record(
+                record,
+                "show need initial range is inverted",
+            ));
+        }
+        [minimum, maximum]
+    };
+    let adjustment_q16 = authored_type_family_elements_named(record, "BFAINeedAdjusts")
+        .into_iter()
+        .filter(|row| row.attribute_named_any(&["Name"]).is_none())
+        .find_map(|row| row.attribute_named_any(&["show"]))
+        .map(q16)
+        .transpose()?
+        .unwrap_or_default();
+    Ok(Some(AuthoredGuestShowNeed {
+        initial_q16,
+        adjustment_q16,
+        trigger_q16: field("TriggerThreshold")?,
+        cessation_q16: field("CessationThreshold")?,
+        critical_q16: field("CriticalThreshold")?,
+    }))
 }
 
 fn bind_authored_guest_signed_need(

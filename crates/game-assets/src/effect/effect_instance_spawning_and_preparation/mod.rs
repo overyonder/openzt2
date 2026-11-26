@@ -12,8 +12,8 @@ use bevy::gltf::GltfMesh;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy_hanabi::{
-    EffectAsset, EffectChildren, EffectDeltaTime, EffectMesh, EffectParent, EffectSpawner,
-    ExternalEffectSpawner, ParticleEffect,
+    EffectAsset, EffectChildren, EffectDeltaTime, EffectEventCapacity, EffectMesh, EffectParent,
+    EffectSpawnBudgetGroup, EffectSpawner, ExternalEffectSpawner, ParticleEffect,
 };
 use openzt2_game_data::AssetId;
 
@@ -120,11 +120,13 @@ pub(super) struct PreparedParticleInstanceProjection<'w, 's> {
     children: Query<'w, 's, &'static Children>,
     collision_children: Query<'w, 's, &'static EffectChildren>,
     child_roles: Query<'w, 's, &'static AuthoredParticleChild>,
+    event_capacities: Query<'w, 's, &'static mut EffectEventCapacity>,
+    spawn_groups: Query<'w, 's, &'static mut EffectSpawnBudgetGroup>,
     live: Query<
         'w,
         's,
         (
-            &'static mut LiveParticleEffectInstance,
+            &'static LiveParticleEffectInstance,
             &'static mut ParticleEffect,
             &'static mut ControlledEffectEmissionSettings,
             Option<&'static mut EffectSpawner>,
@@ -143,13 +145,12 @@ pub(super) fn reconcile_loaded_particle_effect_instances(
     mut failures: MessageReader<AssetLoadFailedEvent<ParticleEffectDocumentAsset>>,
     mut material_failures: MessageReader<AssetLoadFailedEvent<MaterialAsset>>,
     mut mesh_failures: MessageReader<AssetLoadFailedEvent<GltfMesh>>,
-    mut pending_reloads: Local<HashSet<BevyAssetId<ParticleEffectDocumentAsset>>>,
     pending: Query<(
         Entity,
         Ref<PendingEffectInstance>,
         Has<ParticleEffectWaveSurface>,
     )>,
-    newly_pending: Query<Entity, Added<PendingEffectInstance>>,
+    newly_pending: Query<Entity, Changed<PendingEffectInstance>>,
     document_roots: Query<
         (Entity, &ParticleEffectDocumentInstance),
         Without<PendingEffectInstance>,
@@ -179,12 +180,10 @@ pub(super) fn reconcile_loaded_particle_effect_instances(
             }
             AssetEvent::Modified { id } => {
                 changed.insert(id);
-                pending_reloads.insert(id);
                 discarded_prototypes.insert(id);
             }
             AssetEvent::Removed { id } => {
                 removed.insert(id);
-                pending_reloads.remove(&id);
                 discarded_prototypes.insert(id);
             }
             AssetEvent::Unused { id } => {
@@ -218,15 +217,8 @@ pub(super) fn reconcile_loaded_particle_effect_instances(
     let reloaded: HashSet<_> = changed
         .iter()
         .copied()
-        .filter(|&id| {
-            pending_reloads.contains(&id)
-                && documents.contains(id)
-                && asset_server.is_loaded_with_dependencies(id)
-        })
+        .filter(|&id| documents.contains(id) && asset_server.is_loaded_with_dependencies(id))
         .collect();
-    for id in reloaded.iter().chain(&failed) {
-        pending_reloads.remove(id);
-    }
     let emitter_roots = if reloaded.is_empty() && removed.is_empty() {
         Vec::new()
     } else {
@@ -263,7 +255,7 @@ pub(super) fn reconcile_loaded_particle_effect_instances(
             .iter()
             .filter_map(|(entity, request, _)| {
                 let id = request.effect_asset.id();
-                (request.is_added()
+                (request.is_changed()
                     || changed.contains(&id)
                     || removed.contains(&id)
                     || failed.contains(&id)
@@ -371,6 +363,7 @@ impl PreparedParticleInstanceProjection<'_, '_> {
                 emitter,
                 &emitter.effect,
                 manual_count,
+                child,
             );
         }
         self.reconcile_child_order(entity, ordered, previous);
@@ -401,7 +394,16 @@ impl PreparedParticleInstanceProjection<'_, '_> {
         } else {
             &emitter.effect
         };
-        self.project_emitter(entity, source, document, id, emitter, effect, manual_count);
+        self.project_emitter(
+            entity,
+            source,
+            document,
+            id,
+            emitter,
+            effect,
+            manual_count,
+            entity,
+        );
         true
     }
 
@@ -414,6 +416,7 @@ impl PreparedParticleInstanceProjection<'_, '_> {
         emitter: &PreparedParticleEmitter,
         effect: &Handle<EffectAsset>,
         manual_count: u32,
+        group_owner: Entity,
     ) {
         let mut previous = self.projected_children(entity);
         let mut ordered = Vec::with_capacity(emitter.collision_children.len());
@@ -426,6 +429,12 @@ impl PreparedParticleInstanceProjection<'_, '_> {
                 occurrence: collision.occurrence,
             };
             let child = self.take_or_spawn_child(entity, role, &mut previous);
+            let capacity = EffectEventCapacity(collision.event_capacity);
+            if let Ok(mut current) = self.event_capacities.get_mut(child) {
+                current.set_if_neq(capacity);
+            } else {
+                self.commands.entity(child).insert(capacity);
+            }
             ordered.push(child);
             self.project_emitter(
                 child,
@@ -435,6 +444,7 @@ impl PreparedParticleInstanceProjection<'_, '_> {
                 child_emitter,
                 &collision.effect,
                 0,
+                group_owner,
             );
         }
         if !self
@@ -451,25 +461,41 @@ impl PreparedParticleInstanceProjection<'_, '_> {
         }
         self.reconcile_child_order(entity, ordered, previous);
 
+        match (
+            emitter.shared_spawn_capacity,
+            self.spawn_groups.get_mut(entity),
+        ) {
+            (Some(capacity), Ok(mut group)) => {
+                group.set_if_neq(EffectSpawnBudgetGroup {
+                    owner: group_owner,
+                    capacity,
+                });
+            }
+            (Some(capacity), Err(_)) => {
+                self.commands.entity(entity).insert(EffectSpawnBudgetGroup {
+                    owner: group_owner,
+                    capacity,
+                });
+            }
+            (None, Ok(_)) => {
+                self.commands
+                    .entity(entity)
+                    .remove::<EffectSpawnBudgetGroup>();
+            }
+            (None, Err(_)) => {}
+        }
+
         let prototype =
             self.prepare_prototype_mesh(source.id(), id, emitter.prototype_mesh.as_ref());
         let mut target = self.commands.entity(entity);
         target.remove::<ParticleEffectGraphReady>();
-        if let Ok((
-            mut live,
-            mut particle,
-            mut settings,
-            spawner,
-            draining,
-            mesh,
-            uses_plane,
-            explicit,
-        )) = self.live.get_mut(entity)
+        if let Ok((_, mut particle, mut settings, spawner, draining, mesh, uses_plane, explicit)) =
+            self.live.get_mut(entity)
         {
-            // Force a refresh of the draw configuration when the winning document changes.
-            live.set_changed();
             settings.set_if_neq(emitter.emission_settings.clone());
-            particle.handle = effect.clone();
+            if particle.handle != *effect {
+                particle.handle = effect.clone();
+            }
             if let (Some(mut spawner), Some(effect)) = (spawner, self.effects.get(effect)) {
                 spawner.settings = effect.spawner;
             }

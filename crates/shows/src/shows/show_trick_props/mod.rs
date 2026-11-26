@@ -10,11 +10,11 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
+    AssetId,
     world_definitions::{
         animal_shows_and_training::TrickDefinition,
         object_placement::{FootprintCellFlags, PlaceableDefinition},
     },
-    AssetId,
 };
 use openzt2_world::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
 use openzt2_world_state::world_spawn::{
@@ -23,6 +23,7 @@ use openzt2_world_state::world_spawn::{
     world_membership_types::{WorldMember, WorldRoot},
 };
 use openzt2_zoo_state::{
+    animal_behavior::behavior_token_types::BehaviorTrickPropOrigin,
     aquatic::aquatic_simulation_types::{Tank, TankGeometry},
     habitat::habitat_types::{HabitatMember, HabitatRegion},
     placement::{
@@ -68,7 +69,7 @@ pub(super) fn load_scheduled_prop_prefabs(
         return;
     }
     for (entity, run, order) in &runs {
-        if run.phase != ShowPhase::Preshow {
+        if !matches!(run.phase, ShowPhase::Preshow | ShowPhase::Conducting) {
             continue;
         }
         let handles: HashMap<_, _> = slots
@@ -127,7 +128,7 @@ impl ShowPropPlacement<'_, '_> {
         show: Entity,
         action: Entity,
         commands: &mut Commands,
-    ) -> Option<Entity> {
+    ) -> Option<(Entity, Vec3)> {
         let (stage_pose, member) = self.stages.get(stage).ok()?;
         let grid = self.grids.get(member.root).ok()?;
         let habitat = self.performers.get(performer).ok()?;
@@ -220,10 +221,12 @@ impl ShowPropPlacement<'_, '_> {
             None,
             RigidBody::Static,
         );
-        commands
-            .entity(prop)
-            .insert((ShowTrickPropOf(action), *habitat));
-        Some(prop)
+        commands.entity(prop).insert((
+            ShowTrickPropOf(action),
+            BehaviorTrickPropOrigin(pose.translation),
+            *habitat,
+        ));
+        Some((prop, pose.translation))
     }
 }
 

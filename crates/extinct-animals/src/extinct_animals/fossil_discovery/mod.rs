@@ -338,6 +338,7 @@ fn settle_fossil_dig(
                 ))
                 .id();
             commands.write_message(TransactionRequest {
+                domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Simulation,
                 operation,
                 debit: Account::External,
                 credit: Account::Zoo,

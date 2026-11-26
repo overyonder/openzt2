@@ -18,8 +18,8 @@ use openzt2_interface_state::ui::{
     authored_ui_selection_state::UiSelected,
     ui_document_asset_load_failure::UiDocumentAssetLoadFailed,
     ui_document_lifecycle_contracts::{
-        AuthoredUiDocumentOperation, HideUiDocument, ShowUiDocument, ShowUiRole,
-        UiDocumentOperation,
+        AuthoredUiDocumentOperation, HideUiDocument, ShowUiDocument, ShowUiRole, ShowUiRoleInScope,
+        UiDocumentOperation, UiRoleScope,
     },
 };
 use openzt2_world_state::simulation_time::simulation_control_types::UiDocumentPauseTransfer;
@@ -52,6 +52,10 @@ impl UiDocumentOpeningEffects {
 pub(crate) fn ingest_ui_document_opening_requests(
     mut commands: Commands,
     mut roles: MessageReader<ShowUiRole>,
+    scoped: (
+        Option<MessageReader<ShowUiRoleInScope>>,
+        Query<Option<&mut UiRoleScope>>,
+    ),
     mut openings: MessageReader<ShowUiDocument>,
     mut cancellations: MessageReader<HideUiDocument>,
     server: Res<AssetServer>,
@@ -61,11 +65,15 @@ pub(crate) fn ingest_ui_document_opening_requests(
     mut activations: MessageWriter<UiNodeActivated>,
     children: Query<&Children>,
 ) {
+    let (mut scopes, mut scope_owners) = scoped;
     let cancelled = cancellations
         .read()
         .map(|request| request.owner)
         .collect::<HashSet<_>>();
     for &owner in &cancelled {
+        if scope_owners.get(owner).is_ok_and(|scope| scope.is_some()) {
+            commands.entity(owner).remove::<UiRoleScope>();
+        }
         for document in owners.get(owner).into_iter().flatten().flatten() {
             if current
                 .get(*document)
@@ -80,10 +88,59 @@ pub(crate) fn ingest_ui_document_opening_requests(
         let path = select_bevy_asset_path_for_canonical_ui_document_role(request.role)?;
         Some((request.owner, server.load::<UiDocumentAsset>(path), true))
     });
+    let mut scoped_requests = Vec::new();
+    let mut request_indices = bevy::ecs::entity::EntityHashMap::default();
+    for request in scopes.as_mut().into_iter().flat_map(|scopes| scopes.read()) {
+        if cancelled.contains(&request.owner)
+            || cancelled.contains(&request.host)
+            || request.owner == request.host
+            || !owners.contains(request.host)
+        {
+            continue;
+        }
+        let Some(path) = select_bevy_asset_path_for_canonical_ui_document_role(request.role) else {
+            continue;
+        };
+        if !scope_owners.contains(request.owner) {
+            continue;
+        }
+        let next = (
+            request.owner,
+            UiRoleScope {
+                host: request.host,
+                role: request.role,
+            },
+            path,
+        );
+        let index = *request_indices
+            .entry(request.owner)
+            .or_insert(scoped_requests.len());
+        if index == scoped_requests.len() {
+            scoped_requests.push(next);
+        } else {
+            scoped_requests[index] = next;
+        }
+    }
+    let mut scoped_openings = Vec::new();
+    for (owner, next, path) in scoped_requests {
+        let Ok(current) = scope_owners.get_mut(owner) else {
+            continue;
+        };
+        let host = next.host;
+        if let Some(mut scope) = current {
+            scope.set_if_neq(next);
+        } else {
+            commands.entity(owner).insert(next);
+        }
+        scoped_openings.push((host, server.load::<UiDocumentAsset>(path), false));
+    }
     let document_openings = openings
         .read()
         .map(|request| (request.owner, request.document.clone(), false));
-    for (owner, handle, reopen_entry) in role_openings.chain(document_openings) {
+    for (owner, handle, reopen_entry) in role_openings
+        .chain(document_openings)
+        .chain(scoped_openings)
+    {
         if cancelled.contains(&owner) || !requested.insert((owner, handle.id())) {
             continue;
         }
@@ -207,10 +264,9 @@ pub(crate) fn apply_authored_ui_document_opening_operations(
                         pause.set_if_neq(UiDocumentPauseTransfer(true));
                     }
                 }
-                UiDocumentOperation::ActivateSelectedChild { target, source } => {
-                    effects
-                        .0
-                        .push(UiDocumentOperation::ActivateSelectedChild { target, source });
+                UiDocumentOperation::PressNode { .. }
+                | UiDocumentOperation::ActivateSelectedChild { .. } => {
+                    effects.0.push(request.operation);
                 }
             }
             continue;
@@ -246,10 +302,11 @@ pub(crate) fn apply_authored_ui_document_opening_operations(
                     .0
                     .push(UiDocumentOperation::ShowNode { target, visible });
             }
-            UiDocumentOperation::ActivateSelectedChild { target, source } if *open => {
-                effects
-                    .0
-                    .push(UiDocumentOperation::ActivateSelectedChild { target, source });
+            UiDocumentOperation::PressNode { .. }
+            | UiDocumentOperation::ActivateSelectedChild { .. }
+                if *open =>
+            {
+                effects.0.push(request.operation);
             }
             _ => {}
         }
@@ -391,6 +448,15 @@ impl LiveUiDocumentEffects<'_, '_> {
                     }
                 }
             }
+            UiDocumentOperation::PressNode { target, source } => {
+                if let Some(node) = self.targets.candidates(document, target).next() {
+                    emit(UiNodeActivated {
+                        node,
+                        source,
+                        trigger: UiTrigger::Press,
+                    });
+                }
+            }
             UiDocumentOperation::ActivateSelectedChild { target, source } => {
                 let selected = self
                     .targets
@@ -484,5 +550,50 @@ mod tests {
             .world()
             .get::<Children>(owner)
             .is_none_or(Children::is_empty));
+    }
+}
+
+pub(crate) fn open_authored_award_panel(
+    mut requests: MessageReader<
+        openzt2_interface_state::information::award_presentation_types::AwardProgramEffect,
+    >,
+    owners: Query<
+        (
+            Entity,
+            Option<&openzt2_world_state::world_spawn::world_membership_types::WorldMember>,
+        ),
+        With<openzt2_interface_state::ui::ui_document_lifecycle_contracts::InGameUiOwner>,
+    >,
+    mut documents: MessageWriter<AuthoredUiDocumentOperation>,
+) {
+    use openzt2_game_data::ui_document::document::UiDocumentRole;
+    use openzt2_interface_state::information::award_presentation_types::AwardProgramEffect;
+
+    for request in requests.read() {
+        let AwardProgramEffect::ShowAwardPanel { root } = *request else {
+            continue;
+        };
+        let Some((owner, _)) = owners
+            .iter()
+            .find(|(_, world)| world.is_some_and(|world| world.root == root))
+            .or_else(|| owners.single().ok().filter(|(_, world)| world.is_none()))
+        else {
+            continue;
+        };
+        let role = UiDocumentRole::ZooStatus;
+        for operation in [
+            UiDocumentOperation::Open,
+            UiDocumentOperation::PressNode {
+                target: role.node_id("awards tab"),
+                source: openzt2_interface_state::input::input_types::ActionSource::System,
+            },
+        ] {
+            documents.write(AuthoredUiDocumentOperation {
+                owner,
+                role,
+                operation,
+                transfer_pause: false,
+            });
+        }
     }
 }

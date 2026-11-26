@@ -17,7 +17,6 @@ use openzt2_zoo_state::construction::construction_interaction_types::Constructio
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementFailure;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
-use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::ModelAnimationAssetLibrary;
@@ -26,6 +25,7 @@ use openzt2_world_state::animation_graph::model_animation_asset_binding_types::P
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
 use openzt2_zoo_state::habitat::habitat_types::HabitatLocatable;
+use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::AnimalSpeciesAwaitingHabitatPlacement;
 use openzt2_world_state::world_spawn::prefab_model_tint::PrefabModelTint;
 use openzt2_world_state::world_spawn::prefab_object_presentation_attachment_projection::PrefabObjectPresentationAttachmentProjection;
 use openzt2_world::world_spawn::prefab_presentation_render_tree::spawn_prefab_render_tree;
@@ -50,13 +50,18 @@ use openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectReloc
 pub(super) fn create_active_object_placement_preview(
     mut commands: Commands,
     tool: Res<ConstructionTool>,
-    cursors: Query<(&ConstructionCursor, Option<&ObjectPlacementPreviewRequest>)>,
+    cursors: Query<(
+        &ConstructionCursor,
+        Option<&ObjectPlacementPreviewRequest>,
+        Option<&AnimalSpeciesAwaitingHabitatPlacement>,
+    )>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut previews: Query<(
         Entity,
         &mut ConstructionPreview,
         Option<&PlacedObjectRelocationSource>,
+        Option<&AnimalPreviewSpecies>,
     )>,
     roots: Query<Entity, With<WorldRoot>>,
     relocating: Query<
@@ -69,7 +74,8 @@ pub(super) fn create_active_object_placement_preview(
         With<RelocatingPlacedObject>,
     >,
 ) {
-    let (Ok((cursor, requested)), Ok(root)) = (cursors.single(), roots.single()) else {
+    let (Ok((cursor, requested, animal_placement)), Ok(root)) = (cursors.single(), roots.single())
+    else {
         return;
     };
     let definition = match *tool {
@@ -84,9 +90,21 @@ pub(super) fn create_active_object_placement_preview(
         .iter()
         .find(|(_, placeable, _, _)| placeable.definition == definition);
     let relocation_source = relocation.map(|(entity, ..)| entity);
-    if let Some((_, mut preview, _)) = previews.iter_mut().find(|(_, preview, source)| {
-        preview.definition == definition && source.map(|source| source.0) == relocation_source
-    }) {
+    let animal = animal_placement
+        .filter(|_| *tool == ConstructionTool::Placement)
+        .map(|placement| AnimalPreviewSpecies {
+            species: placement.species,
+            requested_variant: placement.variant,
+        });
+    if let Some((_, mut preview, _, _)) =
+        previews
+            .iter_mut()
+            .find(|(_, preview, source, current_animal)| {
+                preview.definition == definition
+                    && source.map(|source| source.0) == relocation_source
+                    && *current_animal == animal.as_ref()
+            })
+    {
         if let Some((source, _, _, Some(rotation))) = relocation {
             if let Some(placeable) = active_definitions
                 .get(&definitions)
@@ -168,6 +186,9 @@ pub(super) fn create_active_object_placement_preview(
     if placeable.is_some() {
         preview.insert(ObjectPlacementPreviewPermissionFacts::default());
     }
+    if let Some(animal) = animal {
+        preview.insert(animal);
+    }
     let preview = preview.id();
     commands.spawn((
         ObjectPlacementPreviewModelPresentation,
@@ -186,14 +207,28 @@ pub(super) fn create_active_object_placement_preview(
     }
 }
 
+#[derive(Component, Clone, Copy, Eq, PartialEq)]
+pub(super) struct AnimalPreviewSpecies {
+    species: AssetId,
+    requested_variant: Option<AssetId>,
+}
+
 #[derive(Component)]
-pub(super) struct PendingAnimalPreviewAnimation;
+pub(super) struct PendingAnimalPreviewAnimation(AnimalPreviewSpecies);
+
+#[derive(Component)]
+pub(super) struct AnimalPreviewInitialRepetition(AnimationPlaybackRepetitionPolicy);
 
 pub(super) fn hydrate_object_placement_preview_prefab_render_tree(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,
     previews: Query<
-        (Entity, &ObjectPlacementPrefabSource, &Children),
+        (
+            Entity,
+            &ObjectPlacementPrefabSource,
+            &Children,
+            Option<&AnimalPreviewSpecies>,
+        ),
         (
             With<ConstructionPreview>,
             Without<ObjectPlacementPreviewPrefabHydrated>,
@@ -201,7 +236,7 @@ pub(super) fn hydrate_object_placement_preview_prefab_render_tree(
     >,
     presentations: Query<(), With<ObjectPlacementPreviewModelPresentation>>,
 ) {
-    for (entity, source, children) in &previews {
+    for (entity, source, children, animal) in &previews {
         let Some(prefab) = prefabs.get(&source.0) else {
             continue;
         };
@@ -215,8 +250,12 @@ pub(super) fn hydrate_object_placement_preview_prefab_render_tree(
             commands.entity(renderable).insert((
                 ObjectPlacementPreviewRenderable,
                 PrefabModelTint(Color::WHITE),
-                PendingAnimalPreviewAnimation,
             ));
+            if let Some(&animal) = animal {
+                commands
+                    .entity(renderable)
+                    .insert(PendingAnimalPreviewAnimation(animal));
+            }
         }
         commands
             .entity(entity)
@@ -231,7 +270,6 @@ pub(super) fn attach_pending_animal_placement_preview_animations(
     species_index: Option<Res<SpeciesAssets>>,
     parents: Query<&ChildOf>,
     presentations: Query<&ChildOf, With<ObjectPlacementPreviewModelPresentation>>,
-    previews: Query<&ConstructionPreview>,
     mut renderables: Query<(
         Entity,
         &PrefabModel,
@@ -262,11 +300,8 @@ pub(super) fn attach_pending_animal_placement_preview_animations(
         else {
             continue;
         };
-        let Ok(preview) = previews.get(owner) else {
-            continue;
-        };
         let Some(variant) =
-            species_variant_for_placement_preview_model(species, preview.definition, model.model)
+            species_variant_for_placement_preview_model(species, pending.0, model.model)
         else {
             continue;
         };
@@ -289,6 +324,13 @@ pub(super) fn attach_pending_animal_placement_preview_animations(
             .insert_if_new(AnimationPresentationOwner {
                 gameplay_entity: owner,
             });
+        if variant.initial_animation_loops {
+            commands
+                .entity(entity)
+                .insert(AnimalPreviewInitialRepetition(
+                    AnimationPlaybackRepetitionPolicy::Loop,
+                ));
+        }
         commands.entity(entity).remove::<(
             PendingAnimalPreviewAnimation,
             ModelAnimationAttachmentResolved,
@@ -299,72 +341,36 @@ pub(super) fn attach_pending_animal_placement_preview_animations(
     }
 }
 
-fn species_variant_for_placement_preview_model<'a>(
-    species: SpeciesView<'a>,
-    definition: AssetId,
+fn species_variant_for_placement_preview_model(
+    species: SpeciesView<'_>,
+    animal: AnimalPreviewSpecies,
     model: AssetId,
-) -> Option<&'a SpeciesVariant> {
-    if let Some(variant) = species.find_variant(definition) {
-        return (AssetId::from_virtual_path(&variant.model) == model).then_some(variant);
+) -> Option<&SpeciesVariant> {
+    let matches_model =
+        |variant: &SpeciesVariant| AssetId::from_virtual_path(&variant.model) == model;
+    if let Some(variant) = animal
+        .requested_variant
+        .and_then(|id| species.find_variant(id))
+        .filter(|variant| matches_model(variant))
+    {
+        return Some(variant);
     }
-    let root = species.find(definition)?;
-    // A species-root preview already has its authored model. Borrow its
-    // matching adult's pose without selecting the eventual adopted variant.
-    species.variants(root.id).find(|variant| {
-        variant.life_stage == LifeStage::Adult
-            && variant.probability != 0
-            && AssetId::from_virtual_path(&variant.model) == model
-    })
+    species
+        .variants(animal.species)
+        .find(|variant| matches_model(variant) && variant.life_stage == LifeStage::Adult)
 }
 
 pub(super) fn apply_authored_initial_animal_placement_preview_animation_repetition_policy(
-    species_assets: Option<Res<Assets<SpeciesAsset>>>,
-    species_index: Option<Res<SpeciesAssets>>,
-    controllers: Query<
-        (Entity, &PrefabModel, &AnimationPlaybackController),
-        (
-            Added<ModelAnimationAttachmentResolved>,
-            With<ObjectPlacementPreviewRenderable>,
-        ),
-    >,
-    previews: Query<&ConstructionPreview>,
-    parents: Query<&ChildOf>,
-    mut requests: MessageWriter<AnimationClipPlaybackRequest>,
+    added: On<Add<AnimationPlaybackController>>,
+    mut controllers: Query<(
+        &AnimalPreviewInitialRepetition,
+        &mut AnimationPlaybackController,
+    )>,
 ) {
-    let Some(species) = species_index
-        .as_ref()
-        .zip(species_assets.as_ref())
-        .and_then(|(index, assets)| index.get(assets))
-    else {
-        return;
-    };
-    for (entity, model, _) in &controllers {
-        let Some(preview) = parents
-            .iter_ancestors::<ChildOf>(entity)
-            .find_map(|ancestor| previews.get(ancestor).ok())
-        else {
-            continue;
-        };
-        let Some(variant) =
-            species_variant_for_placement_preview_model(species, preview.definition, model.model)
-        else {
-            continue;
-        };
-        let Some(clip) = &variant.initial_animation_clip_asset_key else {
-            continue;
-        };
-        requests.write(AnimationClipPlaybackRequest {
-            animation_subject_entity: entity,
-            animation_clip_asset_key: clip.clone(),
-            blend_duration_milliseconds: 0,
-            playback_speed_permille: 1000,
-            playback_repetition_policy: if variant.initial_animation_loops {
-                AnimationPlaybackRepetitionPolicy::Loop
-            } else {
-                AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
-            },
-            action_settings: None,
-        });
+    if let Ok((repetition, controller)) = controllers.get_mut(added.entity) {
+        controller
+            .map_unchanged(|controller| &mut controller.playback_repetition_policy)
+            .set_if_neq(repetition.0);
     }
 }
 

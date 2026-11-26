@@ -12,7 +12,7 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::{species::NeedKind, AssetId};
+use openzt2_game_data::{AssetId, species::NeedKind};
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::simulation_time::{
     deterministic_random_stream::{DeterministicRng, RngDomain, ZooSeed},
@@ -22,8 +22,9 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::{
     animal_health::types::Dead,
-    animal_lifecycle::types::{Animal, SpeciesHandle},
+    animal_lifecycle::types::{Animal, AnimalVariant, SpeciesHandle},
     animal_welfare::types::*,
+    authored_float_attributes::AuthoredFloatAttributes,
 };
 
 use super::need_timing_types::NeedAdjustmentCadence;
@@ -35,6 +36,14 @@ pub(super) struct NeedThresholdCrossing<const NEED: usize>(pub(super) NeedChange
 #[derive(Resource, Default)]
 pub(super) struct SpeciesNeedProfiles {
     pub(super) rows: HashMap<AssetId, SpeciesNeedProfile>,
+    variants: HashMap<AssetId, VariantNeedAdjustments>,
+    breath: AssetId,
+    lifespan: AssetId,
+}
+
+struct VariantNeedAdjustments {
+    welfare: [Option<i32>; 12],
+    authored: [Option<i32>; 2],
 }
 
 #[derive(Clone, Copy)]
@@ -59,10 +68,14 @@ fn project_species_need_profiles(
         return;
     }
     profiles.rows.clear();
-    let Some(species) = collection.get(&assets) else {
+    profiles.variants.clear();
+    profiles.breath = AssetId::from_key("breath");
+    profiles.lifespan = AssetId::from_key("lifespan");
+    let Some(view) = collection.get(&assets) else {
         return;
     };
-    for species in species.species() {
+    let authored = [profiles.breath, profiles.lifespan];
+    for species in view.species() {
         let mut needs = [None; 12];
         let mut critical = [0; 10];
         let mut good = [1000; 10];
@@ -87,6 +100,20 @@ fn project_species_need_profiles(
                     good: good.into_iter().sum::<u16>() / 10,
                 },
             );
+            for variant in view.variants(species.id) {
+                let mut welfare = [None; 12];
+                for need in &species.needs {
+                    let rank = need_rank(&need.kind).unwrap_or(REPRODUCTION_TRIGGER_INDEX);
+                    welfare[rank] = view.variant_need_adjustment(variant.id, need.kind);
+                }
+                let authored = authored.map(|key| {
+                    view.variant_need_adjustment_by_name(variant.id, key)
+                        .or_else(|| view.variant_need_adjustment_by_name(species.id, key))
+                });
+                profiles
+                    .variants
+                    .insert(variant.id, VariantNeedAdjustments { welfare, authored });
+            }
         }
     }
 }
@@ -98,6 +125,8 @@ struct AnimalNeedDecay {
     id: &'static PersistentId,
     member: &'static WorldMember,
     species: &'static SpeciesHandle,
+    variant: &'static AnimalVariant,
+    authored: Option<&'static mut AuthoredFloatAttributes>,
     timer: Option<&'static mut NeedAdjustmentCadence>,
     hunger: (&'static mut Hunger, &'static mut NeedLatch<0>),
     thirst: (&'static mut Thirst, &'static mut NeedLatch<1>),
@@ -155,9 +184,40 @@ fn decay_due_animal_needs(
         if !due {
             return;
         }
+        let mut authored = row.authored;
+        let mut initial_facts = AuthoredFloatAttributes::default();
+        let mut has_initial_facts = false;
+        let variant = profiles.variants.get(&row.variant.0);
+        for (attribute, adjustment) in [profiles.breath, profiles.lifespan]
+            .into_iter()
+            .zip(variant.map_or([None; 2], |variant| variant.authored))
+        {
+            let Some(adjustment) = adjustment else {
+                continue;
+            };
+            let delta = -f64::from(adjustment) / f64::from(10 * Q16_ONE);
+            if let Some(attributes) = authored.as_mut() {
+                let current = attributes.get(attribute).unwrap_or_default();
+                let next = (f64::from(current) + delta).clamp(0.0, 100.0) as f32;
+                if attributes.get(attribute) != Some(next) {
+                    attributes.set(attribute, next);
+                }
+            } else {
+                initial_facts.set(attribute, delta.clamp(0.0, 100.0) as f32);
+                has_initial_facts = true;
+            }
+        }
+        if has_initial_facts {
+            parallel.command_scope(|mut commands| {
+                commands.entity(row.animal).insert(initial_facts);
+            });
+        }
         macro_rules! decay {
             ($rank:literal, $kind:ident, ($need:expr, $latch:expr)) => {
-                if let Some(rule) = profile.needs[$rank] {
+                if let Some(mut rule) = profile.needs[$rank] {
+                    if let Some(adjustment) = variant.and_then(|variant| variant.welfare[$rank]) {
+                        rule.adjustment = adjustment;
+                    }
                     let need = $need.map_unchanged(|need| &mut need.0);
                     let next = clamp_animal_need_q16_after_delta(*need, rule.adjustment);
                     if let Some(crossing) =
@@ -565,7 +625,7 @@ pub(super) fn register_animal_need_updates(app: &mut App) {
                     adjust_bathroom.before(super::systems::update_need_points),
                     adjust_reproduction.before(super::systems::update_need_points),
                 ),
-                publish_animal_need_crossings.before(super::systems::update_need_points),
+                publish_animal_need_crossings,
             )
                 .chain()
                 .in_set(FixedGameSet::Act)

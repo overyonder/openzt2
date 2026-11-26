@@ -58,9 +58,29 @@ pub(super) struct UiAuthoredHotkeyKeyboardActivationBinding {
     control_state: UiDocumentHotkeyControlState,
     activates_on_release: bool,
     allows_repeated_input: bool,
+    either_control_key: bool,
 }
 
 impl UiAuthoredHotkeyKeyboardActivationBinding {
+    fn matches_key(&self, key: KeyCode) -> bool {
+        self.key == key || (self.either_control_key && key == KeyCode::ControlRight)
+    }
+
+    fn is_held(&self, keys: &ButtonInput<KeyCode>, control: bool) -> bool {
+        let selects_control_key = matches!(self.key, KeyCode::ControlLeft | KeyCode::ControlRight);
+        !self.activates_on_release
+            && (keys.pressed(self.key) || self.either_control_key && control)
+            && (selects_control_key || self.modifiers_match(control))
+    }
+
+    fn modifiers_match(&self, control: bool) -> bool {
+        match self.control_state {
+            UiDocumentHotkeyControlState::ControlReleased => !control,
+            UiDocumentHotkeyControlState::ControlPressed => control,
+            UiDocumentHotkeyControlState::AnyControlState => true,
+        }
+    }
+
     pub(super) fn is_cancel_activation(&self) -> bool {
         self.key == KeyCode::Escape
             && !self.activates_on_release
@@ -71,12 +91,14 @@ impl UiAuthoredHotkeyKeyboardActivationBinding {
         control_state: UiDocumentHotkeyControlState,
         activates_on_release: bool,
         allows_repeated_input: bool,
+        either_control_key: bool,
     ) -> Self {
         Self {
             key,
             control_state,
             activates_on_release,
             allows_repeated_input,
+            either_control_key,
         }
     }
 }
@@ -104,33 +126,38 @@ pub(super) fn activate_projected_authored_hotkeys_from_keyboard_input(
         {
             continue;
         }
-        for (entity, binding, receiver) in &bindings {
-            // Escape dismisses one activity. The cancellation receiver selection
-            // chooses it for keyboard and controller alike.
-            if binding.key != input.key_code || binding.is_cancel_activation() {
-                continue;
-            }
-            let control_state_matches = match binding.control_state {
-                UiDocumentHotkeyControlState::ControlReleased => !control_is_pressed,
-                UiDocumentHotkeyControlState::ControlPressed => control_is_pressed,
-                UiDocumentHotkeyControlState::AnyControlState => true,
-            };
-            let input_edge_matches =
-                matches!(input.state, ButtonState::Released) == binding.activates_on_release;
-            if control_state_matches
-                && input_edge_matches
-                && (binding.allows_repeated_input || !input.repeat)
-                && context.visible_and_enabled(receiver.parent())
-                && active_modal
-                    .get_or_insert_with(|| context.top_modal())
-                    .is_none_or(|modal| context.is_in_modal(receiver.parent(), modal))
-            {
-                activated.write(UiNodeActivated {
-                    source: ActionSource::KeyboardMouse,
-                    node: entity,
-                    trigger: UiTrigger::Press,
-                });
-            }
+        let chosen = bindings
+            .iter()
+            .filter_map(|(entity, binding, receiver)| {
+                // Escape dismisses one activity. The cancellation receiver selection
+                // chooses it for keyboard and controller alike.
+                if !binding.matches_key(input.key_code) || binding.is_cancel_activation() {
+                    return None;
+                }
+                let control_state_matches =
+                    matches!(binding.key, KeyCode::ControlLeft | KeyCode::ControlRight)
+                        || binding.modifiers_match(control_is_pressed);
+                let input_edge_matches =
+                    matches!(input.state, ButtonState::Released) == binding.activates_on_release;
+                if control_state_matches
+                    && input_edge_matches
+                    && (binding.allows_repeated_input || !input.repeat)
+                    && context.visible_and_enabled(receiver.parent())
+                    && active_modal
+                        .get_or_insert_with(|| context.top_modal())
+                        .is_none_or(|modal| context.is_in_modal(receiver.parent(), modal))
+                {
+                    return Some((context.navigation_order(receiver.parent()), entity));
+                }
+                None
+            })
+            .max_by_key(|(order, entity)| (*order, std::cmp::Reverse(entity.to_bits())));
+        if let Some((_, node)) = chosen {
+            activated.write(UiNodeActivated {
+                source: ActionSource::KeyboardMouse,
+                node,
+                trigger: UiTrigger::Press,
+            });
         }
     }
 }
@@ -169,15 +196,7 @@ impl AuthoredHeldCameraCommands<'_, '_> {
             .iter()
             .filter_map(move |(binding, parent, owner, actions)| {
                 if editing
-                    || binding.activates_on_release
-                    || !(self.keys.pressed(binding.key)
-                        || (binding.key == KeyCode::ControlLeft && control))
-                    || !matches!(
-                        (binding.control_state, control),
-                        (UiDocumentHotkeyControlState::AnyControlState, _)
-                            | (UiDocumentHotkeyControlState::ControlReleased, false)
-                            | (UiDocumentHotkeyControlState::ControlPressed, true)
-                    ) && binding.key != KeyCode::ControlLeft
+                    || !binding.is_held(&self.keys, control)
                     || !self.context.visible_and_enabled(parent.parent())
                     || modal.is_some_and(|modal| !self.context.is_in_modal(parent.parent(), modal))
                 {
@@ -193,6 +212,61 @@ impl AuthoredHeldCameraCommands<'_, '_> {
                     command,
                     pressed: true,
                 } => Some(command),
+                _ => None,
+            })
+    }
+
+    pub fn first_person(
+        &self,
+        mode: openzt2_game_data::AssetId,
+    ) -> impl Iterator<Item = openzt2_game_data::ui_document::action::camera::UiFirstPersonCommand> + '_
+    {
+        use openzt2_game_data::ui_document::{
+            action::{camera::UiCameraAction, UiActionRecord},
+            document::UiDocumentRole,
+            hotkey::UiDocumentHotkeyTrigger,
+        };
+        let control =
+            self.keys.pressed(KeyCode::ControlLeft) || self.keys.pressed(KeyCode::ControlRight);
+        let accepts_input = self.context.top_modal().is_none()
+            && !self
+                .focus
+                .get()
+                .is_some_and(|entity| self.edits.contains(entity));
+        self.roots
+            .iter()
+            .filter_map(move |root| {
+                let document = self.documents.get(&root.document)?;
+                (accepts_input
+                    && document.canonical_ui_document().role == UiDocumentRole::InGameHud)
+                    .then(|| document.first_person_hotkeys(mode))
+            })
+            .flatten()
+            .filter(move |hotkey| {
+                let key = crate::projection::authored_hotkey_projection::authored_hotkey_key_code(
+                    hotkey.key_code,
+                    &hotkey.character,
+                );
+                key.is_some_and(|key| {
+                    UiAuthoredHotkeyKeyboardActivationBinding::from_projected_authored_hotkey(
+                        key,
+                        hotkey.control_state,
+                        hotkey.trigger == UiDocumentHotkeyTrigger::KeyReleased,
+                        hotkey.allow_repeat,
+                        hotkey.key_code == 0x11,
+                    )
+                    .is_held(&self.keys, control)
+                })
+            })
+            .flat_map(|hotkey| &hotkey.actions)
+            .filter_map(|action| match action {
+                UiActionRecord::Camera(record) => match record.action {
+                    UiCameraAction::SetFirstPersonCommandState {
+                        command,
+                        pressed: true,
+                    } => Some(command),
+                    _ => None,
+                },
                 _ => None,
             })
     }

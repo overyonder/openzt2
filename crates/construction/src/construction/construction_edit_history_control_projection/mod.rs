@@ -38,8 +38,6 @@ pub(super) fn project_construction_undo_availability(
         {
             continue;
         }
-        if enabled.0 != undo_available {
-            enabled.0 = undo_available;
-        }
+        enabled.set_if_neq(UiInteractionEnabled(undo_available));
     }
 }

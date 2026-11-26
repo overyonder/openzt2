@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BehaviorAnimationSwitchAction {
-    pub clips_by_node: Vec<(String, String)>,
-    pub default_clip: Option<String>,
+    pub clips_by_node: Vec<(String, BehaviorAnimationClipAction)>,
+    pub default_clip: Option<BehaviorAnimationClipAction>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

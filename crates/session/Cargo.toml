@@ -13,10 +13,17 @@ workspace = true
 openzt2_construction.workspace = true
 openzt2_player_controls.workspace = true
 openzt2_animals.workspace = true
+openzt2_economy.workspace = true
 openzt2_game_assets.workspace = true
 openzt2_game_data.workspace = true
 openzt2_interface_state.workspace = true
 openzt2_navigation.workspace = true
+openzt2_photos.workspace = true
+openzt2_extinct_animals.workspace = true
+openzt2_aquatic.workspace = true
+openzt2_progression.workspace = true
+openzt2_shows.workspace = true
+openzt2_transport.workspace = true
 openzt2_simulation_time.workspace = true
 openzt2_ui.workspace = true
 openzt2_world.workspace = true
@@ -46,7 +53,6 @@ openzt2_economy = { workspace = true, features = ["testing"] }
 openzt2_visitors = { workspace = true, features = ["testing"] }
 openzt2_environment.workspace = true
 openzt2_game_assets = { workspace = true, features = ["testing"] }
-openzt2_photos.workspace = true
 openzt2_player_controls.workspace = true
 openzt2_simulation_time.workspace = true
 openzt2_zoo_staff = { workspace = true, features = ["testing"] }

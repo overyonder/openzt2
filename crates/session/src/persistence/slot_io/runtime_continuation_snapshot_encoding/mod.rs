@@ -1,6 +1,6 @@
 use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure as Failure,
-    runtime_continuation_snapshot_types::RuntimeContinuationSnapshot,
+    runtime_continuation_snapshot_types::{RuntimeContinuationSnapshot, RuntimeDomainContinuation},
 };
 use openzt2_game_data::AssetId;
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
@@ -119,8 +119,32 @@ pub(super) fn append_runtime_continuation_snapshot(
         bytes.extend_from_slice(&payload);
     }
     if let Some(continuation) = &record.domain_continuation {
-        let payload =
+        let mut payload =
             postcard::to_allocvec(continuation).map_err(|_| Failure::CorruptSnapshotSection)?;
+        if !continuation.disease.assignments.is_empty()
+            || !continuation.breeding_center_births.is_empty()
+            || !continuation.water_filter_cleanup.is_empty()
+            || !continuation.guests.is_empty()
+            || continuation
+                .fossils
+                .as_ref()
+                .is_some_and(|fossils| !fossils.details.is_empty())
+        {
+            payload.extend_from_slice(b"RDA2");
+            payload.extend(
+                postcard::to_allocvec(&(
+                    &continuation.disease.assignments,
+                    &continuation.breeding_center_births,
+                    &continuation.water_filter_cleanup,
+                    continuation
+                        .fossils
+                        .as_ref()
+                        .map(|fossils| &fossils.details),
+                    &continuation.guests,
+                ))
+                .map_err(|_| Failure::CorruptSnapshotSection)?,
+            );
+        }
         bytes.extend_from_slice(
             &u32::try_from(payload.len())
                 .map_err(|_| Failure::CapacityExceeded)?
@@ -288,9 +312,28 @@ pub(super) fn decode_runtime_continuation_snapshot(
             .split_at_checked(length)
             .ok_or(Failure::CorruptSnapshotSection)?;
         bytes = rest;
-        let (continuation, trailing) =
-            postcard::take_from_bytes(payload).map_err(|_| Failure::CorruptSnapshotSection)?;
-        if !trailing.is_empty() {
+        let (mut continuation, trailing) =
+            postcard::take_from_bytes::<RuntimeDomainContinuation>(payload)
+                .map_err(|_| Failure::CorruptSnapshotSection)?;
+        if let Some(extension) = trailing.strip_prefix(b"RDA2") {
+            let ((assignments, births, filters, fossil_details, guests), remaining) =
+                postcard::take_from_bytes(extension)
+                    .map_err(|_| Failure::CorruptSnapshotSection)?;
+            if !remaining.is_empty() {
+                return Err(Failure::CorruptSnapshotSection);
+            }
+            continuation.disease.assignments = assignments;
+            continuation.breeding_center_births = births;
+            continuation.water_filter_cleanup = filters;
+            continuation.guests = guests;
+            if let Some(details) = fossil_details {
+                continuation
+                    .fossils
+                    .as_mut()
+                    .ok_or(Failure::CorruptSnapshotSection)?
+                    .details = details;
+            }
+        } else if !trailing.is_empty() {
             return Err(Failure::CorruptSnapshotSection);
         }
         Some(continuation)
@@ -352,10 +395,48 @@ pub(super) fn validate_runtime_continuation_snapshot(
                         .disease
                         .active
                         .is_some_and(|(definition, _)| definition == AssetId::default())
+                    || continuation.disease.assignments.iter().any(|(id, key)| {
+                        *id == 0
+                            || *id >= record.next_persistent_identifier
+                            || *key == AssetId::default()
+                    })
+                    || continuation
+                        .disease
+                        .assignments
+                        .windows(2)
+                        .any(|pair| pair[0] >= pair[1])
+                    || continuation
+                        .breeding_center_births
+                        .iter()
+                        .any(|(id, count)| {
+                            *id == 0
+                                || *id >= record.next_persistent_identifier
+                                || !count.is_finite()
+                        })
+                    || continuation
+                        .breeding_center_births
+                        .windows(2)
+                        .any(|pair| pair[0].0 >= pair[1].0)
+                    || continuation
+                        .water_filter_cleanup
+                        .iter()
+                        .any(|(id, _)| *id == 0 || *id >= record.next_persistent_identifier)
+                    || continuation
+                        .water_filter_cleanup
+                        .windows(2)
+                        .any(|pair| pair[0].0 >= pair[1].0)
+                    || continuation.guests.iter().any(|guest| {
+                        guest.id >= record.next_persistent_identifier || !guest.is_valid()
+                    })
+                    || continuation
+                        .guests
+                        .windows(2)
+                        .any(|pair| pair[0].id >= pair[1].id)
                     || continuation.eggs.iter().any(|egg| {
                         egg.id == 0
                             || egg.id >= record.next_persistent_identifier
                             || !egg.amount.is_finite()
+                            || egg.random[1] & 1 == 0
                     })
                     || continuation
                         .eggs
@@ -412,9 +493,7 @@ fn take<const N: usize>(bytes: &mut &[u8]) -> Result<[u8; N], Failure> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::runtime_continuation_snapshot_types::{
-        DiseaseContinuation, EggContinuation, RuntimeDomainContinuation,
-    };
+    use super::super::runtime_continuation_snapshot_types::{DiseaseContinuation, EggContinuation};
     use super::*;
 
     #[test]
@@ -458,7 +537,11 @@ mod tests {
                         funding: Some(50.0),
                         exposure_deadline: Some(98),
                         active: Some((AssetId::from_key("test disease"), 211)),
+                        assignments: vec![(11, AssetId::from_key("test disease"))],
                     },
+                    breeding_center_births: vec![(12, 3.0)],
+                    water_filter_cleanup: vec![(13, 20_000)],
+                    guests: Vec::new(),
                     eggs: vec![EggContinuation {
                         id: 10,
                         amount: 0.25,
@@ -482,6 +565,16 @@ mod tests {
             let mut encoded = Vec::new();
             append_runtime_continuation_snapshot(&mut encoded, &record).unwrap();
             let decoded = decode_runtime_continuation_snapshot(&encoded).unwrap();
+            assert_eq!(
+                decoded
+                    .domain_continuation
+                    .as_ref()
+                    .map(|domain| (&domain.disease.assignments, &domain.breeding_center_births)),
+                record
+                    .domain_continuation
+                    .as_ref()
+                    .map(|domain| (&domain.disease.assignments, &domain.breeding_center_births)),
+            );
             assert_eq!(decoded.next_persistent_identifier, u64::MAX);
             assert_eq!(decoded.navigation_sequence, 991);
             assert_eq!(decoded.behavior_execution_sequence, 845);

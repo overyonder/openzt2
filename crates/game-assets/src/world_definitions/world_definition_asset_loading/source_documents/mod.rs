@@ -1,12 +1,12 @@
 use super::authored_binder_reference_resolution::AuthoredBinderSources;
 use super::source_reference_discovery::{
+    AuthoredWorldDefinitionSourceReference,
     authored_biome_automatic_placement_supplement_source_paths,
     authored_hireable_generic_binder_family_variant_source_paths,
     collect_authored_typed_binder_family_references,
     collect_authored_world_definition_source_document_dependency_references,
     ordered_source_document_contains_element_named,
     resolved_world_definition_source_documents_declare_viewing_area_type,
-    AuthoredWorldDefinitionSourceReference,
 };
 use super::unresolved_reference;
 use crate::asset_source::AssetArchives;
@@ -189,7 +189,7 @@ pub(super) async fn load_world_definition_source_documents(
                     .map_err(io::Error::other)?;
                 uses_binder_sources = true;
                 binder_source_paths
-                    .resolve_binder_type_source_path(archives, &from, &actor_type)?
+                    .resolve_binder_type_source_path(archives, &actor_type)?
                     .ok_or_else(|| {
                         unresolved_reference(&from, "authored binder type", &actor_type)
                     })?
@@ -230,7 +230,7 @@ fn resolve_typed_binder_family_source_path(
     family: &str,
 ) -> io::Result<Option<std::path::PathBuf>> {
     if let Some(declaration) =
-        binder_source_paths.resolve_binder_type_source_path(archives, from, family)?
+        binder_source_paths.resolve_binder_type_source_path(archives, family)?
     {
         return Ok(Some(declaration));
     }
@@ -245,7 +245,7 @@ mod tests {
     };
 
     #[test]
-    fn family_lookup_distinguishes_indexed_missing_and_ambiguous_declarations() -> io::Result<()> {
+    fn family_lookup_uses_the_winning_registered_declaration() -> io::Result<()> {
         let directory = TestDirectory::new()?;
         let archive = directory.archive(
             "guests.z2f",
@@ -273,10 +273,7 @@ mod tests {
             resolve("Guest_Infant")?,
             Some("guests/guest_infant.xml".into())
         );
-        assert_eq!(
-            resolve("Guest_Young").unwrap_err().kind(),
-            io::ErrorKind::InvalidData
-        );
+        assert_eq!(resolve("Guest_Young")?, Some("guests/ai/other.xml".into()));
         Ok(())
     }
 }

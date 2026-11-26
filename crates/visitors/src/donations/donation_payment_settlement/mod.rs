@@ -2,9 +2,19 @@ use openzt2_zoo_state::donations::donation_guest_decision_types::DonationProgres
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::behavior_task_execution_types::{
+    running_actions::{
+        mark_behavior_task_for_failure_and_stop_navigation, RunningBehaviorInstruction,
+    },
+    BehaviorTaskExecutionState,
+};
 use openzt2_zoo_state::{
-    animal_lifecycle::types::SpeciesHandle, progression::fame_types::GuestSpeciesFameViews,
-    shows::show_stage_types::ShowStage, transport_tours::transport_circuit_types::TransportCircuit,
+    animal_lifecycle::types::SpeciesHandle,
+    progression::fame_types::{GuestSpeciesFameViews, ZooSpeciesFameViews},
+    shows::show_stage_types::ShowStage,
+    transport_tours::transport_circuit_types::TransportCircuit,
 };
 
 use openzt2_zoo_state::economy::account_transaction_types::TransactionCompleted;
@@ -32,11 +42,14 @@ pub(super) fn settle_completed_donation_transactions_and_update_acceptor_totals(
     mut commands: Commands,
     mut completed_transactions: MessageReader<TransactionCompleted>,
     mut payment_operations: Query<(&PendingDonationPayment, &mut DonationPaymentState)>,
-    guests: Query<(), (With<Guest>, With<DonationPaymentRequested>)>,
+    guests: Query<&WorldMember, (With<Guest>, With<DonationPaymentRequested>)>,
     donation_opportunities: Query<&DonationOpportunity>,
     species: Query<&SpeciesHandle>,
     attributed_subjects: Query<(), Or<(With<ShowStage>, With<TransportCircuit>)>>,
-    mut fame_views: Query<&mut GuestSpeciesFameViews>,
+    (mut fame_views, mut zoo_views): (
+        Query<&mut GuestSpeciesFameViews>,
+        Query<&mut ZooSpeciesFameViews>,
+    ),
     mut donation_totals: Query<&mut DonationTotal>,
     mut donation_category_totals: Query<&mut DonationCategoryTotals>,
     mut world_deltas: super::zoo_donation_summary_presentation::DonationWorldDeltas,
@@ -50,8 +63,8 @@ pub(super) fn settle_completed_donation_transactions_and_update_acceptor_totals(
         let clock = clock.as_deref()?;
         let definitions = definitions.as_deref()?.get(definition_assets.as_deref()?)?;
         let duration_ns = definitions.show_scheduling()?.donation_token_timeout_ns;
-        let rate = u128::from(definitions.timing().fixed_hz);
-        let ticks = (u128::from(duration_ns) * rate).div_ceil(1_000_000_000);
+        let timestep = definitions.simulation_timestep()?;
+        let ticks = u128::from(duration_ns).div_ceil(timestep.as_nanos());
         (ticks > 0).then(|| {
             (
                 clock.tick,
@@ -168,12 +181,17 @@ pub(super) fn settle_completed_donation_transactions_and_update_acceptor_totals(
         } else {
             new_donation_totals.insert(pending_payment.acceptor, updated_total);
         }
-        if let (Ok(species), Ok(mut views)) = (
+        if let (Ok(species), Ok(mut views), Ok(guest)) = (
             species.get(pending_payment.subject),
             fame_views.get_mut(pending_payment.guest),
+            guests.get(pending_payment.guest),
         ) {
-            views.0.entry(species.species).or_default().donation +=
-                pending_payment.amount.0 as f32 / 100.0;
+            let view = views.0.entry(species.species).or_default();
+            let previous = *view;
+            view.donation += pending_payment.amount.dollars();
+            if let Ok(mut zoo) = zoo_views.get_mut(guest.root) {
+                zoo.replace_contribution(species.species, previous, *view);
+            }
         }
         if pending_payment.subject != pending_payment.acceptor
             && attributed_subjects.contains(pending_payment.subject)
@@ -301,5 +319,41 @@ const fn map_economy_transaction_rejection_to_donation_rejection(
         | TransactionRejection::NonPositive
         | TransactionRejection::MissingAccount
         | TransactionRejection::Overflow => DonationRejection::AccountFailure,
+    }
+}
+
+pub(super) fn resume_tour_donation_after_payment(
+    mut commands: Commands,
+    mut completed: MessageReader<TransactionCompleted>,
+    mut rejected: MessageReader<TransactionRejected>,
+    operations: Query<(
+        &PendingDonationPayment,
+        &TourDonationInstruction,
+        &WorldMember,
+    )>,
+    actors: Query<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
+    clocks: Query<&ZooClock>,
+) {
+    let outcomes = completed
+        .read()
+        .map(|result| (result.operation, true))
+        .chain(rejected.read().map(|result| (result.operation, false)));
+    for (operation, accepted) in outcomes {
+        let Ok((payment, owner, member)) = operations.get(operation) else {
+            continue;
+        };
+        let Ok((task, instruction)) = actors.get(payment.guest) else {
+            continue;
+        };
+        if instruction.id() != owner.0 || !instruction.is_current(task) {
+            continue;
+        }
+        if accepted {
+            if let Ok(clock) = clocks.get(member.root) {
+                instruction.complete(payment.guest, clock.tick, &mut commands);
+            }
+        } else {
+            mark_behavior_task_for_failure_and_stop_navigation(payment.guest, &mut commands);
+        }
     }
 }

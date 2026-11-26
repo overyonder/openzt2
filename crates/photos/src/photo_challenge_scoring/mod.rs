@@ -18,9 +18,6 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use super::photo_capture_types::{CapturedPhotoEvidence, PendingPhotoScore, PhotoCaptured};
 use super::photo_challenge_lua_scoring_types::{PhotoChallengeScorer, PhotoRuleScriptContext};
 
-#[derive(Component)]
-pub struct PhotoChallengeHalfStars(pub u8);
-
 pub(super) fn score_pending_photos_against_incomplete_lua_challenges(
     assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,
@@ -119,24 +116,22 @@ pub(super) fn score_pending_photos_against_incomplete_lua_challenges(
                         }
                     };
                     best = best.max(score);
-                    let rating_stars = (score / 1000) as u8;
-                    if score == 0 || rating_stars < rule.difficulty {
+                    let rating_half_stars = (score / 500) as u8;
+                    if rating_half_stars == 0
+                        || rating_half_stars < rule.difficulty.saturating_mul(2)
+                    {
                         continue;
                     }
-                    let half_stars = (score / 500) as u8;
-                    commands
-                        .entity(entity)
-                        .insert(PhotoChallengeHalfStars(half_stars));
                     *progress = PhotoChallengeProgress {
                         completed: true,
                         completed_by: Some(photo_entity),
-                        rating_stars,
+                        rating_half_stars,
                     };
                     completed.write(PhotoChallengeCompleted {
                         photo: photo_entity,
                         challenge: rule.id,
                         subject,
-                        rating_stars,
+                        rating_half_stars,
                     });
                     persistence.write(PersistChallengePhotoJpegCopy {
                         photo_entity,

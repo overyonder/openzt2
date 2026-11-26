@@ -144,7 +144,7 @@ fn one_wheel_notch_queues_eight_hundredths_at_double_zoom_rate() {
 }
 
 #[test]
-fn reversing_wheel_at_far_clamp_moves_inward_immediately_for_only_the_new_impulse() {
+fn reversing_wheel_at_far_clamp_clears_the_old_impulse_before_moving_inward() {
     let camera_tuning = camera_tuning_for_calculation_tests();
     let mut rig = overhead_camera_rig_for_calculation_tests();
     rig.distance = 80.0;
@@ -162,6 +162,10 @@ fn reversing_wheel_at_far_clamp_moves_inward_immediately_for_only_the_new_impuls
     queue_wheel_zoom(&mut queue, -20.0);
     advance_zoom(&mut rig, &mut queue);
     assert_eq!(rig.distance, 80.0);
+    queue_wheel_zoom(&mut queue, 1.0);
+    advance_zoom(&mut rig, &mut queue);
+    assert_eq!(rig.distance, 80.0);
+    assert_eq!(queue, WheelZoomQueue::Idle);
     queue_wheel_zoom(&mut queue, 1.0);
     advance_zoom(&mut rig, &mut queue);
     assert!((rig.distance - 79.0).abs() < 1e-5);

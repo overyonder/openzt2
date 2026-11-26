@@ -6,11 +6,45 @@ use crate::ui_document::source::lower::authored_ui_document_lowering::AuthoredUi
 use crate::ui_document::source::lower::authored_ui_scalar_value_lowering::{
     invalid_at, parse_bool,
 };
-use openzt2_game_data::ui_document::action::camera::{UiCameraAction, UiCameraActionRecord};
+use openzt2_game_data::ui_document::action::camera::{
+    UiCameraAction, UiCameraActionRecord, UiFirstPersonCommand,
+};
 use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::AssetId;
 use std::io;
+
+pub(in crate::ui_document::source) fn lower_first_person_command(
+    event: &SourceUiEvent,
+) -> Option<UiCameraActionRecord> {
+    let pressed = match event.message.as_str() {
+        "ZT_SET_COMMAND_STATE" => true,
+        "ZT_CLEAR_COMMAND_STATE" => false,
+        _ => return None,
+    };
+    let command = match event
+        .string
+        .as_deref()
+        .or(event.value.as_deref())?
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "forward" => UiFirstPersonCommand::Forward,
+        "backward" => UiFirstPersonCommand::Backward,
+        "rleft" => UiFirstPersonCommand::TurnLeft,
+        "rright" => UiFirstPersonCommand::TurnRight,
+        "rforward" | "up" => UiFirstPersonCommand::Up,
+        "rbackward" | "down" => UiFirstPersonCommand::Down,
+        "crouch" => UiFirstPersonCommand::Crouch,
+        "freemouselook" => UiFirstPersonCommand::FreeMouseLook,
+        _ => return None,
+    };
+    Some(UiCameraActionRecord {
+        trigger: UiTrigger::Press,
+        action: UiCameraAction::SetFirstPersonCommandState { command, pressed },
+    })
+}
 
 pub(super) fn lower_camera_command(
     trigger: UiTrigger,

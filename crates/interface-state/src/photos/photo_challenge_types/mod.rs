@@ -31,7 +31,7 @@ pub struct PhotoChallenge {
 pub struct PhotoChallengeProgress {
     pub completed: bool,
     pub completed_by: Option<Entity>,
-    pub rating_stars: u8,
+    pub rating_half_stars: u8,
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
@@ -41,14 +41,14 @@ pub struct PhotoChallengeSet {
 }
 
 /// The photo challenge set a scenario selected with
-/// `ZT_PHOTOEVENT_SET_CURRENT_CHALLENGE`; at most one per world.
+/// `ZT_PHOTOEVENT_SET_CURRENT_CHALLENGE`, stored on the owning world.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CurrentPhotoChallengeSet;
+pub struct CurrentPhotoChallengeSet(pub Option<Entity>);
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhotoChallengeCompleted {
     pub photo: Entity,
     pub challenge: AssetId,
     pub subject: AssetId,
-    pub rating_stars: u8,
+    pub rating_half_stars: u8,
 }

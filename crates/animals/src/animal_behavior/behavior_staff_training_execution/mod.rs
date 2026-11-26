@@ -22,12 +22,12 @@ use openzt2_zoo_state::{
     animal_health::types::Dead,
     animal_lifecycle::types::SpeciesHandle,
     behavior_task_execution_types::{
+        BehaviorTaskExecutionState, BehaviorTaskReturnFrame, PendingBehaviorTaskFailure,
         running_actions::{
-            activated_behavior_actor, behavior_action_actors, update_waiting_behavior_actors,
             BehaviorStepFixedSet, BehaviorTaskReplaced, RunBehaviorStaffTrainAnimal,
             RunningBehaviorInstruction, SelectedBehaviorSet, TrainerEnabledTricks,
+            activated_behavior_actor, behavior_action_actors, update_waiting_behavior_actors,
         },
-        BehaviorTaskExecutionState, BehaviorTaskReturnFrame, PendingBehaviorTaskFailure,
     },
     shows::performer_training::PerformerTraining,
     staff::{
@@ -162,8 +162,14 @@ fn train_animal(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
-        let seconds_to_ticks =
-            |seconds: f32| (f64::from(seconds) * f64::from(view.timing().fixed_hz)).ceil() as u64;
+        let seconds_to_ticks = |seconds: f32| {
+            (f64::from(seconds)
+                / view
+                    .simulation_timestep()
+                    .expect("simulation timing is loaded")
+                    .as_secs_f64())
+            .ceil() as u64
+        };
         let role = behavior_subject_type_identifiers(None, Some(staff), None, view, &[]);
         let phase = state.as_deref().map(|state| state.phase);
         let mut set_target = None;

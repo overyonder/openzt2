@@ -27,7 +27,9 @@ fn create_guest_favourite_animal_trend<'a>(
         .filter(|candidate| candidate.rarity_fame_percent <= 100.0)
         .map(|candidate| candidate.species)
         .collect();
-    GuestFavouriteAnimalTrend::new(choose_species(&species, random))
+    GuestFavouriteAnimalTrend::new(choose_species(&species, || {
+        (random.next_u32() >> 17) as u16
+    }))
 }
 
 pub(super) fn initialize_loaded_world_guest_favourite_animal_trends(
@@ -72,7 +74,7 @@ pub(super) fn choose_favourite_animal_for_spawned_guest<'a>(
     trend: &mut GuestFavouriteAnimalTrend,
     candidates: impl Iterator<Item = &'a AnimalAdoptionSpeciesEligibility>,
     current_fame_percent: f32,
-    random: &mut DeterministicRng,
+    mut draw: impl FnMut() -> u16,
 ) -> Option<AssetId> {
     let mut all_species = BTreeSet::new();
     let mut fame_species = BTreeSet::new();
@@ -84,41 +86,40 @@ pub(super) fn choose_favourite_animal_for_spawned_guest<'a>(
             fame_species.insert(candidate.species);
         }
     }
-    let favourite = if i64::from(random.next_u32() % 100) < i64::from(policy.trend_group_percent) {
-        let trending =
-            if i64::from(random.next_u32() % 100) < i64::from(policy.trend_setter_percent) {
-                trend
-                    .species()
-                    .into_iter()
-                    .flatten()
-                    .collect::<BTreeSet<_>>()
-            } else {
-                BTreeSet::new()
-            };
-        if trending.is_empty() {
-            choose_species(&fame_species, random)
+    let favourite = if i64::from(draw() % 100) < i64::from(policy.trend_group_percent) {
+        let trending = if i64::from(draw() % 100) < i64::from(policy.trend_setter_percent) {
+            trend
+                .species()
+                .into_iter()
+                .flatten()
+                .collect::<BTreeSet<_>>()
         } else {
-            choose_species(&trending, random)
+            BTreeSet::new()
+        };
+        if trending.is_empty() {
+            choose_species(&fame_species, &mut draw)
+        } else {
+            choose_species(&trending, &mut draw)
         }
     } else {
-        choose_species(&all_species, random)
+        choose_species(&all_species, &mut draw)
     };
     trend.advance_after_guest_spawn(policy, |excluded| {
         if let Some(excluded) = excluded {
             all_species.remove(&excluded);
         }
-        choose_species(&all_species, random)
+        choose_species(&all_species, &mut draw)
     });
     favourite
 }
 
-fn choose_species(species: &BTreeSet<AssetId>, random: &mut DeterministicRng) -> Option<AssetId> {
+fn choose_species(species: &BTreeSet<AssetId>, draw: impl FnOnce() -> u16) -> Option<AssetId> {
     if species.is_empty() {
         return None;
     }
     species
         .iter()
-        .nth(random.next_u32() as usize % species.len())
+        .nth(usize::from(draw()) % species.len())
         .copied()
 }
 
@@ -156,7 +157,7 @@ mod tests {
                 &mut trend,
                 candidates.iter(),
                 1.0,
-                &mut random
+                || (random.next_u32() >> 17) as u16
             ),
             None
         );
@@ -167,7 +168,7 @@ mod tests {
                 &mut trend,
                 candidates.iter(),
                 2.0,
-                &mut random
+                || (random.next_u32() >> 17) as u16
             ),
             Some(next)
         );
@@ -180,7 +181,7 @@ mod tests {
                 &mut trend,
                 candidates.iter(),
                 2.0,
-                &mut random,
+                || (random.next_u32() >> 17) as u16,
             );
         }
         assert_eq!(trend.species(), [Some(next), None]);

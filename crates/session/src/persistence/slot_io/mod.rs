@@ -83,6 +83,7 @@ pub(super) mod world_snapshot_types;
 pub(super) mod original_saved_game_catalogue_execution;
 mod original_saved_game_catalogue_reading;
 
+mod guest_continuation_snapshot;
 mod runtime_continuation_snapshot_application;
 mod runtime_continuation_snapshot_capture;
 mod runtime_continuation_snapshot_encoding;
@@ -91,6 +92,7 @@ mod runtime_continuation_snapshot_types;
 
 mod behavior_snapshot_identity_high_water_marks;
 
+mod money_snapshot_encoding;
 mod monthly_finance_history_encoding;
 mod original_saved_game_clock_conversion;
 mod original_saved_game_economy_conversion;

@@ -28,9 +28,9 @@ use openzt2_zoo_state::animal_welfare::types::AdjustRest;
 use openzt2_zoo_state::animal_welfare::types::AdjustSocial;
 use openzt2_zoo_state::animal_welfare::types::AdjustStimulation;
 use openzt2_zoo_state::animal_welfare::types::AdjustThirst;
-use openzt2_zoo_state::feeding::container_quantity::apply_authored_container_quantity_write;
 use openzt2_zoo_state::feeding::container_quantity::DrinkContainer;
 use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
+use openzt2_zoo_state::feeding::container_quantity::apply_authored_container_quantity_write;
 use openzt2_zoo_state::staff::staff_employment_types::Staff;
 
 use openzt2_zoo_state::guests::guest_simulation_types::{
@@ -66,7 +66,7 @@ use openzt2_zoo_state::{
         AquaticAnimal, Tank, TankGeometry, WaterFilter, WaterQuality,
     },
     habitat::habitat_types::{Containment, HabitatMember},
-    maintenance::maintenance_types::{AdjustFacilityContainedWaste, FacilityContainedWaste},
+    maintenance::maintenance_types::FacilityContainedWaste,
     staff::staff_job_types::TankCleaningRequestSite,
 };
 
@@ -81,8 +81,7 @@ pub(super) struct MaintenanceFacts<'w, 's> {
         (With<AquaticAnimal>, With<Animal>, Without<Dead>),
     >,
     filters: Query<'w, 's, &'static mut WaterFilter>,
-    trash: Query<'w, 's, &'static FacilityContainedWaste>,
-    trash_changes: MessageWriter<'w, AdjustFacilityContainedWaste>,
+    trash: Query<'w, 's, &'static mut FacilityContainedWaste>,
     object_ids: Query<'w, 's, &'static openzt2_world_state::world_spawn::world_membership_types::DefinitionId>,
     object_facts: Query<'w, 's, &'static mut AuthoredFloatAttributes>,
     definitions: Option<Res<'w, openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>>,
@@ -318,13 +317,22 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                     };
                 }
                 BehaviorFact::TrashLevel => {
-                    maintenance
-                        .trash_changes
-                        .write(AdjustFacilityContainedWaste {
-                            facility: animal,
-                            operation: modification.modification_operation,
-                            delta_q16: value_q16,
-                        });
+                    let waste = maintenance
+                        .trash
+                        .get_mut(animal)
+                        .expect("validated trash container");
+                    let next = match modification.modification_operation {
+                        BehaviorFactModificationOperation::Clear => 0,
+                        BehaviorFactModificationOperation::Add => {
+                            let change = (f64::from(value_q16) / 65_536.0).round() as i64;
+                            (i64::from(waste.contained_waste_units) + change)
+                                .clamp(0, i64::from(waste.contained_waste_capacity_units))
+                                as u16
+                        }
+                    };
+                    waste
+                        .map_unchanged(|waste| &mut waste.contained_waste_units)
+                        .set_if_neq(next);
                 }
                 BehaviorFact::Reproduction => {
                     modification_messages
@@ -426,31 +434,23 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                     )
                     .expect("FoodLevel target was validated before application");
                     if let Ok((_, mut container)) = food_containers.get_mut(target) {
-                        container.amount_q16 = apply_authored_container_quantity_write(
+                        let amount = apply_authored_container_quantity_write(
                             container.amount_q16,
                             container.capacity_q16,
                             value_q16,
                         );
-                        debug!(
-                            ?animal,
-                            ?target,
-                            amount_q16 = container.amount_q16,
-                            capacity_q16 = container.capacity_q16,
-                            "behavior food level written"
-                        );
+                        container
+                            .map_unchanged(|container| &mut container.amount_q16)
+                            .set_if_neq(amount);
                     } else if let Ok((_, mut container)) = drink_containers.get_mut(target) {
-                        container.amount_q16 = apply_authored_container_quantity_write(
+                        let amount = apply_authored_container_quantity_write(
                             container.amount_q16,
                             container.capacity_q16,
                             value_q16,
                         );
-                        debug!(
-                            ?animal,
-                            ?target,
-                            amount_q16 = container.amount_q16,
-                            capacity_q16 = container.capacity_q16,
-                            "behavior food level written"
-                        );
+                        container
+                            .map_unchanged(|container| &mut container.amount_q16)
+                            .set_if_neq(amount);
                     } else {
                         unreachable!("FoodLevel target was validated before application");
                     }
@@ -510,7 +510,7 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                             affected.remove::<Escaped>();
                         }
                         (BehaviorFact::Rampage, true) => {
-                            affected.insert_if_new(Rampaging { elapsed_ticks: 0 });
+                            affected.insert_if_new(Rampaging);
                         }
                         (BehaviorFact::Rampage, false) => {
                             affected.remove::<Rampaging>();

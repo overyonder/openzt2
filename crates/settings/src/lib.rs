@@ -15,7 +15,7 @@ use openzt2_interface_state::settings::options_screen_settings_draft_types;
 
 use audio_settings_types::{AudioSettings, ReplaceAudioSettingsRequest};
 use display_settings_types::{
-    DisplaySettings, ReplaceDisplaySettingsRequest, SelectScreenResolutionRequest,
+    DisplayMode, DisplaySettings, ReplaceDisplaySettingsRequest, SelectScreenResolutionRequest,
     SupportedDisplayResolutions,
 };
 use online_message_policy_types::OnlineMessagePolicy;
@@ -24,7 +24,6 @@ use openzt2_game_assets::graphics_settings_types::ReplaceGraphicsSettingsRequest
 
 use bevy::{ecs::schedule::common_conditions::*, prelude::*};
 
-use openzt2_interface_state::persistence::profile_types::ProfileSelected;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiSliderValueChanged;
 use openzt2_interface_state::ui::UiSet;
 use openzt2_world_state::application_schedule::GameSet;
@@ -33,10 +32,12 @@ pub struct SettingsPlugin;
 
 impl Plugin for SettingsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<DisplaySettings>()
-            .init_resource::<display_settings_application::AcceptedDisplaySettingsReady>()
-            .add_message::<ProfileSelected>()
-            .add_message::<UiSliderValueChanged>()
+        app.world_mut()
+            .get_resource_or_insert_with(|| DisplaySettings {
+                mode: DisplayMode::Windowed,
+                ..default()
+            });
+        app.add_message::<UiSliderValueChanged>()
             .init_resource::<AudioSettings>()
             .init_resource::<GraphicsSettings>()
             .init_resource::<OnlineMessagePolicy>()
@@ -87,12 +88,14 @@ impl Plugin for SettingsPlugin {
                 (
                     display_resolution_ui_presentation::refresh_supported_display_resolutions,
                     display_settings_application::validate_selected_screen_resolution_and_request_display_settings_replacement
-                        .run_if(on_message::<SelectScreenResolutionRequest>),
+                        .run_if(on_message::<SelectScreenResolutionRequest>)
+                        .after(display_resolution_ui_presentation::refresh_supported_display_resolutions),
                     display_settings_application::validate_and_accept_requested_display_settings
+                        .after(display_settings_application::validate_selected_screen_resolution_and_request_display_settings_replacement)
                         .after(authored_options_settings::apply_authored_options_setting_edits)
                         .before(openzt2_interface_state::shell::ShellNavigationAfterSettings)
                         .run_if(on_message::<ReplaceDisplaySettingsRequest>),
-                ).chain().in_set(GameSet::Intent),
+                ).in_set(GameSet::Intent),
             )
             .add_systems(
                 Update,
@@ -104,7 +107,7 @@ impl Plugin for SettingsPlugin {
             )
             .add_systems(
                 Update,
-                display_settings_application::apply_ready_display_settings_to_primary_window
+                display_settings_application::apply_display_settings_to_primary_window
                     .in_set(GameSet::Presentation),
             )
             .add_systems(

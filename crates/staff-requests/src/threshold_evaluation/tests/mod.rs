@@ -47,7 +47,7 @@ fn finite_thresholds_raise_only_on_entry() {
         (Comparison::ReachesOrAbove, 25, 25, false),
     ];
     let target = Entity::from_bits(7);
-    let sample = |value| Some(StaffRequestControllerSample::NumberQ16(value * 65_536));
+    let sample = |value| Some(StaffRequestFactValue::Number(value as f32));
     for (comparison, current, previous, expected) in cases {
         let row = number_row(comparison, false);
         let mut state = bind_rows(
@@ -86,12 +86,13 @@ fn authored_hysteresis_uses_independent_cancel_threshold() {
         row_index: 0,
         job_kind: row.request.token.and_then(terminal_job_kind_for_token),
         previous: None,
+        created: false,
     };
     assert!(evaluate_staff_request_row(
         &row,
         &mut state,
         target,
-        Some(StaffRequestControllerSample::NumberQ16(26 * 65_536))
+        Some(StaffRequestFactValue::Number(26.0))
     )
     .is_none());
     assert!(matches!(
@@ -99,7 +100,7 @@ fn authored_hysteresis_uses_independent_cancel_threshold() {
             &row,
             &mut state,
             target,
-            Some(StaffRequestControllerSample::NumberQ16(24 * 65_536))
+            Some(StaffRequestFactValue::Number(24.0))
         ),
         Some(StaffRequestJobEvent::Raised { .. })
     ));
@@ -107,21 +108,21 @@ fn authored_hysteresis_uses_independent_cancel_threshold() {
         &row,
         &mut state,
         target,
-        Some(StaffRequestControllerSample::NumberQ16(24 * 65_536))
+        Some(StaffRequestFactValue::Number(24.0))
     )
     .is_none());
     assert!(evaluate_staff_request_row(
         &row,
         &mut state,
         target,
-        Some(StaffRequestControllerSample::NumberQ16(25 * 65_536))
+        Some(StaffRequestFactValue::Number(25.0))
     )
     .is_none());
     assert!(evaluate_staff_request_row(
         &row,
         &mut state,
         target,
-        Some(StaffRequestControllerSample::NumberQ16(50 * 65_536))
+        Some(StaffRequestFactValue::Number(50.0))
     )
     .is_none());
     assert!(matches!(
@@ -129,7 +130,7 @@ fn authored_hysteresis_uses_independent_cancel_threshold() {
             &row,
             &mut state,
             target,
-            Some(StaffRequestControllerSample::NumberQ16(51 * 65_536))
+            Some(StaffRequestFactValue::Number(51.0))
         ),
         Some(StaffRequestJobEvent::Cancelled { .. })
     ));
@@ -137,7 +138,7 @@ fn authored_hysteresis_uses_independent_cancel_threshold() {
         &row,
         &mut state,
         target,
-        Some(StaffRequestControllerSample::NumberQ16(51 * 65_536))
+        Some(StaffRequestFactValue::Number(51.0))
     )
     .is_none());
 }
@@ -162,13 +163,14 @@ fn creation_and_edges_emit_one_request_and_one_cancellation_without_a_terminal_k
         row_index: 0,
         job_kind: None,
         previous: None,
+        created: false,
     };
     assert!(matches!(
         evaluate_staff_request_row(
             &row,
             &mut state,
             target,
-            Some(StaffRequestControllerSample::NumberQ16(24 * 65_536)),
+            Some(StaffRequestFactValue::Number(24.0)),
         ),
         Some(StaffRequestJobEvent::Raised { .. })
     ));
@@ -176,21 +178,21 @@ fn creation_and_edges_emit_one_request_and_one_cancellation_without_a_terminal_k
         &row,
         &mut state,
         target,
-        Some(StaffRequestControllerSample::NumberQ16(23 * 65_536)),
+        Some(StaffRequestFactValue::Number(23.0)),
     )
     .is_none());
     assert!(evaluate_staff_request_row(
         &row,
         &mut state,
         target,
-        Some(StaffRequestControllerSample::NumberQ16(25 * 65_536)),
+        Some(StaffRequestFactValue::Number(25.0)),
     )
     .is_none());
     assert!(evaluate_staff_request_row(
         &row,
         &mut state,
         target,
-        Some(StaffRequestControllerSample::NumberQ16(50 * 65_536)),
+        Some(StaffRequestFactValue::Number(50.0)),
     )
     .is_none());
     assert!(matches!(
@@ -198,7 +200,7 @@ fn creation_and_edges_emit_one_request_and_one_cancellation_without_a_terminal_k
             &row,
             &mut state,
             target,
-            Some(StaffRequestControllerSample::NumberQ16(51 * 65_536)),
+            Some(StaffRequestFactValue::Number(51.0)),
         ),
         Some(StaffRequestJobEvent::Cancelled { .. })
     ));
@@ -257,12 +259,74 @@ fn a_filter_is_cleaned_at_the_thresholds_of_its_chosen_schedule() {
     let target = Entity::from_bits(7);
     let rows = std::slice::from_ref(&row);
     let mut state = bind_rows(row.id, rows, terminal_job_kind_for_token).remove(0);
-    let dirt = |percent| Some(StaffRequestControllerSample::NumberQ16(percent * 65_536));
+    let dirt = |percent| Some(StaffRequestFactValue::Number(percent as f32));
     assert!(evaluate_staff_request_row(&regular, &mut state, target, dirt(40)).is_none());
+    assert!(evaluate_staff_request_row(&preemptive, &mut state, target, dirt(40)).is_none());
+    let mut state = reconcile_rows(row.id, rows, &[state], terminal_job_kind_for_token).remove(0);
     assert!(matches!(
-        evaluate_staff_request_row(&preemptive, &mut state, target, dirt(40)),
+        evaluate_staff_request_row(&regular, &mut state, target, dirt(55)),
         Some(StaffRequestJobEvent::Raised { .. })
     ));
-    let mut state = reconcile_rows(row.id, rows, &[state], terminal_job_kind_for_token).remove(0);
-    assert!(evaluate_staff_request_row(&regular, &mut state, target, dirt(55)).is_none());
+}
+
+#[test]
+fn disease_updates_emit_only_on_value_changes() {
+    let mut row = number_row(Comparison::EntersEquality, false);
+    row.attribute_key = Some(AssetId::from_key("b_disease"));
+    row.threshold = StaffRequestThresholdValue::Boolean(true);
+    row.cancel_threshold = StaffRequestThresholdValue::Boolean(false);
+    row.cancel_comparison = Comparison::EntersEquality;
+    let owner = Entity::from_bits(7);
+    let mut state = bind_rows(row.id, &[row], terminal_job_kind_for_token).remove(0);
+    let mut apply = |value| {
+        evaluate_staff_request_row(
+            &row,
+            &mut state,
+            owner,
+            Some(StaffRequestFactValue::Boolean(value)),
+        )
+    };
+    assert!(apply(false).is_none());
+    assert!(matches!(
+        apply(true),
+        Some(StaffRequestJobEvent::Raised { .. })
+    ));
+    assert!(apply(true).is_none());
+    assert!(matches!(
+        apply(false),
+        Some(StaffRequestJobEvent::Cancelled { .. })
+    ));
+}
+
+#[test]
+fn authored_mod_key_prefers_request_at_a_shared_crossing_and_creation_needs_no_value() {
+    let mut row = number_row(Comparison::ReachesOrAbove, false);
+    row.attribute_key = Some(AssetId::from_key("f_mod_property"));
+    row.threshold = StaffRequestThresholdValue::Number(-2.0);
+    row.cancel_threshold = row.threshold;
+    row.cancel_comparison = row.threshold_comparison;
+    let owner = Entity::from_bits(7);
+    let mut state = bind_rows(row.id, &[row], terminal_job_kind_for_token).remove(0);
+    let mut apply = |value| {
+        evaluate_staff_request_row(
+            &row,
+            &mut state,
+            owner,
+            Some(StaffRequestFactValue::Number(value)),
+        )
+    };
+    assert!(apply(-3.0).is_none());
+    assert!(matches!(
+        apply(-2.0),
+        Some(StaffRequestJobEvent::Raised { .. })
+    ));
+    assert!(apply(-1.0).is_none());
+    row.attribute_key = None;
+    row.trigger_on_creation = true;
+    let mut state = bind_rows(row.id, &[row], terminal_job_kind_for_token).remove(0);
+    assert!(matches!(
+        evaluate_staff_request_row(&row, &mut state, owner, None),
+        Some(StaffRequestJobEvent::Raised { .. })
+    ));
+    assert!(evaluate_staff_request_row(&row, &mut state, owner, None).is_none());
 }

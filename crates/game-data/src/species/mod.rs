@@ -29,6 +29,8 @@ pub struct SpeciesVariantBinding {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Species {
     #[serde(default)]
+    pub caffeine_factors: crate::CaffeineFactors,
+    #[serde(default)]
     pub placement_surface_policy:
         crate::world_definitions::object_placement::PlacementSurfacePolicy,
     #[serde(default)]

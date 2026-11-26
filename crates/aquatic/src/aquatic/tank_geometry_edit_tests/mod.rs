@@ -125,6 +125,13 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
         .add_message::<TransportTrackConstructionEditApplicationAcknowledged>()
         .add_plugins(ConstructionPlugin)
         .add_observer(super::tank_geometry_edit_execution::restore_uncommitted_tank_geometry)
+        .add_observer(super::tank_geometry_edit_execution::restore_unprepared_tank_geometry)
+        .add_systems(
+            FixedUpdate,
+            super::tank_geometry_edit_execution::clear_submitted_tank_geometry
+                .after(FixedConstructionSet::Prepare)
+                .before(FixedConstructionSet::Apply),
+        )
         .insert_resource(ConstructionTool::TankEdit)
         .insert_resource(ConstructionPlacementPolicy {
             tank_edit: kind,
@@ -136,6 +143,7 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
                 PointerInput::receive,
                 update_tank_geometry_gesture,
                 openzt2_construction::construction::construction_transaction_preparation::begin_construction_transaction_from_valid_preview,
+                super::tank_geometry_edit_execution::capture_submitted_tank_geometry,
             )
                 .chain(),
         )

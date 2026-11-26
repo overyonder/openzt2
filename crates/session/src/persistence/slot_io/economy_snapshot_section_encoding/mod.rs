@@ -1,3 +1,4 @@
+use super::money_snapshot_encoding::{decode_money, encode_money};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::economy::money_types::Money;
 
@@ -15,15 +16,15 @@ pub(super) fn append_encoded_economy_snapshot_section(
     bytes: &mut Vec<u8>,
     economy: &EconomySnapshotRecords,
 ) {
-    bytes.extend_from_slice(&economy.zoo_cash.0.to_le_bytes());
-    bytes.extend_from_slice(&economy.admission_price.0.to_le_bytes());
+    bytes.extend_from_slice(&encode_money(economy.zoo_cash));
+    bytes.extend_from_slice(&encode_money(economy.admission_price));
     bytes.push(u8::from(economy.admissions_open));
     bytes.push(u8::from(economy.monthly_finance_history_initialized));
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&2_u16.to_le_bytes());
     bytes.extend_from_slice(&economy.current_calendar_month.to_le_bytes());
-    bytes.extend_from_slice(&economy.lifetime_income.0.to_le_bytes());
-    bytes.extend_from_slice(&economy.lifetime_expenses.0.to_le_bytes());
-    bytes.extend_from_slice(&economy.lifetime_donation_income.0.to_le_bytes());
+    bytes.extend_from_slice(&encode_money(economy.lifetime_income));
+    bytes.extend_from_slice(&encode_money(economy.lifetime_expenses));
+    bytes.extend_from_slice(&encode_money(economy.lifetime_donation_income));
     bytes.extend_from_slice(&economy.lifetime_users.to_le_bytes());
     bytes.extend_from_slice(&(economy.monthly_finance_records.len() as u32).to_le_bytes());
     bytes.push(match economy.unlimited_cash {
@@ -79,7 +80,7 @@ pub(super) fn decode_and_validate_economy_snapshot_section(
     let revision = u16::from_le_bytes([payload[18], payload[19]]);
     let (header_bytes, unlimited_cash) = match revision {
         0 => (LEGACY_HEADER_BYTES, None),
-        1 => match payload.get(60) {
+        1 | 2 => match payload.get(60) {
             Some(0) => (61, None),
             Some(1) => (61, Some(false)),
             Some(2) => (61, Some(true)),
@@ -87,6 +88,8 @@ pub(super) fn decode_and_validate_economy_snapshot_section(
         },
         _ => return Err(WorldSnapshotPersistenceFailure::UnsupportedSnapshotFormatVersion),
     };
+    let dollars = revision == 2;
+    let read_money = |offset| decode_money(read_signed_64(offset)?.to_le_bytes(), dollars);
     let month_count = read_unsigned_32(56)? as usize;
     if month_count
         > openzt2_zoo_state::economy::monthly_finance_types::MONTHLY_FINANCE_HISTORY_CAPACITY
@@ -125,6 +128,7 @@ pub(super) fn decode_and_validate_economy_snapshot_section(
         months.push(
             super::monthly_finance_history_encoding::decode_monthly_finance_record(
                 &payload[offset..offset + MONTH_BYTES],
+                dollars,
             )?,
         );
     }
@@ -143,7 +147,10 @@ pub(super) fn decode_and_validate_economy_snapshot_section(
                     record[8..12].try_into().expect("fixed record width"),
                 )),
                 profit: Some((
-                    i64::from_le_bytes(record[12..20].try_into().expect("fixed record width")),
+                    decode_money(
+                        record[12..20].try_into().expect("fixed record width"),
+                        false,
+                    )?,
                     u32::from_le_bytes(record[20..24].try_into().expect("fixed record width")),
                 )),
                 price_index: None,
@@ -157,7 +164,7 @@ pub(super) fn decode_and_validate_economy_snapshot_section(
         }
         records
     } else {
-        decode_entity_economy_records(&payload[months_end..], facility_count)?
+        decode_entity_economy_records(&payload[months_end..], facility_count, dollars)?
     };
     if facilities
         .iter()
@@ -169,20 +176,20 @@ pub(super) fn decode_and_validate_economy_snapshot_section(
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
     let saved = EconomySnapshotRecords {
-        zoo_cash: Money(read_signed_64(0)?),
+        zoo_cash: read_money(0)?,
         unlimited_cash,
-        admission_price: Money(read_signed_64(8)?),
+        admission_price: read_money(8)?,
         admissions_open,
         current_calendar_month: read_unsigned_32(20)?,
-        lifetime_income: Money(read_signed_64(24)?),
-        lifetime_expenses: Money(read_signed_64(32)?),
-        lifetime_donation_income: Money(read_signed_64(40)?),
+        lifetime_income: read_money(24)?,
+        lifetime_expenses: read_money(32)?,
+        lifetime_donation_income: read_money(40)?,
         lifetime_users: read_signed_64(48)?,
         monthly_finance_history_initialized: history_initialized,
         monthly_finance_records: months,
         entity_economy_records: facilities,
     };
-    if saved.admission_price.0 < 0 {
+    if saved.admission_price < Money::ZERO {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
     Ok(saved)
@@ -212,7 +219,7 @@ fn encode_entity_economy_record(bytes: &mut Vec<u8>, record: &EntityEconomySnaps
         bytes.extend_from_slice(&day.to_le_bytes());
     }
     if let Some((profit, count)) = record.profit {
-        bytes.extend_from_slice(&profit.to_le_bytes());
+        bytes.extend_from_slice(&encode_money(profit));
         bytes.extend_from_slice(&count.to_le_bytes());
     }
     if let Some(index) = record.price_index {
@@ -222,10 +229,10 @@ fn encode_entity_economy_record(bytes: &mut Vec<u8>, record: &EntityEconomySnaps
         bytes.push(index);
     }
     if let Some(wallet) = record.wallet {
-        bytes.extend_from_slice(&wallet.to_le_bytes());
+        bytes.extend_from_slice(&encode_money(wallet));
     }
     if let Some(price) = record.price {
-        bytes.extend_from_slice(&price.to_le_bytes());
+        bytes.extend_from_slice(&encode_money(price));
     }
     if let Some(service) = record.service {
         bytes.extend_from_slice(&service.definition.0);
@@ -262,6 +269,7 @@ fn read_economy_bytes<const N: usize>(
 fn decode_entity_economy_records(
     payload: &[u8],
     count: usize,
+    dollars: bool,
 ) -> Result<Vec<EntityEconomySnapshotRecord>, WorldSnapshotPersistenceFailure> {
     let mut reader = std::io::Cursor::new(payload);
     let mut records = Vec::with_capacity(count);
@@ -280,7 +288,7 @@ fn decode_entity_economy_records(
         };
         let profit = if present(1) {
             Some((
-                i64::from_le_bytes(read_economy_bytes(&mut reader)?),
+                decode_money(read_economy_bytes(&mut reader)?, dollars)?,
                 u32::from_le_bytes(read_economy_bytes(&mut reader)?),
             ))
         } else {
@@ -297,12 +305,12 @@ fn decode_entity_economy_records(
             None
         };
         let wallet = if present(4) {
-            Some(i64::from_le_bytes(read_economy_bytes(&mut reader)?))
+            Some(decode_money(read_economy_bytes(&mut reader)?, dollars)?)
         } else {
             None
         };
         let price = if present(5) {
-            Some(i64::from_le_bytes(read_economy_bytes(&mut reader)?))
+            Some(decode_money(read_economy_bytes(&mut reader)?, dollars)?)
         } else {
             None
         };

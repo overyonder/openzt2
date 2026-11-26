@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Write};
+use std::fmt::Write;
 
 use bevy::{
     ecs::{entity::EntityHashSet, entity_disabling::Disabled, system::SystemParam},
@@ -18,48 +18,7 @@ use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::economy::money_types::Money;
 
-use super::donation_payment_types::{DonationCategoryTotals, DonationTotal};
-
-#[derive(Clone, Copy, Default)]
-struct DonationSum {
-    amount: i128,
-    count: u64,
-}
-
-#[derive(Component, Default)]
-pub(super) struct ZooDonationSummary(HashMap<Option<AssetId>, DonationSum>);
-
-impl ZooDonationSummary {
-    fn total(&self, category: Option<AssetId>) -> Option<DonationTotal> {
-        let sum = self.0.get(&category).copied().unwrap_or_default();
-        Some(DonationTotal {
-            amount: Money(i64::try_from(sum.amount).ok()?),
-            count: u32::try_from(sum.count).ok()?,
-        })
-    }
-
-    fn add(&mut self, category: AssetId, contribution: DonationTotal) {
-        for key in [Some(category), None] {
-            let sum = self.0.entry(key).or_default();
-            sum.amount += i128::from(contribution.amount.0);
-            sum.count += u64::from(contribution.count);
-        }
-    }
-
-    fn subtract(&mut self, category: AssetId, contribution: DonationTotal) {
-        for key in [Some(category), None] {
-            let entry = self.0.entry(key);
-            if let std::collections::hash_map::Entry::Occupied(mut entry) = entry {
-                let sum = entry.get_mut();
-                sum.amount -= i128::from(contribution.amount.0);
-                sum.count -= u64::from(contribution.count);
-                if sum.count == 0 && sum.amount == 0 {
-                    entry.remove();
-                }
-            }
-        }
-    }
-}
+use super::donation_payment_types::{DonationCategoryTotals, DonationTotal, ZooDonationSummary};
 
 /// The contribution already included in a root summary.
 #[derive(Component)]
@@ -258,7 +217,7 @@ pub(super) fn project_zoo_donation_summary(
             } => {
                 openzt2_zoo_state::economy::currency_formatting::write_whole_dollar_currency_with_thousands_separators(
                     &mut rendered,
-                    total.amount.0,
+                    (f64::from(total.amount.dollars()) * 100.0).round() as i64,
                 );
                 if let Some(localization) = localization {
                     let unformatted = std::mem::take(&mut rendered);

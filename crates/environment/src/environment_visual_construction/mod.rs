@@ -10,9 +10,8 @@ use openzt2_game_data::{
 use openzt2_world_state::model_render::environment_render_layer::EnvironmentRenderLayer;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
-use openzt2_world_state::animation_playback::animation_joint_target_types::{
-    AnimationJointTarget, AnimationRigJoints,
-};
+use bevy::gltf::{Gltf, GltfNode};
+use bevy::world_serialization::{WorldAssetRoot, WorldInstanceReady};
 use openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabAuthoredBillboardOrientationMode;
 use openzt2_world_state::world_spawn::prefab_fixed_function_world_lighting_policy::PrefabFixedFunctionWorldLightingPolicy;
 use openzt2_world_state::world_spawn::prefab_model_tint::PrefabModelTint;
@@ -245,52 +244,87 @@ fn hydrate_environment_sun_position_rig(
     }
 }
 
-pub(super) fn attach_pending_sun_visual_to_existing_joint(
-    inserted: On<Insert<EnvironmentSunPosition>>,
+pub(super) fn attach_sun_visual_when_position_model_is_ready(
+    ready: On<WorldInstanceReady>,
     mut commands: Commands,
-    pending: Query<&EnvironmentSunPosition>,
-    rigs: Query<&AnimationRigJoints>,
-    joints: Query<&AnimationJointTarget>,
-) {
-    let Ok(position) = pending.get(inserted.entity) else {
-        return;
-    };
-    let Ok(rig) = rigs.get(position.rig) else {
-        return;
-    };
-    if let Some(&joint) = rig.joints().iter().find(|&&joint| {
-        joints
-            .get(joint)
-            .is_ok_and(|target| target.authored_joint_id == position.node)
-    }) {
-        commands
-            .entity(inserted.entity)
-            .try_insert(ChildOf(joint))
-            .try_remove::<EnvironmentSunPosition>();
-    }
-}
-
-pub(super) fn attach_pending_sun_visuals_to_inserted_joint(
-    inserted: On<Insert<AnimationJointTarget>>,
-    mut commands: Commands,
-    joints: Query<&AnimationJointTarget>,
+    parents: Query<&ChildOf>,
+    children: Query<&Children>,
+    names: Query<&Name>,
     rigs: Query<&PendingSunRigVisuals>,
     pending: Query<&EnvironmentSunPosition>,
 ) {
-    let Ok(target) = joints.get(inserted.entity) else {
+    let Some(visuals) = std::iter::once(ready.entity)
+        .chain(parents.iter_ancestors::<ChildOf>(ready.entity))
+        .find_map(|ancestor| rigs.get(ancestor).ok())
+    else {
         return;
     };
-    let Ok(visuals) = rigs.get(target.animation_playback_controller_entity) else {
-        return;
-    };
-    for visual in visuals.iter() {
-        if pending
-            .get(visual)
-            .is_ok_and(|position| position.node == target.authored_joint_id)
-        {
+    let mut unresolved: Vec<_> = visuals
+        .iter()
+        .filter_map(|visual| Some((visual, pending.get(visual).ok()?.node)))
+        .collect();
+    for node in children.iter_descendants_depth_first::<Children>(ready.entity) {
+        let Ok(name) = names.get(node) else {
+            continue;
+        };
+        let key = AssetId::from_key(&name.as_str().to_ascii_lowercase());
+        unresolved.retain(|&(visual, requested)| {
+            if requested != key {
+                return true;
+            }
             commands
                 .entity(visual)
-                .try_insert(ChildOf(inserted.entity))
+                .try_insert(ChildOf(node))
+                .try_remove::<EnvironmentSunPosition>();
+            false
+        });
+        if unresolved.is_empty() {
+            break;
+        }
+    }
+}
+
+pub(super) fn attach_sun_visual_to_single_node_position_model(
+    mesh: On<Add, Mesh3d>,
+    mut commands: Commands,
+    parents: Query<&ChildOf>,
+    scene_roots: Query<(), With<WorldAssetRoot>>,
+    rigs: Query<(&PrefabModel, &PendingSunRigVisuals)>,
+    pending: Query<&EnvironmentSunPosition>,
+    models: Option<Res<Assets<Gltf>>>,
+    nodes: Option<Res<Assets<GltfNode>>>,
+) {
+    let Ok(gate) = parents.get(mesh.entity) else {
+        return;
+    };
+    if scene_roots.contains(gate.parent()) {
+        return;
+    }
+    let Some((model, visuals)) = parents
+        .get(gate.parent())
+        .ok()
+        .and_then(|rig| rigs.get(rig.parent()).ok())
+    else {
+        return;
+    };
+    let Some(gltf) = models
+        .as_ref()
+        .and_then(|models| models.get(model.handle.as_ref()?))
+        .filter(|gltf| {
+            gltf.nodes.len() == 1 && gltf.animations.is_empty() && gltf.skins.is_empty()
+        })
+    else {
+        return;
+    };
+    let Some(node) = nodes.as_ref().and_then(|nodes| nodes.get(&gltf.nodes[0])) else {
+        return;
+    };
+    let requested = AssetId::from_key(&node.name.to_ascii_lowercase());
+    for visual in visuals.iter() {
+        if pending.get(visual).is_ok_and(|sun| sun.node == requested) {
+            commands
+                .entity(visual)
+                .try_insert(ChildOf(mesh.entity))
                 .try_remove::<EnvironmentSunPosition>();
         }
     }

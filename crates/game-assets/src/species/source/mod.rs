@@ -16,12 +16,12 @@ use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::resolved_source_record_index::SourceIndex;
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::species::ConservationStatus;
 use openzt2_game_data::species::Species;
 use openzt2_game_data::species::SpeciesDocument;
 use openzt2_game_data::species::SpeciesFlags;
 use openzt2_game_data::species::SpeciesVariantBinding;
-use openzt2_game_data::AssetId;
 use std::collections::BTreeSet;
 
 pub mod adoption;
@@ -69,6 +69,17 @@ pub(crate) fn collect_authored_species_type_source_references(
     let mut references = BTreeSet::new();
     let root = &document.root;
     collect_authored_inheritance_source_references(root, &mut references);
+    for shared in
+        source_queries::find_all_semantically_named_source_descendants(root, "BFAIEntityDataShared")
+    {
+        if let Some(name) = shared
+            .attribute_named_any(&["s_Species"])
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            references.insert(name.to_owned());
+        }
+    }
     root.element_children()
         .filter(|child| source_document_names_are_semantically_equal(child.name.as_str(), "types"))
         .for_each(|types| collect_authored_type_tree_source_references(types, &mut references));
@@ -95,11 +106,19 @@ pub(super) fn lower_resolved_species_source_document_closure_to_canonical_docume
         return Ok(SpeciesDocument::default());
     }
     let purchase_family = find_authored_species_purchase_family_root(&current, index.records());
-    let species = purchase_family.or_else(|| {
+    let referenced_species = || {
         let species_name = find_effective_authored_animal_shared_attribute(&current, "s_Species")?;
         current
             .find_resolved_source_record_by_reference(species_name)
             .filter(|species| species.has_type_token("animal"))
+    };
+    let species = purchase_family.or_else(referenced_species).or_else(|| {
+        let abstract_binder = authored_optional_boolean_is_true(
+            current
+                .source_document_element()
+                .attribute_named_any(&["abstract"]),
+        );
+        (!abstract_binder).then_some(current)
     });
     let Some(species) = species else {
         return Ok(SpeciesDocument::default());
@@ -107,7 +126,7 @@ pub(super) fn lower_resolved_species_source_document_closure_to_canonical_docume
 
     let authored_species_name =
         find_effective_authored_animal_shared_attribute(&species, "s_Species")
-            .ok_or_else(|| BindError::record(&species, "animal family has no s_Species"))?;
+            .unwrap_or(species.key);
     let species_record = (current.key == species.key)
         .then(|| {
             lower_species_source_record_to_canonical_species(&species, purchase_family.is_some())
@@ -168,9 +187,7 @@ fn lower_species_source_record_to_canonical_species(
     species: &RecordView<'_, '_>,
     adoptable: bool,
 ) -> Result<Species, BindError> {
-    let shared = species
-        .descendant_named("BFAIEntityDataShared")
-        .ok_or_else(|| BindError::record(species, "animal family has no shared entity data"))?;
+    let shared = |name| find_effective_authored_animal_shared_attribute(species, name);
     let name_key = species
         .descendant_named("UIHelpInfo")
         .and_then(|element| element.attribute_named_any(&["ids"]))
@@ -187,8 +204,7 @@ fn lower_species_source_record_to_canonical_species(
         })
         .last()
         .unwrap_or_else(|| species.key.to_owned());
-    let endangerment = shared
-        .attribute_named_any(&["s_Endangerment"])
+    let endangerment = shared("s_Endangerment")
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
@@ -229,7 +245,7 @@ fn lower_species_source_record_to_canonical_species(
         ("b_XLargePrey", SpeciesFlags::EXTRA_LARGE_PREY),
         ("b_XXLargePrey", SpeciesFlags::DOUBLE_EXTRA_LARGE_PREY),
     ] {
-        if authored_optional_boolean_is_true(shared.attribute_named_any(&[attribute])) {
+        if authored_optional_boolean_is_true(shared(attribute)) {
             flags = flags | flag;
         }
     }
@@ -247,6 +263,7 @@ fn lower_species_source_record_to_canonical_species(
     }
 
     Ok(Species {
+        caffeine_factors: locomotion::lower_species_caffeine_factors(species)?,
         placement_surface_policy: crate::world_definitions::lower::authored_placement_footprint_lowering::authored_surface_policy(species)?,
         donation: donation::lower_animal_donation_policy(species)?,
         id: AssetId::from_key(&canonicalize_source_document_record_key(species.key)),
@@ -254,7 +271,7 @@ fn lower_species_source_record_to_canonical_species(
             species,
             "s_Species",
         )
-        .ok_or_else(|| BindError::record(species, "animal family has no s_Species"))?
+        .unwrap_or(species.key)
         .to_owned(),
         authored_product_name: find_effective_authored_animal_shared_attribute(
             species,

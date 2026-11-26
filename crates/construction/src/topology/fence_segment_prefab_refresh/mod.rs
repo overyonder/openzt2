@@ -1,5 +1,8 @@
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
+use openzt2_game_data::world_definitions::world_objects::WorldObjectInformationViewClass;
+use openzt2_progression::progression::AwardProgramEffect;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::topology::{
     topology_edit_types::FenceConnectivityChanged,
     topology_graph_types::{
@@ -23,6 +26,39 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge_world_transform;
+
+pub(super) fn replace_zoo_wall_definitions(
+    mut effects: MessageReader<AwardProgramEffect>,
+    active_definitions: Res<WorldDefinitions>,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    mut walls: Query<(&WorldMember, &mut FenceEdge)>,
+) {
+    let Some(definitions) = active_definitions.get(&definitions) else {
+        return;
+    };
+    for effect in effects.read() {
+        let AwardProgramEffect::ReplaceZooWalls { root, definition } = *effect else {
+            continue;
+        };
+        if definitions.find_fence(definition).is_none() {
+            continue;
+        }
+        for (world, mut wall) in &mut walls {
+            if world.root != root || wall.definition == definition {
+                continue;
+            }
+            let zoo_wall = definitions
+                .find_fence(wall.definition)
+                .and_then(|previous| definitions.find_object(previous.object))
+                .is_some_and(|object| {
+                    object.view_class == Some(WorldObjectInformationViewClass::ZooWall)
+                });
+            if zoo_wall {
+                wall.definition = definition;
+            }
+        }
+    }
+}
 
 pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
     mut commands: Commands,

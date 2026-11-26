@@ -4,17 +4,14 @@ use super::{
     world_scenario_document_asset_and_dependency_handles::DemandLoadedAssetPath,
     world_scenario_document_source::WorldScenarioDocumentSource,
     world_scenario_source_reference_resolution::{
-        resolve_world_scenario_source_references, unresolved_reference, SourceReference,
-        SourceReferenceKind,
+        SourceReference, SourceReferenceKind, resolve_world_scenario_source_references,
     },
 };
 use crate::{
     asset_source::AssetArchives,
     source_document::{
         blue_fang_actor_manifest_model_and_scene_resolution_index::BlueFangActorManifestModelAndSceneResolutionIndex,
-        blue_fang_source_dependency_reference_discovery::collect_blue_fang_actor_manifest_source_references,
-        blue_fang_source_document_parsing::parse_blue_fang_source_document,
-        ordered_source_document_types::OrderedSourceDocument, path::AssetPath,
+        ordered_source_document_types::OrderedSourceDocument,
     },
 };
 use bevy::asset::LoadContext;
@@ -32,20 +29,9 @@ pub(super) async fn lower_world_source_document_and_resolve_dependencies(
 )> {
     let path = source.path.as_str();
     let documents = std::slice::from_ref(source);
-    let mut actors = BlueFangActorManifestModelAndSceneResolutionIndex::default();
-    for manifest in collect_blue_fang_actor_manifest_source_references(documents) {
-        let resolved = archives
-            .resolve_source_reference(Path::new(path), &manifest)
-            .ok_or_else(|| unresolved_reference(path, "actor manifest", &manifest))?;
-        let manifest_path = resolved.to_string_lossy().replace('\\', "/");
-        let bytes = context
-            .read_asset_bytes(resolved)
-            .await
-            .map_err(io::Error::other)?;
-        let manifest = parse_blue_fang_source_document(AssetPath::new(&manifest_path), &bytes)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        actors.insert_parsed_blue_fang_actor_model_manifest(&manifest);
-    }
+    let actors =
+        BlueFangActorManifestModelAndSceneResolutionIndex::load(archives, context, documents)
+            .await?;
     let starting_zoo = matches!(
         source.root.name.rsplit(':').next(),
         Some("BFContext" | "saveRoot")

@@ -1,5 +1,9 @@
 use bevy::{
-    ecs::{entity::EntityLocation, relationship::RelationshipTarget, system::SystemParam},
+    ecs::{
+        entity::{EntityHashSet, EntityLocation},
+        relationship::RelationshipTarget,
+        system::SystemParam,
+    },
     platform::collections::HashMap,
     prelude::*,
 };
@@ -8,7 +12,7 @@ use openzt2_world_state::{
     application_schedule::FixedGameSet, world_spawn::world_membership_types::WorldMember,
 };
 
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMembers, WorldRoot};
 use openzt2_zoo_state::locomotion::locomotion_types::{
     NavAgent, SpatialCell, SpatialCellMembers, SpatialGrid,
 };
@@ -67,22 +71,32 @@ fn project_spatial_candidates(
             Changed<WorldMember>,
             Changed<SpatialCell>,
             Added<NavAgent>,
-            (Without<BehaviorSpatialCell>, Without<SpatialCell>),
         )>,
     >,
     all: Query<SpatialFacts>,
-    mut worlds: Query<(Option<Ref<SpatialGrid>>, &mut BehaviorSpatialOverflow), With<WorldRoot>>,
+    grid_changes: Query<&WorldMembers, Changed<SpatialGrid>>,
+    world_members: Query<&WorldMembers>,
+    mut removed_cells: RemovedComponents<SpatialCell>,
+    mut removed_agents: RemovedComponents<NavAgent>,
+    mut removed_grids: RemovedComponents<SpatialGrid>,
+    mut worlds: Query<(Option<&SpatialGrid>, &mut BehaviorSpatialOverflow), With<WorldRoot>>,
     mut commands: Commands,
 ) {
-    let refresh = worlds
+    let mut affected = moved
         .iter()
-        .any(|(grid, _)| grid.is_some_and(|grid| grid.is_changed()));
-    let rows = refresh
-        .then(|| all.iter())
-        .into_iter()
-        .flatten()
-        .chain((!refresh).then(|| moved.iter()).into_iter().flatten());
-    for (entity, transform, member, current, navigation_cell, navigation_agent) in rows {
+        .map(|(entity, ..)| entity)
+        .collect::<EntityHashSet>();
+    affected.extend(removed_cells.read());
+    affected.extend(removed_agents.read());
+    affected.extend(grid_changes.iter().flat_map(RelationshipTarget::iter));
+    for root in removed_grids.read() {
+        if let Ok(members) = world_members.get(root) {
+            affected.extend(members.iter());
+        }
+    }
+    for (entity, transform, member, current, navigation_cell, navigation_agent) in
+        all.iter_many(affected).flatten()
+    {
         let Ok((grid, mut overflow)) = worlds.get_mut(member.root) else {
             continue;
         };

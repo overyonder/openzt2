@@ -1,7 +1,8 @@
-use std::collections::VecDeque;
-
 use bevy::{
-    ecs::{entity::EntityHashMap, relationship::RelationshipTarget},
+    ecs::{
+        entity::{EntityHashMap, EntityHashSet},
+        relationship::RelationshipTarget,
+    },
     platform::collections::HashMap,
     prelude::*,
 };
@@ -14,11 +15,87 @@ use openzt2_zoo_state::extinct_animals::fossil_collection_and_assembly_types::{
     CollectedFossilPiece, CompletedFossilSetAssembly, FossilAssemblyCompleted, FossilAssemblySlot,
     FossilAssemblySlotOccupant, FossilAssemblySlotOf, FossilAssemblySlots, FossilAssemblyTable,
     FossilPieceInSlot, FossilPlacementSurface, FossilSetAssembly, PlaceFossilPieceInAssemblyRequest,
-    WorldFossilPieces,
+    FossilPieceOfWorld,
 };
 use openzt2_zoo_state::progression::unlock_types::ApplyCatalogueDefinitionUnlockRequest;
 
 use super::fossil_definition_index::FossilDefinitionIndex;
+
+/// The piece is being arranged at an assembly table.
+#[derive(Component)]
+pub struct FossilAssemblyPiecePose;
+
+#[derive(Message)]
+pub struct UpdateFossilAssemblyPiecePose {
+    pub assembly: Entity,
+    pub piece: Entity,
+    pub pose: Transform,
+}
+
+pub(super) fn update_fossil_assembly_piece_poses(
+    mut requests: MessageReader<UpdateFossilAssemblyPiecePose>,
+    index: Res<FossilDefinitionIndex>,
+    tables: Query<
+        (
+            &WorldMember,
+            &FossilPlacementSurface,
+            Option<&FossilSetAssembly>,
+        ),
+        With<FossilAssemblyTable>,
+    >,
+    mut pieces: Query<
+        (
+            &CollectedFossilPiece,
+            &FossilPieceOfWorld,
+            &mut Transform,
+            Has<FossilAssemblyPiecePose>,
+        ),
+        Without<FossilPieceInSlot>,
+    >,
+    mut commands: Commands,
+) {
+    let mut activated = EntityHashSet::default();
+    for request in requests.read() {
+        let Ok((world, surface, set)) = tables.get(request.assembly) else {
+            continue;
+        };
+        let Ok((collected, owner, mut pose, shown)) = pieces.get_mut(request.piece) else {
+            continue;
+        };
+        let Some(definition) = index.piece(collected.0) else {
+            continue;
+        };
+        if owner.0 != world.root
+            || !surface.accepts_fossil_pieces
+            || set.is_some_and(|set| set.0 != definition.set)
+        {
+            continue;
+        }
+        let Some(next) = released_piece_pose(request.pose, definition.scale_permille) else {
+            continue;
+        };
+        pose.set_if_neq(next);
+        if !shown && activated.insert(request.piece) {
+            commands
+                .entity(request.piece)
+                .insert(FossilAssemblyPiecePose);
+        }
+    }
+}
+
+fn released_piece_pose(pose: Transform, scale_permille: u16) -> Option<Transform> {
+    if !pose.translation.is_finite()
+        || !pose.rotation.is_finite()
+        || pose.rotation.length_squared() <= f32::EPSILON
+    {
+        return None;
+    }
+    Some(
+        Transform::from_translation(pose.translation)
+            .with_rotation(pose.rotation.normalize())
+            .with_scale(Vec3::splat(f32::from(scale_permille) / 1000.0)),
+    )
+}
 
 struct FossilTableClaims {
     set: AssetId,
@@ -44,58 +121,78 @@ pub(super) fn place_requested_fossil_pieces(
         With<FossilAssemblyTable>,
     >,
     slots: Query<(&FossilAssemblySlot, Has<FossilAssemblySlotOccupant>)>,
-    world_pieces: Query<&WorldFossilPieces>,
-    available_pieces: Query<(Entity, &CollectedFossilPiece), Without<FossilPieceInSlot>>,
-    mut piece_poses: Query<&mut Transform, With<CollectedFossilPiece>>,
+    mut available_pieces: Query<
+        (
+            &CollectedFossilPiece,
+            &FossilPieceOfWorld,
+            &mut Transform,
+            Has<FossilAssemblyPiecePose>,
+        ),
+        Without<FossilPieceInSlot>,
+    >,
     mut commands: Commands,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let mut pieces_by_world = EntityHashMap::<HashMap<AssetId, VecDeque<Entity>>>::default();
+    let mut claimed_pieces = EntityHashSet::default();
+    let mut arranged_pieces = EntityHashSet::default();
     let mut claims_by_table = EntityHashMap::<FossilTableClaims>::default();
     for request in requests.read() {
         let table = request.assembly_entity;
-        let (Some(piece), Some(slot)) = (
-            index.pieces.get(usize::from(request.global_piece_index)),
-            index.slots.get(usize::from(request.authored_slot_index)),
+        if claimed_pieces.contains(&request.piece) {
+            continue;
+        }
+        let Ok((collected, piece_world, mut piece_pose, shown)) =
+            available_pieces.get_mut(request.piece)
+        else {
+            continue;
+        };
+        let Some(piece) = index.piece(collected.0) else {
+            continue;
+        };
+        let (Some(set), Some(slot)) = (
+            definitions.find_fossil_set(piece.set),
+            definitions.find_fossil_slot(piece.slot),
         ) else {
             continue;
         };
-        let Some(set) = definitions.find_fossil_set(piece.set) else {
-            continue;
-        };
-        if piece.slot != slot.id || !set.pieces.contains(&piece.id) {
+        if !set.pieces.contains(&piece.id) {
             continue;
         }
-        let Ok((member, pose, surface, assembly, table_slots, completed)) = tables.get(table)
+        let Ok((member, table_pose, surface, assembly, table_slots, completed)) = tables.get(table)
         else {
             continue;
         };
-        if !surface.accepts_fossil_pieces || assembly.is_some_and(|assembly| assembly.0 != set.id) {
+        if piece_world.0 != member.root
+            || !surface.accepts_fossil_pieces
+            || assembly.is_some_and(|assembly| assembly.0 != set.id)
+        {
             continue;
         }
-        let pieces = pieces_by_world.entry(member.root).or_insert_with(|| {
-            let mut pieces = HashMap::<AssetId, VecDeque<Entity>>::default();
-            for (entity, collected) in available_pieces
-                .iter_many(
-                    world_pieces
-                        .get(member.root)
-                        .into_iter()
-                        .flat_map(RelationshipTarget::iter),
-                )
-                .flatten()
-            {
-                pieces.entry(collected.0).or_default().push_back(entity);
-            }
-            pieces
-        });
-        let Some(claimable) = pieces
-            .get_mut(&piece.id)
-            .filter(|pieces| !pieces.is_empty())
+        let Some(released) = released_piece_pose(request.released_pose, piece.scale_permille)
         else {
             continue;
         };
+        if !shown && arranged_pieces.insert(request.piece) {
+            commands
+                .entity(request.piece)
+                .insert(FossilAssemblyPiecePose);
+        }
+        let mut resting_pose = Transform::from_matrix(
+            table_pose.to_matrix() * Mat4::from_cols_array_2d(&slot.transform),
+        );
+        let scale = f32::from(piece.scale_permille) / 1000.0;
+        resting_pose.scale *= scale;
+        let tolerance = f32::from(slot.tolerance_cm) / 100.0;
+        if released
+            .translation
+            .distance_squared(resting_pose.translation)
+            > tolerance * tolerance
+        {
+            piece_pose.set_if_neq(released);
+            continue;
+        }
         let claims = claims_by_table.entry(table).or_insert_with(|| {
             let mut claims = FossilTableClaims {
                 set: set.id,
@@ -136,19 +233,13 @@ pub(super) fn place_requested_fossil_pieces(
         if *occupied {
             continue;
         }
-        let Some(piece_entity) = claimable.pop_front() else {
-            continue;
-        };
+        claimed_pieces.insert(request.piece);
         *occupied = true;
         claims.occupied_count += 1;
+        piece_pose.set_if_neq(resting_pose);
         commands
-            .entity(piece_entity)
+            .entity(request.piece)
             .insert(FossilPieceInSlot(*slot_entity));
-        if let Ok(mut transform) = piece_poses.get_mut(piece_entity) {
-            transform.set_if_neq(Transform::from_matrix(
-                pose.to_matrix() * Mat4::from_cols_array_2d(&slot.transform),
-            ));
-        }
         if claims.occupied_count == set.pieces.len() && !claims.completed {
             claims.completed = true;
             commands.entity(table).insert(FossilAssemblyCompleted);

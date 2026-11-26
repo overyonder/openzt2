@@ -88,9 +88,6 @@ pub(super) struct EnvironmentOfWorld(pub(super) Entity);
 #[relationship_target(relationship = EnvironmentOfWorld, linked_spawn)]
 pub(super) struct WorldEnvironments(Vec<Entity>);
 
-#[derive(Component)]
-pub(super) struct EnvironmentRendererReady;
-
 #[derive(Component, Clone, Copy, PartialEq)]
 pub(super) struct AboveWaterFog {
     pub(super) color: Color,
@@ -109,8 +106,3 @@ impl Default for AboveWaterFog {
         }
     }
 }
-
-/// One-frame marker ensuring freshly hydrated renderer components receive the
-/// current sample even when the clock has not advanced.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub(super) struct EnvironmentPresentationPending;

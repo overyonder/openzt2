@@ -42,6 +42,7 @@ pub(super) struct PreparedParticleEmitter {
     pub(super) emission_settings: ControlledEffectEmissionSettings,
     pub(super) authored_initial_size: Option<f32>,
     pub(super) uses_plane: bool,
+    pub(super) shared_spawn_capacity: Option<u32>,
 }
 
 #[derive(Clone, Debug, VisitAssetDependencies)]
@@ -96,6 +97,7 @@ impl ParticleEmissionWindow {
 pub(super) struct PreparedCollisionParticleEmitter {
     pub(super) emitter: AssetId,
     pub(super) occurrence: usize,
+    pub(super) event_capacity: u32,
     #[dependency]
     pub(super) effect: Handle<EffectAsset>,
 }
@@ -156,7 +158,7 @@ pub(crate) fn prepare_particle_effect_document(
                     .modifiers
                     .iter()
                     .filter_map(create_collision_spawn_initialization)
-                    .filter_map(|(child, initialization)| {
+                    .filter_map(|(child, max_count, initialization)| {
                         let target = emitters.get(&child)?;
                         let count = occurrences.entry(child).or_default();
                         let occurrence = *count;
@@ -174,6 +176,7 @@ pub(crate) fn prepare_particle_effect_document(
                         Some(PreparedCollisionParticleEmitter {
                             emitter: child,
                             occurrence,
+                            event_capacity: emitter.capacity.saturating_mul(max_count),
                             effect: load_context.add_labeled_asset(
                                 format!(
                                     "{label}/collision/{}/{occurrence}",
@@ -225,6 +228,7 @@ pub(crate) fn prepare_particle_effect_document(
                         prototype_mesh: None,
                         emission_settings: ControlledEffectEmissionSettings {
                             clock: emitter.clock,
+                            controller_clock: None,
                             retires_when_empty: emitter_tree_can_retire_when_empty(
                                 id,
                                 &emitters,
@@ -275,52 +279,105 @@ pub(crate) fn prepare_particle_effect_document(
                                 .unwrap_or_default(),
                         ),
                         uses_plane,
+                        shared_spawn_capacity: None,
                     },
                 );
             }
         }
         ParticleEffectDocument::LegacyNif(effect) => {
-            let prototype_mesh = native_model.and_then(|model| {
-                let geometry = effect
-                    .modifiers
-                    .iter()
-                    .find_map(|modifier| match modifier {
-                        LegacyNifParticleModifier::MeshSelection { prototype_blocks } => {
-                            prototype_blocks.iter().copied().find(|&block| block >= 0)
+            let policy = effect.spawn_policy;
+            let collision_triggers = effect
+                .modifiers
+                .iter()
+                .filter(|modifier| {
+                    matches!(
+                        modifier,
+                        LegacyNifParticleModifier::PlanarCollision {
+                            spawn_on_collide: true,
+                            ..
                         }
-                        _ => None,
-                    })?;
-                let path = std::path::Path::new(&effect.model).with_extension("nif");
-                let name = format!("{}#geometry/nif_{geometry:08x}", path.display());
-                model.named_meshes.get(name.as_str()).cloned()
-            });
-            prepared_emitters.insert(
-                effect.emitter_id,
-                PreparedParticleEmitter {
-                    effect: load_context.add_labeled_asset(
-                        format!("{label_prefix}/emitter"),
-                        prepare_legacy_nif_particle_effect_as_hanabi_effect_asset(effect),
-                    ),
-                    wave_effect: None,
-                    collision_children: Vec::new(),
-                    renderers: Vec::new(),
-                    prototype_mesh,
-                    emission_settings: ControlledEffectEmissionSettings {
-                        clock: ParticleEffectSimulationClock::Presentation,
-                        retires_when_empty: true,
-                        emission_window: Some(ParticleEmissionWindow {
-                            start: effect.emit_start_seconds,
-                            stop: effect.emit_stop_seconds,
-                            frequency: 1.0,
-                            phase: 0.0,
-                        }),
-                        birth_rate_curve: None,
-                        manually_driven: false,
+                    )
+                })
+                .count();
+            let spawn_triggers = u32::try_from(collision_triggers)
+                .unwrap_or(u32::MAX)
+                .saturating_add(u32::from(policy.on_death));
+            let last_generation =
+                if spawn_triggers != 0 && policy.multiplier != 0 && policy.probability > 0.0 {
+                    policy.maximum_generation
+                } else {
+                    0
+                };
+            let mut next: Option<(AssetId, Handle<EffectAsset>)> = None;
+            let mut variants = BTreeMap::<(bool, bool), Handle<EffectAsset>>::new();
+            for generation in (0..=last_generation).rev() {
+                let id = if generation == 0 {
+                    effect.emitter_id
+                } else {
+                    AssetId::from_key(&format!(
+                        "{}:generation:{generation}",
+                        effect.emitter_id.to_lowercase_hexadecimal_string()
+                    ))
+                };
+                let inherits_parent = generation != 0;
+                let spawns_children = next.is_some();
+                let handle = variants
+                    .entry((inherits_parent, spawns_children))
+                    .or_insert_with(|| {
+                        load_context.add_labeled_asset(
+                            format!("{label_prefix}/generation/{generation}"),
+                            prepare_legacy_nif_particle_effect_as_hanabi_effect_asset(
+                                effect,
+                                inherits_parent,
+                                spawns_children,
+                            ),
+                        )
+                    })
+                    .clone();
+                let collision_children = next
+                    .take()
+                    .map(
+                        |(emitter, effect_handle)| PreparedCollisionParticleEmitter {
+                            emitter,
+                            occurrence: 0,
+                            event_capacity: effect
+                                .capacity
+                                .saturating_mul(spawn_triggers)
+                                .saturating_mul(u32::from(policy.multiplier)),
+                            effect: effect_handle,
+                        },
+                    )
+                    .into_iter()
+                    .collect();
+                prepared_emitters.insert(
+                    id,
+                    PreparedParticleEmitter {
+                        effect: handle.clone(),
+                        wave_effect: None,
+                        collision_children,
+                        renderers: Vec::new(),
+                        prototype_mesh: native_model
+                            .and_then(|model| legacy_nif_prototype(model, effect, generation)),
+                        emission_settings: ControlledEffectEmissionSettings {
+                            clock: ParticleEffectSimulationClock::Presentation,
+                            controller_clock: Some(effect.controller_clock),
+                            retires_when_empty: true,
+                            emission_window: Some(ParticleEmissionWindow {
+                                start: effect.emit_start_seconds,
+                                stop: effect.emit_stop_seconds,
+                                frequency: 1.0,
+                                phase: 0.0,
+                            }),
+                            birth_rate_curve: None,
+                            manually_driven: false,
+                        },
+                        authored_initial_size: None,
+                        uses_plane: false,
+                        shared_spawn_capacity: Some(effect.capacity),
                     },
-                    authored_initial_size: None,
-                    uses_plane: false,
-                },
-            );
+                );
+                next = Some((id, handle));
+            }
         }
     }
     ParticleEffectDocumentAsset {
@@ -328,6 +385,25 @@ pub(crate) fn prepare_particle_effect_document(
         decal_emitter,
         prepared_emitters,
     }
+}
+
+fn legacy_nif_prototype(
+    model: &Gltf,
+    effect: &openzt2_game_data::particle::legacy_nif_particle_effect::LegacyNifParticleEffect,
+    generation: u16,
+) -> Option<Handle<GltfMesh>> {
+    let prototypes = effect
+        .modifiers
+        .iter()
+        .find_map(|modifier| match modifier {
+            LegacyNifParticleModifier::MeshSelection { prototype_blocks } => Some(prototype_blocks),
+            _ => None,
+        })?;
+    let index = usize::from(generation).min(prototypes.len().checked_sub(1)?);
+    let geometry = u32::try_from(prototypes[index]).ok()?;
+    let path = std::path::Path::new(&effect.model).with_extension("nif");
+    let name = format!("{}#geometry/nif_{geometry:08x}", path.display());
+    model.named_meshes.get(name.as_str()).cloned()
 }
 
 fn emitter_tree_can_retire_when_empty(

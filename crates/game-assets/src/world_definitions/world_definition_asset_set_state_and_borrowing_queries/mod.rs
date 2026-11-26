@@ -3,13 +3,14 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
 use bevy::{gltf::Gltf, prelude::*};
 use openzt2_game_data::{
+    AssetId,
     world_definitions::{
         animal_health::*,
         animal_shows_and_training::*,
@@ -42,7 +43,6 @@ use openzt2_game_data::{
         transportation_and_tours::*,
         world_objects::*,
     },
-    AssetId,
 };
 
 use crate::{effect::ParticleEffectDocumentAsset, scene_prefab::ScenePrefabAsset};
@@ -109,6 +109,7 @@ pub(super) enum DefinitionKind {
     // Precedence winners for demand-loaded dependency identifiers.
     TextureDependency,
     MaterialDependency,
+    TankWaterMaterialDependency,
     ModelDependency,
     EffectDependency,
     SceneDependency,
@@ -151,11 +152,18 @@ pub(super) enum SingletonKind {
     StaffManager,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct DefinitionRow {
     pub(super) handle: Handle<WorldDefinitionAsset>,
     pub(super) first: usize,
     pub(super) end: usize,
+}
+
+#[derive(Message)]
+pub struct WorldDefinitionSourcesPublished {
+    pub overlay_generation: Option<u64>,
+    pub changed_objects: Box<[AssetId]>,
+    pub failed_sources: Box<[bevy::asset::AssetId<WorldDefinitionAsset>]>,
 }
 
 #[derive(Resource, Default)]
@@ -170,7 +178,7 @@ pub struct WorldDefinitions {
     pub(super) active_load: Option<Handle<super::world_definition_load_queue::WorldDefinitionLoadCompletion>>,
     pub(super) next_load_paths: Option<Vec<std::path::PathBuf>>,
     pub(super) routed_sources: BTreeMap<std::path::PathBuf, std::path::PathBuf>,
-    pub(super) source_generation: u64,
+    pub(super) requested_overlay_generation: u64,
     pub(super) fame_documents: Vec<Handle<WorldDefinitionAsset>>,
     pub(super) complete: bool,
     pub(super) completed_loads: Arc<AtomicUsize>,
@@ -384,7 +392,31 @@ impl<'a> WorldDefinitionsView<'a> {
     pub fn authored_timekeeper_policy(self) -> Option<super::timing::AuthoredTimekeeperPolicy> {
         self.assets
             .get(self.singletons.get(&SingletonKind::SimulationTiming)?)?
+            .metadata
             .timekeeper
+    }
+
+    pub fn render_lod_distances(
+        self,
+        definition: AssetId,
+        binder: AssetId,
+    ) -> Option<&'a super::world_definition_document_asset_and_demand_loaded_dependency_paths::AuthoredRenderLodDistances>{
+        let row = self.records.get(&(DefinitionKind::Object, definition))?;
+        self.assets
+            .get(&row.handle)?
+            .metadata
+            .render_lod_distances
+            .get(&(definition, binder))
+    }
+
+    pub fn environment_map_target_node(self, definition: AssetId) -> Option<AssetId> {
+        let row = self.records.get(&(DefinitionKind::Object, definition))?;
+        self.assets
+            .get(&row.handle)?
+            .metadata
+            .environment_map_nodes
+            .get(&definition)
+            .copied()
     }
 
     pub fn simulation_timestep(self) -> Option<std::time::Duration> {
@@ -511,6 +543,16 @@ impl<'a> WorldDefinitionsView<'a> {
         StaffAquaticTankCleaningRequestPolicy
     );
     finder!(find_guest, Guest, guests, GuestDefinition);
+
+    pub fn guest_show_need(self, guest: AssetId) -> Option<super::world_definition_document_asset_and_demand_loaded_dependency_paths::AuthoredGuestShowNeed>{
+        let row = self.records.get(&(DefinitionKind::Guest, guest))?;
+        self.assets
+            .get(&row.handle)?
+            .metadata
+            .guest_show_needs
+            .get(&guest)
+            .copied()
+    }
     finder!(
         find_entity_naming,
         EntityNaming,
@@ -1317,6 +1359,13 @@ impl<'a> WorldDefinitionsView<'a> {
             .records
             .get(&(DefinitionKind::MaterialDependency, id))?;
         self.assets.get(&row.handle)?.material(self.server?, id)
+    }
+
+    pub fn tank_water_material_path(self, id: AssetId) -> Option<&'a str> {
+        let row = self
+            .records
+            .get(&(DefinitionKind::TankWaterMaterialDependency, id))?;
+        self.assets.get(&row.handle)?.tank_water_material_path(id)
     }
 
     pub fn model(self, id: AssetId) -> Option<Handle<Gltf>> {

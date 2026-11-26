@@ -118,7 +118,7 @@ pub fn initialize_simulation_time_from_selected_world(
     fixed_time.set_timestep(step);
     virtual_time.set_max_delta(MAXIMUM_FRAME_CATCH_UP);
     let mut world = commands.entity(root);
-    world.insert((
+    world.insert_if_new((
         clock,
         cadence,
         calculated_calendar,
@@ -130,12 +130,6 @@ pub fn initialize_simulation_time_from_selected_world(
         zoo_seed,
     ));
     if let Some(policy) = timekeeper {
-        world.insert((
-            super::timekeeper_cadence::ZooSlowTickTimer::new(policy.slow.interval),
-            super::timekeeper_cadence::ZooHeartbeatTimer::new(
-                policy.heartbeat.interval,
-                policy.heartbeat.initially_paused,
-            ),
-        ));
+        world.insert_if_new(super::timekeeper_cadence::TimekeeperCadences::new(policy));
     }
 }

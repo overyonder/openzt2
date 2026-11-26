@@ -34,55 +34,6 @@ pub fn source_scene_component_prefers_available_blue_fang_model(
             .is_some_and(|value| value.trim().eq_ignore_ascii_case("true") || value.trim() == "1")
 }
 
-pub fn collect_blue_fang_actor_manifest_source_references(
-    source_documents: &[OrderedSourceDocument],
-) -> BTreeSet<String> {
-    fn collect_actor_manifest_references_beneath_source_node(
-        source_node: &OrderedSourceDocumentNode,
-        actor_manifest_references: &mut BTreeSet<String>,
-    ) {
-        if !source_node_is_traversable_animation_path_component(source_node) {
-            source_node
-                .attribute("actorfile")
-                .filter(|actor_manifest_path| !actor_manifest_path.trim().is_empty())
-                .map(|actor_manifest_path| AssetPath::new(actor_manifest_path).key())
-                .into_iter()
-                .for_each(|actor_manifest_path| {
-                    actor_manifest_references.insert(actor_manifest_path);
-                });
-        }
-        source_node.element_children().for_each(|child_node| {
-            collect_actor_manifest_references_beneath_source_node(
-                child_node,
-                actor_manifest_references,
-            )
-        });
-    }
-
-    let mut actor_manifest_references = BTreeSet::new();
-    for source_document in source_documents {
-        source_document
-            .root
-            .attribute("actorfile")
-            .filter(|actor_manifest_path| !actor_manifest_path.trim().is_empty())
-            .map(|actor_manifest_path| AssetPath::new(actor_manifest_path).key())
-            .into_iter()
-            .for_each(|actor_manifest_path| {
-                actor_manifest_references.insert(actor_manifest_path);
-            });
-        source_document
-            .root
-            .element_children()
-            .for_each(|source_node| {
-                collect_actor_manifest_references_beneath_source_node(
-                    source_node,
-                    &mut actor_manifest_references,
-                )
-            });
-    }
-    actor_manifest_references
-}
-
 pub fn collect_blue_fang_native_model_source_references(
     source_documents: &[OrderedSourceDocument],
     actor_manifest_resolution_index: &BlueFangActorManifestModelAndSceneResolutionIndex,
@@ -133,10 +84,15 @@ pub fn collect_blue_fang_native_model_source_references(
             else {
                 continue;
             };
-            let authored_path = AssetPath::new(authored_path).key();
-            let native_model_path = actor_manifest_resolution_index
-                .native_model_source_path_for_normalized_actor_manifest_key(&authored_path)
-                .map_or(authored_path, str::to_owned);
+            let native_model_path = if source_attribute_name == "actorfile" {
+                let manifest = actor_manifest_resolution_index
+                    .scoped_actor_manifest_key(declaring_source_path, authored_path);
+                actor_manifest_resolution_index
+                    .native_model_source_path_for_normalized_actor_manifest_key(&manifest)
+                    .map_or(manifest, str::to_owned)
+            } else {
+                AssetPath::new(authored_path).key()
+            };
             let prefer_blue_fang_bfb = source_attribute_name == "modelfile"
                 && source_scene_component_prefers_available_blue_fang_model(
                     &source_node.name,

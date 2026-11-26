@@ -14,6 +14,7 @@ use openzt2_game_data::{
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_zoo_state::animal_behavior::behavior_token_types::EducationDonationBonus;
 use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
 use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
 
@@ -31,6 +32,7 @@ pub(super) struct GuestTaskNeedFacts {
     amusement: &'static GuestAmusement,
     viewing: Option<&'static GuestViewingNeed>,
     happiness: Option<&'static GuestSatisfaction>,
+    donation_bonus: Has<EducationDonationBonus>,
 }
 
 impl GuestTaskNeedFactsItem<'_, '_> {
@@ -67,6 +69,9 @@ impl GuestTaskNeedFactsItem<'_, '_> {
                 };
                 value
             }
+            BehaviorEligibilityFactInput::Condition(
+                BehaviorConditionEligibilityFact::DonationBonus,
+            ) => i32::from(self.donation_bonus) * Q16_ONE,
             BehaviorEligibilityFactInput::Condition(condition) => {
                 let flag = match condition {
                     BehaviorConditionEligibilityFact::NoBuyBackGift => "b_nobuybackgift",

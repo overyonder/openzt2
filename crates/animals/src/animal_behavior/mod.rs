@@ -1,5 +1,6 @@
 //! Live execution of typed per-document behavior declarations.
 
+mod ambient_motion;
 mod authored_disease_exposure;
 pub(crate) mod autonomous_task_selection;
 mod behavior_exit_and_escape;
@@ -83,12 +84,12 @@ use behavior_set_start_request_types::StartBehaviorSet;
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
-use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    activate_behavior_failure, activate_due_behavior_instructions, BehaviorStepFixedSet,
-};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorFeedbackDispatched;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFailed;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    BehaviorStepFixedSet, activate_behavior_failure, activate_due_behavior_instructions,
+};
 
 pub struct AnimalBehaviorExecutionPlugin;
 
@@ -97,6 +98,8 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
             activated_behavior_actor, update_waiting_behavior_actors,
         };
+        ambient_motion::register(application);
+        application.init_resource::<autonomous_task_selection::AnimalSubjectTaskIndex>();
         application.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorPlaceTarget>.pipe(behavior_target_placement_execution::prepare_and_finish_behavior_target_placements));
         application.add_observer(
             activated_behavior_actor::<
@@ -113,7 +116,9 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         application
             .configure_sets(FixedUpdate, BehaviorStepFixedSet::Think
                 .in_set(FixedGameSet::Think)
+                .after(openzt2_world_state::simulation_time::simulation_clock_types::ZooClockAdvance)
                 .after(autonomous_task_selection::start_selected_idle_animal_tasks)
+                .after(autonomous_task_selection::select_idle_ambient_tasks)
                 .after(behavior_task_phase_transition_execution::advance_behavior_target_retry_clocks)
                 .after(openzt2_zoo_state::feeding::ContainerQuantityHydration)
                 .before(openzt2_zoo_state::locomotion::AnimalAnimationNavigationProjection)
@@ -220,7 +225,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
                 (
                     openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::reap_cleared_behavior_target_retries,
                     behavior_task_phase_transition_execution::begin_behavior_target_candidate_selection_updates,
-                ).chain()
+                )
                     .in_set(FixedGameSet::Clock)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -230,6 +235,12 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
                     .in_set(FixedGameSet::Clock)
                     .run_if(in_state(GamePhase::InGame))
                     .run_if(any_with_component::<ZooSeed>),
+            )
+            .add_systems(
+                FixedUpdate,
+                autonomous_task_selection::advance_ambient_lifespans
+                    .in_set(FixedGameSet::Clock)
+                    .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 Update,
@@ -245,9 +256,18 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                autonomous_task_selection::select_idle_animal_tasks
-                    .after(openzt2_zoo_state::feeding::ContainerQuantityHydration)
-                    .after(crate::animal_lifecycle::ResolveAnimalLifeStages)
+                (
+                    autonomous_task_selection::refresh_animal_subject_tasks
+                        .before(autonomous_task_selection::select_idle_animal_tasks)
+                        .before(autonomous_task_selection::select_idle_ambient_tasks),
+                    autonomous_task_selection::select_idle_animal_tasks
+                       .after(openzt2_zoo_state::feeding::ContainerQuantityHydration)
+                       .after(crate::animal_lifecycle::ResolveAnimalLifeStages)
+                       .after(FixedGameSet::Clock),
+                    autonomous_task_selection::select_idle_ambient_tasks
+                       .after(autonomous_task_selection::advance_ambient_lifespans),
+                )
+                    .after(openzt2_world_state::simulation_time::simulation_clock_types::ZooClockAdvance)
                     .in_set(FixedGameSet::Think)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -265,7 +285,6 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
                     autonomous_task_selection::task_cooldowns::start_animal_task_cooldowns_after_delayed_tasks_end
                         .after(BehaviorStepFixedSet::Think),
                 )
-                    .chain()
                     .after(autonomous_task_selection::start_selected_idle_animal_tasks)
                     .after(openzt2_zoo_state::feeding::ContainerQuantityHydration)
                     .before(openzt2_zoo_state::locomotion::AnimalAnimationNavigationProjection)

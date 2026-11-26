@@ -1,6 +1,6 @@
 //! Photo zoom changes the authored frustum slopes without moving the camera.
 
-use bevy::{ecs::relationship::RelationshipTarget, input::mouse::AccumulatedMouseScroll, prelude::*};
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -12,7 +12,7 @@ use openzt2_interface_state::ui::authored_ui_integer_range_components::{UiMaximu
 use openzt2_interface_state::ui::authored_ui_node_projection_components::{
     UiDocumentMembers, UiDocumentRoot, UiSliderValueChanged, UiValue,
 };
-use openzt2_interface_state::ui::pointer_capture_types::{UiPointerCapture, UiWheelCapture};
+use openzt2_interface_state::ui::pointer_capture_types::WorldWheelInput;
 
 use super::camera_execution_types::CameraIntent;
 use super::camera_runtime_state_types::{CameraDefinition, ZooCamera};
@@ -66,8 +66,7 @@ pub(super) fn bind_photo_zoom_sliders(
 pub(super) fn apply_photo_camera_zoom(
     mut commands: Commands,
     time: Res<Time<Real>>,
-    scroll: Res<AccumulatedMouseScroll>,
-    capture: Res<UiPointerCapture>,
+    mut scroll: MessageReader<WorldWheelInput>,
     axes: Res<DeviceControlAxes>,
     active_input: Res<ActiveInputDevice>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -101,6 +100,7 @@ pub(super) fn apply_photo_camera_zoom(
     )
     else {
         slider_input.clear();
+        scroll.clear();
         return;
     };
     let (Some(definition), Some(policy)) = (
@@ -110,12 +110,14 @@ pub(super) fn apply_photo_camera_zoom(
             .find(|policy| policy.mode == ImmersiveModeKind::Photo),
     ) else {
         slider_input.clear();
+        scroll.clear();
         return;
     };
     let minimum = definition.minimum_zoom_m;
     let maximum = definition.maximum_zoom_m[2];
     if !minimum.is_finite() || !maximum.is_finite() || minimum <= 0.0 || maximum <= minimum {
         slider_input.clear();
+        scroll.clear();
         return;
     }
     let initialize = photo_mode.is_added() || zoom.is_none();
@@ -132,11 +134,9 @@ pub(super) fn apply_photo_camera_zoom(
         })
         .last();
     let scale = slider_ratio.map_or(previous, |ratio| maximum - (maximum - minimum) * ratio);
-    let wheel = if capture.wheel == UiWheelCapture::World {
-        scroll.delta.y.signum() * f32::from(scroll.delta.y != 0.0)
-    } else {
-        0.0
-    };
+    let scale = scroll.read().fold(scale, |scale, event| {
+        (scale - policy.photo_zoom_step * event.notches.signum()).clamp(minimum, maximum)
+    });
     let held_command =
         f32::from(intent.photo_zoom_in_command) - f32::from(intent.photo_zoom_out_command);
     let controller = if matches!(active_input.source, ActionSource::Controller(_)) {
@@ -145,7 +145,7 @@ pub(super) fn apply_photo_camera_zoom(
         0.0
     };
     let held_delta = (held_command - controller) * 10.0 * time.delta_secs();
-    let scale = (scale + policy.photo_zoom_step * (held_delta - wheel)).clamp(minimum, maximum);
+    let scale = (scale + policy.photo_zoom_step * held_delta).clamp(minimum, maximum);
     let zoom_changed = initialize || scale != previous;
     let definition_changed =
         selected.is_changed() || active_definitions.is_changed() || definition_assets.is_changed();

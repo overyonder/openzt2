@@ -2,18 +2,18 @@
 //! to mate, and the inviting female a `fromToken` task answers.
 
 use bevy::{ecs::system::SystemParam, prelude::*};
+use openzt2_game_data::AssetId;
 use openzt2_game_data::behavior::eligibility::{
     BehaviorCandidateEligibilityFact, BehaviorEligibilityFactInput, BehaviorEligibilityFactValue,
     BehaviorEntityStateEligibilityFact, BehaviorRelationshipEligibilityFact,
     BehaviorSpatialEligibilityFact,
 };
-use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::world_entity_crating::UncratedWorldEntity;
 use openzt2_zoo_state::animal_behavior::animal_lineage::AnimalLineage;
 use openzt2_zoo_state::animal_lifecycle::types::{Animal, Parents};
 use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
 
-use super::candidate_facts::{compare_q16, AnimalCandidateFacts, AnimalCandidateFactsItem};
+use super::candidate_facts::{AnimalCandidateFacts, AnimalCandidateFactsItem, compare_q16};
 
 #[derive(SystemParam)]
 pub(crate) struct AnimalTargetSources<'w, 's> {
@@ -35,8 +35,7 @@ impl AnimalTargetSources<'_, '_> {
         &self,
         animal: &AnimalCandidateFactsItem,
         fact: &BehaviorCandidateEligibilityFact,
-        tick_in_day: u32,
-        ticks_per_day: u32,
+        day_fraction: f64,
     ) -> Option<bool> {
         use openzt2_game_data::behavior::eligibility::BehaviorEligibilityFactComparison as Comparison;
         let root = animal.world.root;
@@ -85,9 +84,6 @@ impl AnimalTargetSources<'_, '_> {
                 | BehaviorSpatialEligibilityFact::TimeOfDayMin
                 | BehaviorSpatialEligibilityFact::TimeOfDayMax),
             ) => {
-                if ticks_per_day == 0 {
-                    return Some(false);
-                }
                 if comparison == Comparison::Equal {
                     comparison = match kind {
                         BehaviorSpatialEligibilityFact::TimeOfDayMin => Comparison::GreaterOrEqual,
@@ -95,7 +91,7 @@ impl AnimalTargetSources<'_, '_> {
                         _ => Comparison::Equal,
                     };
                 }
-                tick_in_day as f32 * 24.0 / ticks_per_day as f32
+                (day_fraction * 24.0) as f32
             }
             _ => return None,
         };
@@ -176,8 +172,8 @@ impl AnimalTargetSources<'_, '_> {
         target_facts: &AnimalCandidateFactsItem,
         fact: &BehaviorCandidateEligibilityFact,
         tick: u64,
-        ticks_per_day: u32,
-        tick_in_day: u32,
+        ticks_per_day: f64,
+        day_fraction: f64,
         target_types: &[AssetId],
     ) -> bool {
         if let BehaviorEligibilityFactInput::Relationship(relationship) = fact.fact_input {
@@ -193,9 +189,7 @@ impl AnimalTargetSources<'_, '_> {
                 fact,
             );
         }
-        if let Some(satisfies) =
-            self.spatial_satisfies(target_facts, fact, tick_in_day, ticks_per_day)
-        {
+        if let Some(satisfies) = self.spatial_satisfies(target_facts, fact, day_fraction) {
             return satisfies;
         }
         let BehaviorEligibilityFactValue::Q16(expected) = fact.expected_value else {

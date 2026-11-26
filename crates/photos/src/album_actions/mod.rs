@@ -32,11 +32,10 @@ use super::album_operations::{
     select_photo_in_album_display_slot,
 };
 use super::photo_album_types::{
-    ActivePhotoAlbum, DeletePhotoRequest, EnlargedAlbumPhoto, PhotoAlbumCapacityPages,
-    PhotoAlbumChoiceRow, PhotoAlbumPage, PhotoCameraRoll, PhotoCameraRollRow, PhotoMove,
-    PhotoMoveTarget, PhotoPointerDrag, SelectedAlbumPhoto, WorldActivePhotoAlbum,
-    WorldPhotoCameraRoll, INITIAL_PHOTO_ALBUM_SPREADS, MAX_PHOTO_ALBUM_SPREADS,
-    PHOTO_ALBUM_PAGE_SIZE,
+    ActivePhotoAlbum, DeletePhotoRequest, EnlargedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS,
+    MAX_PHOTO_ALBUM_SPREADS, PHOTO_ALBUM_PAGE_SIZE, PhotoAlbumCapacityPages, PhotoAlbumChoiceRow,
+    PhotoAlbumPage, PhotoCameraRoll, PhotoCameraRollRow, PhotoMove, PhotoMoveTarget,
+    PhotoPointerDrag, SelectedAlbumPhoto, WorldActivePhotoAlbum, WorldPhotoCameraRoll,
 };
 use super::photo_configuration::{PhotoConfiguration, PhotoConfigurationSource};
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPhotoActions;
@@ -114,6 +113,8 @@ pub(super) fn route_photo_ui_actions(
             Option<&PhotoCameraRoll>,
         )>,
         Query<&mut PhotoAlbumPage>,
+        Query<&mut EnlargedAlbumPhoto>,
+        Query<&mut PhotoMove>,
     )>,
     names: Query<&Name, With<PhotoAlbum>>,
     mut storage: Query<
@@ -158,6 +159,14 @@ pub(super) fn route_photo_ui_actions(
     };
     let active = active.and_then(|album| album.iter().next());
     let roll = roll.and_then(|album| album.iter().next());
+    let (initial_move, initial_hover) = active.map_or((None, None), |album| {
+        (
+            album_queries.p3().get(album).ok().copied(),
+            hover_slots.get(album).ok().copied(),
+        )
+    });
+    let mut moving = initial_move;
+    let mut hover = initial_hover;
     for activation in activations.read() {
         let Ok((range, owner)) = action_nodes.get(activation.node) else {
             continue;
@@ -201,7 +210,12 @@ pub(super) fn route_photo_ui_actions(
                 UiPhotoAction::EnlargeSelectedPhotoInActiveAlbum => {
                     if let Some(album) = active {
                         if let Some(selected) = selection.in_album(album) {
-                            commands.entity(album).insert(EnlargedAlbumPhoto(selected));
+                            let next = EnlargedAlbumPhoto(selected);
+                            if let Ok(mut current) = album_queries.p2().get_mut(album) {
+                                current.set_if_neq(next);
+                            } else {
+                                commands.entity(album).insert(next);
+                            }
                         }
                     }
                 }
@@ -244,21 +258,17 @@ pub(super) fn route_photo_ui_actions(
                                 .ok()
                                 .and_then(|mut allocator| allocator.allocate().ok())
                             {
-                                let album = commands
-                                    .spawn((
-                                        PhotoAlbum {
-                                            profile: source.profile,
-                                        },
-                                        Name::new(name.as_str().to_owned()),
-                                        *member,
-                                        id,
-                                        ActivePhotoAlbum(world),
-                                        PhotoAlbumPage::default(),
-                                    ))
-                                    .id();
-                                commands
-                                    .entity(album)
-                                    .insert(PhotoAlbumCapacityPages(default_album_spreads));
+                                commands.spawn((
+                                    PhotoAlbum {
+                                        profile: source.profile,
+                                    },
+                                    Name::new(name.as_str().to_owned()),
+                                    *member,
+                                    id,
+                                    ActivePhotoAlbum(world),
+                                    PhotoAlbumPage::default(),
+                                    PhotoAlbumCapacityPages(default_album_spreads),
+                                ));
                             }
                         }
                     }
@@ -290,13 +300,13 @@ pub(super) fn route_photo_ui_actions(
                     }
                 }
                 UiPhotoAction::StartMovingSelectedPhotoToActiveAlbum => {
-                    if let Some(album) = active {
+                    if active.is_some() {
                         if let Some((from, selected)) = selection.0.filter(|(from, photo)| {
                             members
                                 .get(*from)
                                 .is_ok_and(|members| members.collection().contains(photo))
                         }) {
-                            commands.entity(album).insert(PhotoMove {
+                            moving = Some(PhotoMove {
                                 photo: selected,
                                 from,
                             });
@@ -305,11 +315,9 @@ pub(super) fn route_photo_ui_actions(
                 }
                 UiPhotoAction::CancelMovingSelectedPhoto => {
                     if let Some(album) = active {
-                        commands
-                            .entity(album)
-                            .remove::<PhotoMove>()
-                            .remove::<PhotoPointerDrag>()
-                            .remove::<PhotoMoveTarget>();
+                        moving = None;
+                        hover = None;
+                        commands.entity(album).remove::<PhotoPointerDrag>();
                     }
                 }
                 UiPhotoAction::ExportActivePhotoAlbumAsHtml => {
@@ -342,7 +350,12 @@ pub(super) fn route_photo_ui_actions(
                         find_photo_in_album_display_slot(active, *index, &albums, &members)
                     {
                         if let Some(album) = active {
-                            commands.entity(album).insert(EnlargedAlbumPhoto(photo));
+                            let next = EnlargedAlbumPhoto(photo);
+                            if let Ok(mut current) = album_queries.p2().get_mut(album) {
+                                current.set_if_neq(next);
+                            } else {
+                                commands.entity(album).insert(next);
+                            }
                         }
                     }
                 }
@@ -384,44 +397,31 @@ pub(super) fn route_photo_ui_actions(
                 UiPhotoAction::SetHoveredPhotoMoveTargetSlot {
                     album_slot_index: index,
                 } => {
-                    if let Some(album) = active {
+                    if active.is_some() {
                         if let Ok(slot) = u8::try_from(*index) {
-                            let next = PhotoMoveTarget(slot);
-                            if let Ok(mut current) = hover_slots.get_mut(album) {
-                                current.set_if_neq(next);
-                            } else {
-                                commands.entity(album).insert(next);
-                            }
+                            hover = Some(PhotoMoveTarget(slot));
                         }
                     }
                 }
                 UiPhotoAction::ClearHoveredPhotoMoveTargetSlot {
                     album_slot_index: index,
                 } => {
-                    if let Some(album) = active {
-                        if u8::try_from(*index).ok().is_some_and(|slot| {
-                            hover_slots
-                                .get(album)
-                                .is_ok_and(|current| current.0 == slot)
-                        }) {
-                            commands.entity(album).remove::<PhotoMoveTarget>();
-                        }
+                    if u8::try_from(*index).ok().map(PhotoMoveTarget) == hover {
+                        hover = None;
                     }
                 }
                 UiPhotoAction::MoveSelectedPhotoToActiveAlbumSlot {
                     album_slot_index: index,
                 } => {
                     if let Some(album) = active {
-                        if let Ok((_, _, _, _, Some(moving), _)) = albums.get(album) {
-                            if !members
-                                .get(moving.from)
-                                .is_ok_and(|members| members.collection().contains(&moving.photo))
-                            {
-                                commands.entity(album).remove::<(
-                                    PhotoMove,
-                                    PhotoPointerDrag,
-                                    PhotoMoveTarget,
-                                )>();
+                        if let Some(current_move) = moving {
+                            moving = None;
+                            hover = None;
+                            commands.entity(album).remove::<PhotoPointerDrag>();
+
+                            if !members.get(current_move.from).is_ok_and(|members| {
+                                members.collection().contains(&current_move.photo)
+                            }) {
                                 continue;
                             }
                             let target = albums
@@ -433,28 +433,24 @@ pub(super) fn route_photo_ui_actions(
                                 + u32::try_from(*index).unwrap_or_default();
                             reorder_photos_for_insertion_at_album_position(
                                 album,
-                                moving.photo,
+                                current_move.photo,
                                 target,
                                 &members,
                                 &mut orders,
                                 &mut commands,
                             );
                             let order = PhotoAlbumOrder(u64::from(target));
-                            if let Ok(mut current) = orders.get_mut(moving.photo) {
+                            if let Ok(mut current) = orders.get_mut(current_move.photo) {
                                 current.set_if_neq(order);
                             } else {
-                                commands.entity(moving.photo).insert(order);
+                                commands.entity(current_move.photo).insert(order);
                             }
                             commands
-                                .entity(moving.photo)
+                                .entity(current_move.photo)
                                 .insert(AlbumMember(album))
                                 .remove::<CameraRollPhoto>();
-                            commands
-                                .entity(album)
-                                .remove::<PhotoMove>()
-                                .remove::<PhotoPointerDrag>()
-                                .remove::<PhotoMoveTarget>();
-                            selection.set_if_neq(SelectedAlbumPhoto(Some((album, moving.photo))));
+                            selection
+                                .set_if_neq(SelectedAlbumPhoto(Some((album, current_move.photo))));
                         }
                     }
                 }
@@ -492,6 +488,36 @@ pub(super) fn route_photo_ui_actions(
                     )
                 }
             }
+        }
+    }
+    if let Some(album) = active {
+        match (initial_move, moving) {
+            (None, Some(next)) => {
+                commands.entity(album).try_insert(next);
+            }
+            (Some(_), None) => {
+                commands.entity(album).try_remove::<PhotoMove>();
+            }
+            (Some(_), Some(next)) => {
+                if let Ok(mut current) = album_queries.p3().get_mut(album) {
+                    current.set_if_neq(next);
+                }
+            }
+            (None, None) => {}
+        }
+        match (initial_hover, hover) {
+            (None, Some(next)) => {
+                commands.entity(album).try_insert(next);
+            }
+            (Some(_), None) => {
+                commands.entity(album).try_remove::<PhotoMoveTarget>();
+            }
+            (Some(_), Some(next)) => {
+                if let Ok(mut current) = hover_slots.get_mut(album) {
+                    current.set_if_neq(next);
+                }
+            }
+            (None, None) => {}
         }
     }
 }

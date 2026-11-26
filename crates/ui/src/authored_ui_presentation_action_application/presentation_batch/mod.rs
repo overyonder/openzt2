@@ -33,6 +33,17 @@ struct PresentationContext {
     selection: Option<ScenarioUiSelectionCompleted>,
 }
 
+/// Structural additions can be addressed again before the batch's commands
+/// are applied. Accumulate their final values in action order.
+#[derive(Default)]
+struct PendingPresentationComponents {
+    expansions: bevy::ecs::entity::EntityHashMap<
+        crate::authored_tree_expansion_and_row_indentation::UiAuthoredTreeExpansion,
+    >,
+    scrolls: bevy::ecs::entity::EntityHashMap<ScrollPosition>,
+    images: bevy::ecs::entity::EntityHashMap<ImageNode>,
+}
+
 #[derive(SystemParam)]
 pub(crate) struct AuthoredPresentationWrites<'w, 's> {
     receivers: ParamSet<
@@ -60,6 +71,7 @@ impl AuthoredPresentationWrites<'_, '_> {
         context: PresentationContext,
         action: UiPresentationAction,
         emitted: &mut Vec<UiNodeActivated>,
+        pending: &mut PendingPresentationComponents,
     ) {
         use UiPresentationAction::*;
         match action {
@@ -86,17 +98,23 @@ impl AuthoredPresentationWrites<'_, '_> {
             | SetTargetNodeTooltip { .. }
             | SetTargetNodeCursor { .. }
             | SetTargetNodeHoverPresentation { .. } => {
-                self.receivers.p2().apply(context, action, emitted);
+                self.receivers
+                    .p2()
+                    .apply(context, action, emitted, &mut pending.expansions);
             }
             SetTargetNodeIntegerValue { .. }
             | ChangeTargetNodeSliderOrScrollPositionByDelta { .. } => {
-                self.receivers.p3().apply(context, action);
+                self.receivers
+                    .p3()
+                    .apply(context, action, &mut pending.scrolls);
             }
             SetTargetNodeImageSourceRectangle { .. }
             | SetTargetNodeLayoutPosition { .. }
             | SetTargetNodeLayoutSize { .. }
             | SetTargetNodeImageOverride { .. } => {
-                self.receivers.p4().apply(context, action);
+                self.receivers
+                    .p4()
+                    .apply(context, action, &mut pending.images);
             }
             CopySourceNodeTextToTargetNode { .. }
             | FormatTargetNodeLocalizedInteger { .. }
@@ -160,21 +178,35 @@ pub(crate) fn apply_ordered_presentation_batches(
 ) {
     let mut generated = Vec::new();
     let mut steps = Vec::new();
+    let mut new_components = PendingPresentationComponents::default();
     for (document, mut effects, mut pause) in &mut ready {
         for effect in effects.drain() {
             steps.push(BatchStep::ApplyOpenedDocumentEffect(document, effect));
-            run_batch(&mut steps, &sources, &mut writes, &mut generated);
+            run_batch(
+                &mut steps,
+                &sources,
+                &mut writes,
+                &mut generated,
+                &mut new_components,
+            );
         }
         pause.set_if_neq(UiDocumentPauseTransfer(false));
     }
     for activation in activations.p0().read() {
         steps.push(BatchStep::Activate(activation.clone(), false, None));
-        run_batch(&mut steps, &sources, &mut writes, &mut generated);
+        run_batch(
+            &mut steps,
+            &sources,
+            &mut writes,
+            &mut generated,
+            &mut new_components,
+        );
         if timed_steps.contains(activation.node) {
             timed_committed.write(TimedUiPresentationCommitted(activation.node));
         }
     }
     let mut pending = pending;
+    let mut new_commitments = bevy::ecs::entity::EntityHashMap::default();
     for request in requests.read() {
         let Ok((_, parent)) = sources.roots.get(request.document_root) else {
             continue;
@@ -199,18 +231,37 @@ pub(crate) fn apply_ordered_presentation_batches(
             },
             request.action.clone(),
         ));
-        run_batch(&mut steps, &sources, &mut writes, &mut generated);
+        run_batch(
+            &mut steps,
+            &sources,
+            &mut writes,
+            &mut generated,
+            &mut new_components,
+        );
         if let Some(selection) = selection {
             if let Ok((_, current)) = pending.get_mut(selection.document_root) {
                 if let Some(mut current) = current {
                     current.set_if_neq(UiSelectionPresentationCommitted(selection));
                 } else {
-                    commands
-                        .entity(selection.document_root)
-                        .insert(UiSelectionPresentationCommitted(selection));
+                    new_commitments.insert(
+                        selection.document_root,
+                        UiSelectionPresentationCommitted(selection),
+                    );
                 }
             }
         }
+    }
+    for (node, expansion) in new_components.expansions {
+        commands.entity(node).try_insert_if_new(expansion);
+    }
+    for (node, scroll) in new_components.scrolls {
+        commands.entity(node).try_insert_if_new(scroll);
+    }
+    for (node, image) in new_components.images {
+        commands.entity(node).try_insert_if_new(image);
+    }
+    for (document, commitment) in new_commitments {
+        commands.entity(document).insert(commitment);
     }
     let _ = activations.p1().write_batch(generated);
     // The action batch already consumed these descendants. Other systems
@@ -223,6 +274,7 @@ fn run_batch(
     sources: &AuthoredPresentationSources,
     writes: &mut AuthoredPresentationWrites,
     generated: &mut Vec<UiNodeActivated>,
+    pending: &mut PendingPresentationComponents,
 ) {
     let mut active = Vec::<(Entity, UiTrigger)>::new();
     let mut cascading = Vec::new();
@@ -267,7 +319,7 @@ fn run_batch(
                 }
             }
             BatchStep::Apply(context, action) => {
-                writes.apply(context, action, &mut cascading);
+                writes.apply(context, action, &mut cascading, pending);
                 steps.extend(
                     cascading
                         .drain(..)

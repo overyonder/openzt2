@@ -1,10 +1,11 @@
+use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::{
     economy_transactions::EconomyTransactionKind, staff_management::StaffRoleKind,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::{WorldDefinitions, WorldDefinitionSourcesPublished};
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 use super::{
@@ -30,6 +31,7 @@ pub(super) fn hydrate_authored_monthly_upkeep_for_new_world_objects(
     changed_definitions: Query<Entity, Changed<DefinitionId>>,
     retired_objects: Query<(), (With<MonthlyUpkeep>, Without<DefinitionId>)>,
     mut removed_definitions: RemovedComponents<DefinitionId>,
+    publication: Option<MessageReader<WorldDefinitionSourcesPublished>>,
 ) {
     let Some(definitions) = active_definitions.get(&assets) else {
         return;
@@ -39,14 +41,22 @@ pub(super) fn hydrate_authored_monthly_upkeep_for_new_world_objects(
             commands.entity(entity).try_remove::<MonthlyUpkeep>();
         }
     }
-    let dirty = if active_definitions.is_changed() {
-        objects
-            .iter()
-            .map(|(entity, ..)| entity)
-            .collect::<Vec<_>>()
-    } else {
-        changed_definitions.iter().collect::<Vec<_>>()
-    };
+    let refresh_without_publisher = publication.is_none() && active_definitions.is_changed();
+    let changed: HashSet<_> = publication
+        .into_iter()
+        .flat_map(|mut publication| {
+            publication
+                .read()
+                .flat_map(|event| event.changed_objects.iter().copied())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mut dirty: bevy::ecs::entity::EntityHashSet = changed_definitions.iter().collect();
+    if refresh_without_publisher || !changed.is_empty() {
+        dirty.extend(objects.iter().filter_map(|(entity, definition, ..)| {
+            (refresh_without_publisher || changed.contains(&definition.0)).then_some(entity)
+        }));
+    }
     let mut objects = objects.iter_many_mut(dirty);
     while let Some(row) = objects.fetch_next() {
         let Ok((entity, definition, has_profit, has_usage, upkeep)) = row else {
@@ -56,7 +66,7 @@ pub(super) fn hydrate_authored_monthly_upkeep_for_new_world_objects(
         let monthly = definition
             .map(|definition| definition.upkeep_cents_per_month)
             .filter(|&upkeep| upkeep != 0)
-            .map(|upkeep| MonthlyUpkeep(Money(i64::from(upkeep))));
+            .map(|upkeep| MonthlyUpkeep(Money::from_cents(i64::from(upkeep))));
         match (upkeep, monthly) {
             (Some(mut upkeep), Some(monthly)) => {
                 upkeep.set_if_neq(monthly);
@@ -112,6 +122,7 @@ pub(super) fn hydrate_authored_service_facility_facts_for_new_world_objects(
         ),
     >,
     mut removed_definitions: RemovedComponents<DefinitionId>,
+    publication: Option<MessageReader<WorldDefinitionSourcesPublished>>,
 ) {
     let Some(definitions) = active_definitions.get(&assets) else {
         return;
@@ -123,14 +134,22 @@ pub(super) fn hydrate_authored_service_facility_facts_for_new_world_objects(
                 .try_remove::<(ServiceFacility, RequiredFacilityStaff)>();
         }
     }
-    let dirty = if active_definitions.is_changed() {
-        facilities
-            .iter()
-            .map(|(entity, ..)| entity)
-            .collect::<Vec<_>>()
-    } else {
-        changed_definitions.iter().collect::<Vec<_>>()
-    };
+    let refresh_without_publisher = publication.is_none() && active_definitions.is_changed();
+    let changed: HashSet<_> = publication
+        .into_iter()
+        .flat_map(|mut publication| {
+            publication
+                .read()
+                .flat_map(|event| event.changed_objects.iter().copied())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mut dirty: bevy::ecs::entity::EntityHashSet = changed_definitions.iter().collect();
+    if refresh_without_publisher || !changed.is_empty() {
+        dirty.extend(facilities.iter().filter_map(|(entity, definition, ..)| {
+            (refresh_without_publisher || changed.contains(&definition.0)).then_some(entity)
+        }));
+    }
     let mut facilities = facilities.iter_many_mut(dirty);
     while let Some(row) = facilities.fetch_next() {
         let Ok((entity, definition_id, has_price, service, has_inventory, required_staff)) = row
@@ -178,10 +197,10 @@ pub(super) fn hydrate_authored_service_facility_facts_for_new_world_objects(
         if !has_price {
             commands
                 .entity(entity)
-                .insert(Price(Money(i64::from(definition.price_cents))));
+                .insert(Price(Money::from_cents(i64::from(definition.price_cents))));
         }
         if !has_inventory && definition.inventory_capacity > 0 {
-            commands.entity(entity).insert(Inventory {
+            commands.entity(entity).try_insert_if_new(Inventory {
                 available: definition.inventory_capacity,
                 reserved: 0,
                 capacity: definition.inventory_capacity,
@@ -208,8 +227,8 @@ fn map_authored_staff_kind_to_supported_facility_operator(
 }
 
 #[cfg(test)]
-pub(super) fn economy_test_simulation_timing(
-) -> openzt2_game_data::world_definitions::simulation_time::SimulationTimingDefinition {
+pub(super) fn economy_test_simulation_timing()
+-> openzt2_game_data::world_definitions::simulation_time::SimulationTimingDefinition {
     use openzt2_game_data::world_definitions::simulation_time::{
         SimulationCalendarLeapPolicy, SimulationCalendarPolicy, SimulationTimingDefinition,
     };
@@ -230,13 +249,13 @@ pub(super) fn economy_test_simulation_timing(
 #[cfg(test)]
 mod authored_service_facility_hydration_tests {
     use super::*;
+    use openzt2_game_data::AssetId;
     use openzt2_game_data::world_definitions::{
         document::WorldDefinitionDocument,
         facilities_and_maintenance::{
             FacilityDefinition, FacilityPaymentTrigger, FacilityServiceKind,
         },
     };
-    use openzt2_game_data::AssetId;
 
     fn cart_object() -> AssetId {
         AssetId::from_key("snackcart_fruitcup_df")
@@ -299,7 +318,7 @@ mod authored_service_facility_hydration_tests {
             .world()
             .get::<Price>(cart)
             .expect("authored price");
-        assert_eq!(price.0, Money(1_200));
+        assert_eq!(price.0, Money::from_cents(1_200));
         let facility = application
             .world()
             .get::<ServiceFacility>(cart)
@@ -328,7 +347,7 @@ mod authored_service_facility_hydration_tests {
             .world_mut()
             .spawn((
                 DefinitionId(cart_object()),
-                Price(Money(700)),
+                Price(Money::from_cents(700)),
                 facility,
                 stock,
             ))
@@ -336,7 +355,7 @@ mod authored_service_facility_hydration_tests {
         application.update();
         assert_eq!(
             application.world().get::<Price>(cart),
-            Some(&Price(Money(700)))
+            Some(&Price(Money::from_cents(700)))
         );
         assert_eq!(
             application.world().get::<ServiceFacility>(cart),

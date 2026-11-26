@@ -5,7 +5,8 @@ use bevy::{
 };
 
 use super::audio_player_spawning::{
-    calculate_mixed_audio_gain, AudioCueSelection, AudioSourceGain, DeferredAudioPlayback,
+    calculate_mixed_audio_gain, rampage_voice_gain, AudioCueSelection, AudioSourceGain,
+    DeferredAudioPlayback, WorldAudioVoiceOf,
 };
 use super::audio_stage_playback_projection::EnvironmentVoiceGain;
 use super::spatial_cue_distance::{SpatialCueDistance, SpatialCueListener};
@@ -27,7 +28,9 @@ pub(super) fn start_deferred_audio_playback_after_delays_finish(
         Option<&mut SpatialCueDistance>,
         Option<&ChildOf>,
         Has<StageVoiceAcoustics>,
+        Option<&WorldAudioVoiceOf>,
     )>,
+    rampages: Query<&openzt2_animals::animal_health::RampageAudioMix>,
     environment_gains: Query<&EnvironmentVoiceGain>,
 ) {
     let (listener_pose, _) = listener.snapshot();
@@ -40,6 +43,7 @@ pub(super) fn start_deferred_audio_playback_after_delays_finish(
         distance,
         owner,
         acoustics,
+        world,
     ) in &mut deferred_audio
     {
         deferred_playback.timer.tick(time.delta());
@@ -68,7 +72,11 @@ pub(super) fn start_deferred_audio_playback_after_delays_finish(
                     selection.emitter.is_some(),
                     source_gain.0,
                 ) * gain
-                    * environment_gain,
+                    * environment_gain
+                    * rampage_voice_gain(
+                        world.and_then(|world| rampages.get(world.0).ok()),
+                        selection.selection,
+                    ),
             );
             let mut entity = commands.entity(playback_entity);
             let clip = deferred_playback.clip.clone();

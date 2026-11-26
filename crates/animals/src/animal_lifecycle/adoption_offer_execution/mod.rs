@@ -4,8 +4,8 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::{
-    species::{LifeStage, Sex, SpeciesFlags},
     AssetId,
+    species::{LifeStage, Sex, SpeciesFlags},
 };
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
@@ -46,6 +46,7 @@ impl AdoptionOfferClaim {
 pub(super) struct AdoptionOfferClaims<'w, 's> {
     worlds: Query<'w, 's, &'static AdoptionOfferOptions>,
     options: Query<'w, 's, (&'static AdoptionOfferOption, &'static CurrentAdoptionOffer)>,
+    cooldowns: Query<'w, 's, &'static mut AdoptionOfferCooldown>,
     offers: Query<
         'w,
         's,
@@ -110,11 +111,13 @@ impl AdoptionOfferClaims<'_, '_> {
             return;
         };
         if supply.available_by_sex == [0; 2] {
-            commands
-                .entity(option_entity)
-                .insert(AdoptionOfferCooldown::from_remaining_seconds(f64::from(
-                    supply.dismiss_cooldown,
-                )));
+            let cooldown =
+                AdoptionOfferCooldown::from_remaining_seconds(f64::from(supply.dismiss_cooldown));
+            if let Ok(mut current) = self.cooldowns.get_mut(option_entity) {
+                *current = cooldown;
+            } else {
+                commands.entity(option_entity).insert(cooldown);
+            }
             commands.entity(offer).try_despawn();
         }
     }
@@ -303,11 +306,11 @@ fn authored_adoption_slot_count(
 }
 
 fn decline_current_adoption_offers(
-    options: Query<
+    mut options: Query<
         (
             Entity,
             Option<&CurrentAdoptionOffer>,
-            Has<AdoptionOfferCooldown>,
+            Option<&mut AdoptionOfferCooldown>,
         ),
         With<AdoptionOfferOption>,
     >,
@@ -316,20 +319,23 @@ fn decline_current_adoption_offers(
     mut commands: Commands,
 ) {
     declines.clear();
-    for (entity, offer, cooling) in &options {
+    for (entity, offer, cooling) in &mut options {
         if let Some((offer, supply)) = offer.and_then(|offer| {
             let entity = *offer.collection();
             offers.get(entity).ok().map(|supply| (entity, supply))
         }) {
             if supply.dismiss_cooldown > 0.0 {
-                commands
-                    .entity(entity)
-                    .insert(AdoptionOfferCooldown::from_remaining_seconds(f64::from(
-                        supply.dismiss_cooldown,
-                    )));
+                let cooldown = AdoptionOfferCooldown::from_remaining_seconds(f64::from(
+                    supply.dismiss_cooldown,
+                ));
+                if let Some(mut current) = cooling {
+                    *current = cooldown;
+                } else {
+                    commands.entity(entity).insert(cooldown);
+                }
             }
             retire_adoption_offer(offer, &offers, &mut commands);
-        } else if cooling {
+        } else if cooling.is_some() {
             commands.entity(entity).remove::<AdoptionOfferCooldown>();
         }
     }

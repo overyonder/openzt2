@@ -161,6 +161,7 @@ pub(super) fn project_widget(
             grid,
             source,
             row_document,
+            group_document,
             opener_node,
             drop_list_display_node,
             ..
@@ -178,6 +179,11 @@ pub(super) fn project_widget(
                 },
                 ScrollPosition::default(),
             ));
+            if let Some(group) = document.nested_ui_document_handle(*group_document) {
+                commands.entity(entity).insert(
+                    openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiScenarioGoalGroupDocument(group.clone())
+                );
+            }
             match source {
                 UiWidgetLiveCollectionSource::ZooMessageLatest => {
                     commands
@@ -343,10 +349,14 @@ pub(super) fn project_widget(
             excluded_kinds,
             row_document,
             filters,
+            non_remembered_root_types,
         } => {
             apply_authored_grid_record_to_bevy_node_layout(commands, entity, grid);
             apply_authored_list_scroll_axis_to_bevy_node_overflow(commands, entity, grid);
             commands.entity(entity).insert((
+                openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::CatalogueTypeListMemoryPolicy(
+                    non_remembered_root_types.clone().into_boxed_slice(),
+                ),
                 UiTypeListPolicy {
                     included_kinds: included_kinds.clone(),
                     excluded_kinds: excluded_kinds.clone(),

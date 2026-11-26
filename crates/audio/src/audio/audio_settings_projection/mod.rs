@@ -3,11 +3,13 @@ use bevy::{
     prelude::*,
 };
 
+use openzt2_animals::animal_health::RampageAudioMix;
 use openzt2_game_assets::audio::audio_asset_types::{AudioAsset, AudioAssets};
 use openzt2_interface_state::settings::audio_settings_types::AudioSettings;
 
 use super::audio_player_spawning::{
-    calculate_mixed_audio_gain, AudioCueSelection, AudioSourceGain,
+    calculate_mixed_audio_gain, rampage_voice_gain, AudioCueSelection, AudioSourceGain,
+    WorldAudioVoiceOf, WorldAudioVoices,
 };
 use super::audio_stage_playback_projection::EnvironmentVoiceGain;
 use super::spatial_cue_distance::{SpatialCueDistance, SpatialCueListener};
@@ -26,17 +28,23 @@ pub(super) fn project_changed_audio_settings_into_live_audio_sinks(
             &AudioCueSelection,
             &AudioSourceGain,
             Option<&ChildOf>,
+            Option<&WorldAudioVoiceOf>,
             &mut AudioSink,
         )>,
         Query<Entity, Added<AudioSink>>,
     )>,
     changed_environment: Query<&Children, Changed<EnvironmentVoiceGain>>,
     environment_gains: Query<&EnvironmentVoiceGain>,
+    rampages: Query<&RampageAudioMix>,
+    changed_rampages: Query<&WorldAudioVoices, Changed<RampageAudioMix>>,
+    world_voices: Query<&WorldAudioVoices>,
+    mut removed_rampages: RemovedComponents<RampageAudioMix>,
     mut spatial_sinks: ParamSet<(
         Query<(
             &AudioCueSelection,
             &AudioSourceGain,
             Option<&mut SpatialCueDistance>,
+            Option<&WorldAudioVoiceOf>,
             &mut SpatialAudioSink,
         )>,
         Query<
@@ -52,17 +60,34 @@ pub(super) fn project_changed_audio_settings_into_live_audio_sinks(
         >,
     )>,
 ) {
-    let update_nonspatial = |(selection, source_gain, owner, mut sink): (
+    let changed_rampage_voices = changed_rampages
+        .iter()
+        .chain(
+            removed_rampages
+                .read()
+                .filter_map(|root| world_voices.get(root).ok()),
+        )
+        .flat_map(WorldAudioVoices::iter)
+        .collect::<bevy::ecs::entity::EntityHashSet>();
+    let rampage_gain = |world: Option<&WorldAudioVoiceOf>, selection: u64| {
+        rampage_voice_gain(
+            world.and_then(|world| rampages.get(world.0).ok()),
+            selection,
+        )
+    };
+    let update_nonspatial = |(selection, source_gain, owner, world, mut sink): (
         &AudioCueSelection,
         &AudioSourceGain,
         Option<&ChildOf>,
+        Option<&WorldAudioVoiceOf>,
         Mut<AudioSink>,
     )| {
         let environment_gain = owner
             .and_then(|owner| environment_gains.get(owner.parent()).ok())
             .map_or(1.0, |gain| gain.0);
         let gain = calculate_mixed_audio_gain(&settings, selection.usage, false, source_gain.0)
-            * environment_gain;
+            * environment_gain
+            * rampage_gain(world, selection.selection);
         if sink.volume().to_linear().to_bits() != gain.to_bits() {
             sink.set_volume(Volume::Linear(gain));
         }
@@ -77,6 +102,7 @@ pub(super) fn project_changed_audio_settings_into_live_audio_sinks(
             .iter()
             .flat_map(|children| children.iter())
             .chain(new_sinks.iter())
+            .chain(changed_rampage_voices.iter().copied())
             .collect::<bevy::ecs::entity::EntityHashSet>();
         let mut existing = sinks.p0();
         let mut changed = existing.iter_many_mut(voices).matched();
@@ -91,10 +117,11 @@ pub(super) fn project_changed_audio_settings_into_live_audio_sinks(
         | listener_changed
         | (removed_listeners.read().count() != 0)
         | (removed_contacts.read().count() != 0);
-    let update = |(selection, source_gain, distance, mut sink): (
+    let update = |(selection, source_gain, distance, world, mut sink): (
         &AudioCueSelection,
         &AudioSourceGain,
         Option<Mut<SpatialCueDistance>>,
+        Option<&WorldAudioVoiceOf>,
         Mut<SpatialAudioSink>,
     )| {
         let distance_gain =
@@ -111,7 +138,8 @@ pub(super) fn project_changed_audio_settings_into_live_audio_sinks(
                     })
                 });
         let gain = calculate_mixed_audio_gain(&settings, selection.usage, true, source_gain.0)
-            * distance_gain;
+            * distance_gain
+            * rampage_gain(world, selection.selection);
         if sink.volume().to_linear().to_bits() != gain.to_bits() {
             sink.set_volume(Volume::Linear(gain));
         }
@@ -124,6 +152,7 @@ pub(super) fn project_changed_audio_settings_into_live_audio_sinks(
         let sources = spatial_sinks
             .p1()
             .iter()
+            .chain(changed_rampage_voices.iter().copied())
             .collect::<bevy::ecs::entity::EntityHashSet>();
         let mut existing = spatial_sinks.p0();
         let mut changed = existing.iter_many_mut(sources).matched();

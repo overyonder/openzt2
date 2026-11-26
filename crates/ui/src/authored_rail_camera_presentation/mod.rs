@@ -75,11 +75,14 @@ pub(super) fn hydrate_rail_cameras(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
-    rails: Query<(Entity, &UiRailCameraPresentation), Without<UiRailCameraSceneEntities>>,
+    mut rails: Query<
+        (Entity, &UiRailCameraPresentation, Option<&mut ImageNode>),
+        Without<UiRailCameraSceneEntities>,
+    >,
     mut animations: ResMut<Assets<AnimationClip>>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
 ) {
-    for (owner, presentation) in &rails {
+    for (owner, presentation, image) in &mut rails {
         let Some(prefab) = prefabs.get(&presentation.0) else {
             continue;
         };
@@ -180,7 +183,17 @@ pub(super) fn hydrate_rail_cameras(
                 },
             ));
         }
-        commands.entity(owner).insert(ImageNode::new(target));
+        if let Some(mut image) = image {
+            image
+                .reborrow()
+                .map_unchanged(|image| &mut image.image)
+                .set_if_neq(target);
+            image
+                .map_unchanged(|image| &mut image.rect)
+                .set_if_neq(None);
+        } else {
+            commands.entity(owner).insert(ImageNode::new(target));
+        }
     }
 }
 

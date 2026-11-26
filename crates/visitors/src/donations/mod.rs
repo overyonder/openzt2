@@ -1,9 +1,9 @@
 //! Guest donation decisions and exactly-once economy transfers.
 
-mod donation_candidate_selection;
+pub(crate) mod authored_view_donation_tokens;
 mod donation_guest_decision_calculations;
 mod donation_interaction_progression;
-mod donation_opportunity_observation;
+pub(crate) mod donation_opportunity_observation;
 use openzt2_zoo_state::donations::donation_opportunity_types;
 mod donation_payment_calculations;
 mod donation_payment_settlement;
@@ -18,7 +18,6 @@ use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use self::{
-    donation_candidate_selection::choose_donation_candidates_from_new_guest_observations,
     donation_interaction_progression::{
         advance_donation_interactions_and_request_completed_payments,
         begin_donation_interactions_after_guests_reach_acceptors,
@@ -26,8 +25,7 @@ use self::{
         reject_donation_candidates_after_navigation_failure,
     },
     donation_opportunity_observation::{
-        clear_donation_observations_for_ended_views, hydrate_animal_donation_opportunities,
-        observe_donation_opportunities_after_applied_viewing_reactions, PendingDonationObservation,
+        accumulate_signed_species_donation_scores, SpeciesDonationCandidateLifetimes,
     },
     donation_payment_settlement::{
         settle_completed_donation_transactions_and_update_acceptor_totals,
@@ -37,14 +35,16 @@ use self::{
         claim_authorized_direct_donation_requests_before_transfer_submission,
         submit_validated_donation_requests_to_economy_transfers,
     },
-    donation_payment_types::{DonationCompleted, DonationRejected, DonationRequest},
+    donation_payment_types::{
+        DonationCompleted, DonationRejected, DonationRequest, ZooDonationSummary,
+    },
     donation_state_hydration::{
         initialize_new_donation_acceptors_with_operating_age_and_profit,
         project_donation_acceptors_and_docking_points,
     },
     zoo_donation_summary_presentation::{
         add_booked_donations, project_zoo_donation_summary, reconcile_donation_contributors,
-        remove_booked_donations, withdraw_disabled_donations, ZooDonationSummary,
+        remove_booked_donations, withdraw_disabled_donations,
     },
 };
 
@@ -52,7 +52,8 @@ pub struct GuestDonationDecisionAndPaymentPlugin;
 
 impl Plugin for GuestDonationDecisionAndPaymentPlugin {
     fn build(&self, app: &mut App) {
-        app.register_required_components::<openzt2_zoo_state::guests::guest_simulation_types::Guest, PendingDonationObservation>()
+        app.register_required_components::<openzt2_zoo_state::guests::guest_simulation_types::Guest, SpeciesDonationCandidateLifetimes>()
+            .add_observer(donation_payment_submission::submit_authored_tour_donation)
             .add_message::<DonationRequest>()
             .add_message::<DonationCompleted>()
             .add_message::<DonationRejected>()
@@ -84,16 +85,7 @@ impl Plugin for GuestDonationDecisionAndPaymentPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                (
-                    hydrate_animal_donation_opportunities,
-                    choose_donation_candidates_from_new_guest_observations,
-                )
-                    .chain()
-                    .in_set(FixedGameSet::Think),
-            )
-            .add_systems(
-                FixedUpdate,
-                observe_donation_opportunities_after_applied_viewing_reactions
+                accumulate_signed_species_donation_scores
                     .after(
                         crate::guests::view_event_execution::apply_guest_reactions,
                     )
@@ -120,14 +112,17 @@ impl Plugin for GuestDonationDecisionAndPaymentPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    (
-                        settle_completed_donation_transactions_and_update_acceptor_totals,
-                        settle_rejected_donation_transactions_and_clear_guest_payment_state,
-                        reject_donation_candidates_after_navigation_failure,
-                        reconcile_donation_phase_relationships,
-                    )
-                        .chain(),
-                    clear_donation_observations_for_ended_views,
+                    donation_payment_settlement::resume_tour_donation_after_payment,
+                    settle_completed_donation_transactions_and_update_acceptor_totals
+                        .after_ignore_deferred(donation_payment_settlement::resume_tour_donation_after_payment),
+                    settle_rejected_donation_transactions_and_clear_guest_payment_state
+                        .after_ignore_deferred(donation_payment_settlement::resume_tour_donation_after_payment)
+                        .after_ignore_deferred(settle_completed_donation_transactions_and_update_acceptor_totals),
+                    reject_donation_candidates_after_navigation_failure
+                        .after(settle_completed_donation_transactions_and_update_acceptor_totals)
+                        .after(settle_rejected_donation_transactions_and_clear_guest_payment_state),
+                    reconcile_donation_phase_relationships
+                        .after(reject_donation_candidates_after_navigation_failure),
                 )
                     .in_set(FixedGameSet::Cleanup),
             );

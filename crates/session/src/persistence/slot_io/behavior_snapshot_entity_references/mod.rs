@@ -106,6 +106,8 @@ pub(in crate::persistence) struct BehaviorSnapshotEntityData {
     pub(super) path_tile: Option<&'static PathTile>,
     pub(super) pending_behavior_docking_completion: Option<&'static openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorDockingCompletion>,
     pub(super) following: Option<&'static openzt2_zoo_state::behavior_task_execution_types::running_actions::FollowingEntity>,
+    pub(super) spline_retry: Option<&'static openzt2_zoo_state::behavior_task_execution_types::running_actions::SplineDockRetry>,
+    pub(super) splash: Option<&'static openzt2_zoo_state::behavior_task_execution_types::running_actions::SplashAnimation>,
     pub(super) spline: Option<&'static openzt2_zoo_state::behavior_task_execution_types::running_actions::SplineDockMotion>,
     pub(super) instruction: Option<&'static openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction>,
     pub(super) pending_behavior_move_completion: Option<&'static openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorMoveCompletion>,
@@ -125,7 +127,6 @@ pub(in crate::persistence) struct BehaviorSnapshotEntityData {
     pub(super) terrain_water_region_source: Option<&'static TerrainWaterRegionSource>,
     pub(super) velocity: Option<&'static openzt2_zoo_state::locomotion::locomotion_types::Velocity>,
     pub(super) world_member: Option<&'static openzt2_world_state::world_spawn::world_membership_types::WorldMember>,
-    pub(super) guest: Has<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
 }
 
 pub(super) type BehaviorSnapshotEntity<'w, 's> = BehaviorSnapshotEntityDataItem<'w, 's>;

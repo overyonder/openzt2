@@ -118,7 +118,11 @@ pub(super) fn apply_staff_snapshot_records(
             },
             StaffRole(record.role),
             Employment {
-                wage: Money(record.wage_cents_per_month),
+                wage: record
+                    .wage_dollars_per_month
+                    .and_then(Money::from_dollars)
+                    .or_else(|| record.wage_cents_per_month.map(Money::from_cents))
+                    .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?,
                 hired_tick: record.hired_tick,
                 hired_month_ordinal: record.hired_month_ordinal,
             },

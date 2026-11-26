@@ -16,7 +16,7 @@ use super::{
     challenge_offer_types::{
         ScenarioChallengeOffer, ScenarioChallengeOfferState, ScenarioChallengeRuleContext,
     },
-    scenario_group_completion::ScenarioCompletionGroup,
+    scenario_group_completion::{reduce_group, ScenarioCompletionGroup},
     scenario_lua_types::ScenarioLuaContext,
 };
 
@@ -39,7 +39,7 @@ pub(super) fn queue_completed_scenarios_for_terminal_resolution(
         Without<PendingScenarioTerminalResult>,
     >,
     changed_offers: Query<Entity, Changed<ScenarioChallengeOffer>>,
-    objectives: Query<&ScenarioObjectiveStatus>,
+    objectives: Query<(&ScenarioObjectiveStatus, Has<ScenarioCompletionGroup>)>,
     groups: Query<&ScenarioObjectiveGroup, With<ScenarioCompletionGroup>>,
     changed_objectives: Query<&ScenarioObjectiveOf, Changed<ScenarioObjectiveStatus>>,
     changed_groups: Query<&ScenarioObjectiveGroupOf, Changed<ScenarioObjectiveGroup>>,
@@ -67,14 +67,22 @@ pub(super) fn queue_completed_scenarios_for_terminal_resolution(
             } else {
                 continue;
             };
-        if let Some(authored_groups) = authored_groups {
-            let Some(group) = authored_groups
-                .iter()
-                .find_map(|group| groups.get(group).ok())
-            else {
-                continue;
-            };
-            let state = match group.status {
+        let mut root_statuses = authored_groups
+            .into_iter()
+            .flat_map(RelationshipTarget::iter)
+            .filter_map(|group| groups.get(group).ok().map(|group| group.status))
+            .chain(
+                members
+                    .into_iter()
+                    .flat_map(RelationshipTarget::iter)
+                    .filter_map(|entity| {
+                        let (status, required) = objectives.get(entity).ok()?;
+                        required.then_some(*status)
+                    }),
+            )
+            .peekable();
+        if root_statuses.peek().is_some() {
+            let state = match reduce_group(true, root_statuses) {
                 ScenarioObjectiveStatus::Satisfied => ScenarioSessionState::Won,
                 ScenarioObjectiveStatus::Failed => ScenarioSessionState::Lost,
                 ScenarioObjectiveStatus::Active | ScenarioObjectiveStatus::Inactive => continue,
@@ -82,6 +90,9 @@ pub(super) fn queue_completed_scenarios_for_terminal_resolution(
             commands
                 .entity(owner)
                 .insert(PendingScenarioTerminalResult { scenario, state });
+            continue;
+        }
+        if authored_groups.is_some() {
             continue;
         }
         let Some(members) = members else {
@@ -93,7 +104,7 @@ pub(super) fn queue_completed_scenarios_for_terminal_resolution(
         }
         let mut failed = false;
         let mut complete = true;
-        for status in states {
+        for (status, _) in states {
             failed |= *status == ScenarioObjectiveStatus::Failed;
             complete &= matches!(
                 status,

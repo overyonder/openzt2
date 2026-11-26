@@ -10,11 +10,11 @@ use super::{
         SourceUiHotkeyModeReference, SourceUiHotkeyTrigger, SourceUiNamedEventList,
         SourceUiPayloadNode, SourceUiXmlObjectEvent,
     },
+    SourceUiDiagnostic,
     source_scalar_and_attribute_reading::{
         copy_unknown_source_ui_attributes, optional_nonempty_source_attribute, parse_source_bool,
     },
     ui_aspect_and_visual_source_parsing::parse_source_ui_color as parse_color,
-    SourceUiDiagnostic,
 };
 
 pub(super) fn parse_authored_ui_event_block(
@@ -177,9 +177,17 @@ pub(super) fn parse_authored_ui_hotkeys(node: &OrderedSourceDocumentNode) -> Vec
     node.element_children()
         .filter(|child| child.name != "file")
         .map(|child| {
-            let mut event = parse_authored_ui_event(child);
-            if child.name == "char" {
-                event.key = None;
+            let mut events = child
+                .element_children()
+                .filter(|event| event.name == "event")
+                .map(parse_authored_ui_event)
+                .collect::<Vec<_>>();
+            if child.attribute("msg").is_some() || events.is_empty() {
+                let mut event = parse_authored_ui_event(child);
+                if child.name == "char" {
+                    event.key = None;
+                }
+                events = vec![event];
             }
             SourceUiHotkey {
                 trigger: match child.name.as_str() {
@@ -208,7 +216,7 @@ pub(super) fn parse_authored_ui_hotkeys(node: &OrderedSourceDocumentNode) -> Vec
                     .map(AssetPath::new),
                 node: optional_nonempty_source_attribute(child, "node")
                     .or_else(|| optional_nonempty_source_attribute(node, "node")),
-                events: vec![event],
+                events,
             }
         })
         .collect()

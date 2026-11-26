@@ -6,13 +6,18 @@ pub struct PathPlacementHighlightAsset {
     pub(super) curves: Vec<PathPlacementHighlightCurve>,
 }
 
-pub(super) struct PathPlacementHighlightCurve {
-    pub(super) texture: Handle<Image>,
-    pub(super) on: Vec<[i32; 3]>,
-    pub(super) off: Vec<[i32; 3]>,
+pub struct PathPlacementHighlightCurve {
+    pub texture: Handle<Image>,
+    pub on: Vec<[i32; 3]>,
+    pub off: Vec<[i32; 3]>,
+    pub curb_endpoints: [Option<[i32; 3]>; 2],
 }
 
 impl PathPlacementHighlightAsset {
+    pub fn curves(&self) -> &[PathPlacementHighlightCurve] {
+        &self.curves
+    }
+
     pub fn texture_for_direction_cell(
         &self,
         centre: IVec3,

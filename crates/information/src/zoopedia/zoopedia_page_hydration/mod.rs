@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::{
     action::{
-        information::{UiInformationAction, UiInformationActionRecord},
         UiActionRecord, UiTrigger,
+        information::{UiInformationAction, UiInformationActionRecord},
     },
     document::UiDocumentRole,
 };
@@ -23,11 +23,13 @@ pub(crate) fn hydrate_zoopedia_pages_from_authored_root_entry(
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
+    mut document_events: Option<MessageReader<AssetEvent<UiDocumentAsset>>>,
     mut ui_document_roots: Query<(
         Entity,
         Ref<UiDocumentRoot>,
         &ChildOf,
-        Has<ZoopediaPage>,
+        Option<&mut ZoopediaPage>,
+        Option<&mut ZoopediaHistory>,
         Option<&mut ZoopediaRootEntry>,
     )>,
     pending_entries: Query<&PendingZoopediaEntry>,
@@ -36,10 +38,29 @@ pub(crate) fn hydrate_zoopedia_pages_from_authored_root_entry(
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
-    for (document_root_entity, document_root, lifecycle, has_page, current_root) in
+    let all_documents_changed = document_events.is_none() && ui_document_assets.is_changed();
+    let changed_documents: bevy::platform::collections::HashSet<_> = document_events
+        .as_mut()
+        .map(|events| {
+            events
+                .read()
+                .filter_map(|event| match *event {
+                    AssetEvent::Added { id }
+                    | AssetEvent::Modified { id }
+                    | AssetEvent::Removed { id } => Some(id),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for (document_root_entity, document_root, lifecycle, page, mut history, current_root) in
         &mut ui_document_roots
     {
-        if has_page && !document_root.is_changed() && !ui_document_assets.is_changed() {
+        if page.is_some()
+            && !document_root.is_changed()
+            && !all_documents_changed
+            && !changed_documents.contains(&document_root.document.id())
+        {
             continue;
         }
         let Some(document) = ui_document_assets.get(&document_root.document) else {
@@ -75,6 +96,7 @@ pub(crate) fn hydrate_zoopedia_pages_from_authored_root_entry(
             }
             continue;
         };
+        let previous = current_root.as_deref().map(|root| root.0);
         if let Some(mut current_root) = current_root {
             current_root.set_if_neq(ZoopediaRootEntry(entry));
         } else {
@@ -82,26 +104,44 @@ pub(crate) fn hydrate_zoopedia_pages_from_authored_root_entry(
                 .entity(document_root_entity)
                 .insert(ZoopediaRootEntry(entry));
         }
-        if has_page {
-            continue;
-        }
         let Some(root_subject) = world_definitions
             .find_zoopedia_entry(entry)
             .map(resolve_zoopedia_entry_subject)
         else {
             continue;
         };
+        if let Some(mut page) = page {
+            if let Some(previous) = previous.filter(|&previous| previous != entry) {
+                let old_root = world_definitions
+                    .find_zoopedia_entry(previous)
+                    .map_or(previous, resolve_zoopedia_entry_subject);
+                if page.subject == old_root {
+                    page.set_if_neq(ZoopediaPage {
+                        subject: root_subject,
+                        section: 0,
+                    });
+                }
+                if let Some(history) = history.as_deref_mut() {
+                    history.replace_subject(old_root, root_subject);
+                }
+            }
+            continue;
+        }
         let owner = lifecycle.parent();
         let subject = pending_entries.get(owner).map_or(root_subject, |entry| {
             commands.entity(owner).remove::<PendingZoopediaEntry>();
             entry.0
         });
-        commands.entity(document_root_entity).insert((
-            ZoopediaPage {
-                subject,
-                section: 0,
-            },
-            ZoopediaHistory::from_transition(root_subject, subject),
-        ));
+        let mut entity = commands.entity(document_root_entity);
+        entity.insert(ZoopediaPage {
+            subject,
+            section: 0,
+        });
+        let next_history = ZoopediaHistory::from_transition(root_subject, subject);
+        if let Some(mut current) = history {
+            current.set_if_neq(next_history);
+        } else {
+            entity.insert(next_history);
+        }
     }
 }

@@ -3,10 +3,10 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::{
+    AssetId,
     ui_document::node_property_binding::{
         UiBooleanPropertyBindingSource, UiIntegerPropertyBindingSource, UiTextPropertyBindingSource,
     },
-    AssetId,
 };
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
@@ -80,6 +80,7 @@ pub(crate) fn bind_progression_awards_to_world_status(
 // Progression bindings combine calendar, fame, awards and rating values.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn project_progression_status_to_authored_information_bindings(
+    time: Res<Time<Fixed>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     active_localization: Res<LocalizationPrecedenceIndex>,
@@ -105,6 +106,10 @@ pub(crate) fn project_progression_status_to_authored_information_bindings(
     let active_research_project = selection
         .0
         .and_then(|entity| research_projects.get(entity).ok());
+    let (research_required, research_elapsed) = active_research_project
+        .as_ref()
+        .map(|project| project.saved_ticks(time.timestep()))
+        .unwrap_or_default();
     let research_changed = selection.is_changed()
         || active_research_project
             .as_ref()
@@ -161,18 +166,12 @@ pub(crate) fn project_progression_status_to_authored_information_bindings(
             UiIntegerPropertyBindingSource::ResearchElapsedTicks
                 if research_changed || property_binding.is_changed() =>
             {
-                active_research_project
-                    .as_ref()
-                    .and_then(|project| i64::try_from(project.elapsed_ticks).ok())
-                    .unwrap_or(0)
+                i64::try_from(research_elapsed).unwrap_or(i64::MAX)
             }
             UiIntegerPropertyBindingSource::ResearchRequiredTicks
                 if research_changed || property_binding.is_changed() =>
             {
-                active_research_project
-                    .as_ref()
-                    .and_then(|project| i64::try_from(project.required_ticks).ok())
-                    .unwrap_or(0)
+                i64::try_from(research_required).unwrap_or(i64::MAX)
             }
             UiIntegerPropertyBindingSource::AwardEarnedTick { award } => {
                 let earned = awards

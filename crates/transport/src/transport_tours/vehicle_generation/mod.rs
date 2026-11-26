@@ -255,6 +255,8 @@ fn request_payment_for_ready_vehicles(
             id,
         });
         requests.write(TransactionRequest {
+            domain:
+                openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Player,
             operation,
             debit: Account::Zoo,
             credit: Account::External,
@@ -393,6 +395,7 @@ fn spawn_paid_transport_vehicle_prefab_instances(
         } else {
             let refund = commands.spawn((*world, VehiclePurchaseRefund)).id();
             requests.write(TransactionRequest {
+                domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Player,
                 operation: refund,
                 debit: Account::External,
                 credit: Account::Zoo,

@@ -141,6 +141,8 @@ impl Plugin for ObjectPlacementPlugin {
                 .run_if(in_state(GamePhase::InGame)),
         );
         app.register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, PlacedObjectFootprintOccupancyIndex>()
+            .register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, BiomeAutomaticPlacementRanges>()
+            .add_observer(apply_authored_initial_animal_placement_preview_animation_repetition_policy)
             .add_message::<openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprintChanged>()
             .add_message::<CommitObjectPlacementPreviewRequest>()
             .add_message::<RemovePlacedObjectRequest>()
@@ -159,12 +161,11 @@ impl Plugin for ObjectPlacementPlugin {
                     cancel_all_active_object_relocations,
                     create_active_object_placement_preview
                         .after(crate::construction::construction_tool_and_action_routing::select_construction_tool),
-                    biome_automatic_object_placement_edit_preparation::hydrate_biome_automatic_placement_state_onto_world_and_terrain_brush_previews,
+                    biome_automatic_object_placement_edit_preparation::hydrate_biome_automatic_placement_state_onto_world_and_terrain_brush_previews
+                        .after(crate::construction::construction_ui_action_routing::route_construction_ui_actions),
                     hydrate_object_placement_preview_prefab_render_tree.after(create_active_object_placement_preview),
                     attach_pending_animal_placement_preview_animations
                         .after(hydrate_object_placement_preview_prefab_render_tree),
-                    apply_authored_initial_animal_placement_preview_animation_repetition_policy
-                        .after(attach_pending_animal_placement_preview_animations),
                     hydrate_object_placement_preview_materials_from_ui_document,
                     rotate_active_object_placement_preview_by_authored_increment.after(create_active_object_placement_preview),
                     synchronize_object_placement_preview_with_construction_cursor

@@ -31,11 +31,11 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::world_objects::{
     WaterFilterPolicy, WorldObjectAffordanceFlags, WorldObjectDefinition, WorldObjectPropertyFlags,
     WorldObjectRealPhysicsWaterImpactDefinition,
 };
-use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
 /// Uses the mainObj scene for spawning. Purchase controls also add a catalogue entry.
@@ -493,7 +493,7 @@ pub(super) fn bind_authored_placement_object(
     output.document.objects.push(WorldObjectDefinition {
         authored_runtime: super::object_and_placeable_source_lowering::lower_authored_world_object_runtime(record)?,
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
-        audio_stage_volumes: Vec::new(),
+        audio_stage_volumes: lower_authored_audio_stage_volumes(record)?,
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),
         detach_actions: super::object_detach_action_source_lowering::lower_object_detach_actions(
@@ -620,3 +620,76 @@ fn authored_placement_binder_is_abstract(record: &RecordView<'_, '_>) -> bool {
 
 #[cfg(test)]
 mod tests;
+pub(super) fn lower_authored_audio_stage_volumes(
+    record: &RecordView<'_, '_>,
+) -> Result<
+    Vec<openzt2_game_data::world_definitions::world_objects::WorldObjectAudioStageVolume>,
+    BindError,
+> {
+    use super::source_element_tree_search::authored_type_family_elements_named;
+    use crate::source_document::blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme;
+    use openzt2_game_data::world_definitions::world_objects::WorldObjectAudioStageVolume;
+
+    let Some(sound_environment) = authored_type_family_elements_named(record, "ZTPlacementData")
+        .into_iter()
+        .find_map(|placement| {
+            placement
+                .element_children()
+                .find(|child| child.name.eq_ignore_ascii_case("soundEnv"))
+        })
+    else {
+        return Ok(Vec::new());
+    };
+    let mut volumes = Vec::new();
+    for node in sound_environment.element_children() {
+        let fringe = if node.name.eq_ignore_ascii_case("fringeVolume") {
+            true
+        } else if node.name.eq_ignore_ascii_case("stageVolume") {
+            false
+        } else {
+            continue;
+        };
+        let stage = node
+            .attribute_named_any(&["soundStage"])
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("default");
+        let number = |name| {
+            node.attribute_named_any(&[name])
+                .map(|value| {
+                    parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                        .filter(|value| value.is_finite())
+                        .ok_or_else(|| {
+                            BindError::record(record, format!("invalid audio stage volume {name}"))
+                        })
+                })
+                .transpose()
+                .map(|value| value.unwrap_or_default())
+        };
+        let minimum = [number("botLeftX")?, 0.0, -number("topRightY")?];
+        let maximum = [
+            number("topRightX")?,
+            number("height")?,
+            -number("botLeftY")?,
+        ];
+        if minimum.iter().zip(maximum).any(|(&low, high)| low > high) {
+            return Err(BindError::record(
+                record,
+                "inverted audio stage volume bounds",
+            ));
+        }
+        volumes.push(WorldObjectAudioStageVolume {
+            stage: openzt2_game_data::AssetId::from_key(&format!(
+                "audio-stage:{}",
+                stage.to_ascii_lowercase()
+            )),
+            minimum,
+            maximum,
+            fringe,
+            occlude_crowd: node
+                .attribute_named_any(&["occludeCrowdSounds"])
+                .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true")),
+        });
+    }
+    Ok(volumes)
+}

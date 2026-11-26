@@ -18,6 +18,41 @@ pub struct ShowUiRole {
     pub owner: Entity,
 }
 
+/// Open a role on its existing host and let an independent owner address it.
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShowUiRoleInScope {
+    pub role: UiDocumentRole,
+    pub owner: Entity,
+    pub host: Entity,
+}
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiRoleScope {
+    pub role: UiDocumentRole,
+    pub host: Entity,
+}
+
+#[derive(SystemParam)]
+pub struct ScopedUiRoleDocuments<'w, 's> {
+    scopes: Query<'w, 's, &'static UiRoleScope>,
+    children: Query<'w, 's, &'static Children>,
+    roots: Query<'w, 's, &'static super::authored_ui_node_projection_components::UiDocumentRoot>,
+    assets: Res<'w, Assets<UiDocumentAsset>>,
+}
+
+impl ScopedUiRoleDocuments<'_, '_> {
+    pub fn document(&self, owner: Entity) -> Option<Entity> {
+        let scope = self.scopes.get(owner).ok()?;
+        self.children.get(scope.host).ok()?.iter().find(|&child| {
+            self.roots
+                .get(child)
+                .ok()
+                .and_then(|root| self.assets.get(&root.document))
+                .is_some_and(|document| document.canonical_ui_document().role == scope.role)
+        })
+    }
+}
+
 #[derive(Message)]
 pub struct AuthoredUiDocumentOperation {
     pub owner: Entity,
@@ -33,6 +68,10 @@ pub enum UiDocumentOperation {
     ShowNode {
         target: AssetId,
         visible: bool,
+    },
+    PressNode {
+        target: AssetId,
+        source: ActionSource,
     },
     ActivateSelectedChild {
         target: AssetId,

@@ -2,6 +2,10 @@ use std::time::Duration;
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use openzt2_game_data::AssetId;
+use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
+
+use super::water_filter_timing::FilterCleanupInterval;
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
@@ -25,9 +29,6 @@ use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, Wor
 use super::aquatic_simulation_types::{
     AddAquaticWaterDirt, AquaticAnimal, Tank, TankGeometry, WaterFilter, WaterQuality,
 };
-
-#[derive(Component)]
-pub(super) struct FilterCleanupInterval(Timer);
 
 #[derive(Component, PartialEq, Eq)]
 #[relationship(relationship_target = TankWaterFilters)]
@@ -72,15 +73,6 @@ impl FilterWaterSources<'_, '_> {
             depth * membership.accepted_points(water).count() as f32 * 0.75
         };
         (volume.is_finite() && volume > 0.0).then_some(volume)
-    }
-}
-
-impl FilterCleanupInterval {
-    fn from_seconds(seconds: f32) -> Self {
-        Self(Timer::new(
-            Duration::try_from_secs_f32(seconds).unwrap_or_default(),
-            TimerMode::Once,
-        ))
     }
 }
 
@@ -146,13 +138,16 @@ pub(super) fn reconcile_authored_water_filter_policy(
                 }
             }
             (None, Some(policy)) => {
-                commands.entity(entity).insert((
-                    WaterFilter {
-                        policy,
-                        dirt_percent: 0.0,
-                    },
-                    FilterCleanupInterval::from_seconds(policy.cleanup_interval_seconds),
-                ));
+                let mut entity_commands = commands.entity(entity);
+                entity_commands.insert(WaterFilter {
+                    policy,
+                    dirt_percent: 0.0,
+                });
+                if interval.is_none() {
+                    entity_commands.insert(FilterCleanupInterval::from_seconds(
+                        policy.cleanup_interval_seconds,
+                    ));
+                }
             }
             (Some(_), None) => {
                 commands.entity(entity).remove::<WaterFilter>();
@@ -322,5 +317,29 @@ pub(super) fn clean_tank_water_through_filters(
         filter.dirt_percent = (filter.dirt_percent
             + removed * 100.0 / filter.policy.maximum_dirt_capacity)
             .min(100.0);
+    }
+}
+
+pub(super) fn publish_water_filter_dirty_attribute(
+    mut commands: Commands,
+    mut filters: Query<(
+        Entity,
+        Ref<WaterFilter>,
+        Option<Mut<AuthoredFloatAttributes>>,
+    )>,
+) {
+    let key = AssetId::from_key("f_filterdirtylevel");
+    for (entity, filter, attributes) in &mut filters {
+        if let Some(mut attributes) = attributes {
+            if (filter.is_changed() || attributes.is_added())
+                && attributes.get(key) != Some(filter.dirt_percent)
+            {
+                attributes.set(key, filter.dirt_percent);
+            }
+        } else {
+            let mut attributes = AuthoredFloatAttributes::default();
+            attributes.set(key, filter.dirt_percent);
+            commands.entity(entity).insert(attributes);
+        }
     }
 }

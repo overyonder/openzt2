@@ -1,9 +1,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
 use openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory;
-use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
 use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_zoo_state::progression::fame_types::Fame;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
@@ -36,7 +34,7 @@ pub(super) struct ScenarioLuaQueryFactSources<'w, 's> {
         With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
     >,
     zoo_state: Query<'w, 's, (
-        Option<&'static ZooCash>, Option<&'static AdmissionPrice>, Option<&'static MonthlyFinanceHistory>,
+        Option<&'static MonthlyFinanceHistory>,
         Option<&'static ZooClock>, Option<&'static ZooCalendar>,
     ), With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>>,
     world_definitions: Res<'w, WorldDefinitions>,
@@ -45,9 +43,11 @@ pub(super) struct ScenarioLuaQueryFactSources<'w, 's> {
     persistent_ids: Res<'w, openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex>,
     contained_crated_animals: super::scenario_lua_types::ScenarioLuaCrateQuery<'w, 's>,
     containers: openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships<'w, 's>,
+    authored_float_attributes: Query<'w, 's, &'static openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes>,
     live_world_entities: ScenarioLuaLiveEntityQuery<'w, 's>,
     scenario_document_assets: Res<'w, Assets<WorldScenarioDocumentAsset>>,
     current_photo_challenge_sets: ScenarioLuaCurrentPhotoChallengeSetQuery<'w, 's>,
+    photo_catalogues: Query<'w, 's, &'static openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeCatalogueIndex>,
     photo_challenges: ScenarioLuaPhotoChallengeQuery<'w, 's>,
     fence_edges: super::scenario_lua_types::ScenarioLuaFenceEdgeQuery<'w, 's>,
     path_tiles: super::scenario_lua_types::ScenarioLuaPathTileQuery<'w, 's>,
@@ -75,7 +75,7 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
         self.zoo_state
             .get(root)
             .ok()
-            .and_then(|(_, _, _, clock, _)| clock)
+            .and_then(|(_, clock, _)| clock)
     }
 
     pub(super) fn borrow_scenario_lua_query_facts<'a>(
@@ -96,7 +96,7 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
         let ui_roots: &'a super::scenario_lua_types::ScenarioLuaUiRootQuery<'a, 'a> =
             &self.ui_roots;
         let selected = self.selected_worlds.single().ok();
-        let (cash, admission_price, history, clock, calendar) = selected
+        let (history, clock, calendar) = selected
             .and_then(|(root, ..)| self.zoo_state.get(root).ok())
             .unwrap_or_default();
         ScenarioLuaQueryFacts {
@@ -107,11 +107,11 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
             spawn_animal: None,
             species: self.species.get(&self.species_assets),
             profile: None,
-            zoo_cash: cash.copied().unwrap_or_default(),
+            world_variable: None,
+            economy: None,
             tank_in_world: !self.tanks.is_empty(),
             tanks,
             world_session_mode: selected.map(|(_, identity, _)| identity.mode),
-            guest_admission_price: admission_price.copied().unwrap_or_default(),
             finance_history: history,
             zoo_fame: selected.and_then(|(_, _, fame)| fame),
             zoo_clock: clock,
@@ -126,11 +126,13 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
             contained_crated_animals: &self.contained_crated_animals,
             contained_entities,
             waste: None,
+            authored_float_attributes: &self.authored_float_attributes,
             live_world_entities,
             world_definitions: self.world_definitions.get(&self.world_definition_assets),
             scenario_document_assets: &self.scenario_document_assets,
             current_photo_challenge_sets,
-            selected_photo_set: None,
+            photo_set: None,
+            photo_catalogue: selected.and_then(|(root, ..)| self.photo_catalogues.get(root).ok()),
             photo_challenges,
             selected_entity: self.selected_entity.subject(),
             fence_edges,
@@ -160,15 +162,21 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
         use openzt2_zoo_state::economy::monthly_finance_types::FinanceMetric;
         use openzt2_zoo_state::economy::monthly_finance_types::FinancePeriod;
 
-        let (_, _, Some(history), Some(clock), Some(calendar)) = self.zoo_state.get(root).ok()?
-        else {
+        let (Some(history), Some(clock), Some(calendar)) = self.zoo_state.get(root).ok()? else {
             return None;
         };
         let months_since_opening = self.count_zoo_months_since_calendar_epoch(calendar)?;
         let month_progress = self.measure_zoo_month_progress(clock, calendar)?;
         Some(ScenarioInstantChallengeEligibility {
             admitted_guests: if history.has_initialized_month() {
-                history.finance_metric_value(FinanceMetric::TotalUsers, FinancePeriod::Lifetime)
+                match history
+                    .finance_metric_value(FinanceMetric::TotalUsers, FinancePeriod::Lifetime)
+                {
+                    openzt2_zoo_state::economy::monthly_finance_types::FinanceValue::Users(
+                        users,
+                    ) => users,
+                    _ => 0,
+                }
             } else {
                 0
             },
@@ -183,20 +191,18 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
         clock: &ZooClock,
         calendar: &ZooCalendar,
     ) -> Option<ScenarioZooMonthProgress> {
-        let timing = self
-            .world_definitions
-            .get(&self.world_definition_assets)?
-            .timing();
-        let ticks_per_day = u64::from(timing.ticks_per_day);
-        Some(ScenarioZooMonthProgress {
-            ticks_into_month: u64::from(calendar.day.saturating_sub(1)) * ticks_per_day
-                + u64::from(clock.tick_in_day),
-            ticks_in_month: u64::from(days_in_month(
-                &timing.calendar,
-                u32::from(calendar.year),
-                calendar.month,
-            )) * ticks_per_day,
-        })
+        let definitions = self.world_definitions.get(&self.world_definition_assets)?;
+        let cadence = openzt2_simulation_time::simulation_time_world_lifecycle::
+            zoo_day_cadence_from_world_definitions(definitions)?;
+        let day_fraction = cadence.day_fraction(*clock)?;
+        let days = days_in_month(
+            &definitions.timing().calendar,
+            u32::from(calendar.year),
+            calendar.month,
+        );
+        Some(ScenarioZooMonthProgress(
+            (f64::from(calendar.day.saturating_sub(1)) + day_fraction) / f64::from(days.max(1)),
+        ))
     }
 
     /// Months the zoo calendar has advanced past its epoch, the zoo's first day.
@@ -215,24 +221,17 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
 }
 
 /// Zoo time elapsed in, and the length of, the current calendar month.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct ScenarioZooMonthProgress {
-    pub(super) ticks_into_month: u64,
-    pub(super) ticks_in_month: u64,
-}
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct ScenarioZooMonthProgress(f64);
 
 impl ScenarioZooMonthProgress {
-    /// The fraction of the month elapsed, in `0.0..1.0`. This is what the
-    /// shipped `getCurrentTimeOfDay` returns from `ZT_GET_CURRENT_DAYOFMONTH`:
-    /// `decidechallengeset` measures an interval that crosses a month as
-    /// `(1 - start) + now`, which holds only for a value that wraps at 1.
     pub(super) fn elapsed_fraction(self) -> f64 {
-        self.ticks_into_month as f64 / self.ticks_in_month.max(1) as f64
+        self.0
     }
 }
 
 /// Inputs to the instant-challenge condition in `checkchallenges`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct ScenarioInstantChallengeEligibility {
     /// Lifetime admissions, as `getNumGuests(-1)` reads them.
     pub(super) admitted_guests: i64,
@@ -246,9 +245,6 @@ impl ScenarioInstantChallengeEligibility {
     /// The zoo has admitted no guest and is within the first tenth of its
     /// first month.
     pub(super) const fn allows_instant_challenge(self) -> bool {
-        self.admitted_guests == 0
-            && self.months_since_opening == 0
-            && self.month_progress.ticks_into_month.saturating_mul(10)
-                <= self.month_progress.ticks_in_month
+        self.admitted_guests == 0 && self.months_since_opening == 0 && self.month_progress.0 <= 0.1
     }
 }

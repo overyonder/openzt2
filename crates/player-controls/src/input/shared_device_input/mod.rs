@@ -1,6 +1,5 @@
 use bevy::{
     camera::RenderTarget,
-    input::mouse::MouseWheel,
     picking::pointer::{
         Location, PointerAction, PointerButton, PointerId, PointerInput, PointerLocation,
         PointerPressState,
@@ -21,7 +20,6 @@ pub(super) fn publish_active_device_axes_and_pointer(
     mut active: ResMut<ActiveInputDevice>,
     mut axes: ResMut<DeviceControlAxes>,
     physical_buttons: Res<ButtonInput<MouseButton>>,
-    mut wheel: MessageReader<MouseWheel>,
     mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
     mut pointer: Query<(&PointerId, &mut PointerLocation, &PointerPressState)>,
     mut events: MessageWriter<PointerInput>,
@@ -75,7 +73,7 @@ pub(super) fn publish_active_device_axes_and_pointer(
             controller,
             time.delta_secs(),
             &physical_buttons,
-            (&mut wheel, &mut events),
+            &mut events,
         ) {
             next_axes.look = look;
         }
@@ -90,10 +88,7 @@ fn publish_pointer_events(
     controller: Option<&GamepadControlSample>,
     elapsed_seconds: f32,
     physical_buttons: &ButtonInput<MouseButton>,
-    (wheel, events): (
-        &mut MessageReader<MouseWheel>,
-        &mut MessageWriter<PointerInput>,
-    ),
+    events: &mut MessageWriter<PointerInput>,
 ) -> Option<Vec2> {
     let target =
         RenderTarget::Window(WindowRef::Entity(window_entity)).normalize(Some(window_entity))?;
@@ -165,18 +160,6 @@ fn publish_pointer_events(
                 action,
             ));
         }
-    }
-    for event in wheel.read().filter(|event| event.window == window_entity) {
-        events.write(PointerInput::new(
-            PointerId::Mouse,
-            location.clone(),
-            PointerAction::Scroll {
-                x: event.x,
-                y: event.y,
-                unit: event.unit,
-                phase: event.phase,
-            },
-        ));
     }
     look
 }

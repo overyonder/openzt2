@@ -61,13 +61,13 @@ fn challenge_identity_codec_agrees_with_literal_wire_records() {
             challenge_definition_identifier: FIRST_CHALLENGE,
             completed: true,
             completed_by_photo_persistent_identifier: Some(PersistentId(41)),
-            rating_stars: 2,
+            rating_half_stars: 4,
         },
         PhotoChallengeProgressSnapshotRecord {
             challenge_definition_identifier: SECOND_CHALLENGE,
             completed: true,
             completed_by_photo_persistent_identifier: Some(PersistentId(42)),
-            rating_stars: 5,
+            rating_half_stars: 10,
         },
     ];
     let mut encoded = Vec::new();
@@ -87,14 +87,14 @@ fn challenge_identity_codec_agrees_with_literal_wire_records() {
         decoded[0].completed_by_photo_persistent_identifier,
         Some(PersistentId(41))
     );
-    assert_eq!(decoded[0].rating_stars, 2);
+    assert_eq!(decoded[0].rating_half_stars, 4);
     assert_eq!(decoded[1].challenge_definition_identifier, SECOND_CHALLENGE);
     assert!(decoded[1].completed);
     assert_eq!(
         decoded[1].completed_by_photo_persistent_identifier,
         Some(PersistentId(42))
     );
-    assert_eq!(decoded[1].rating_stars, 5);
+    assert_eq!(decoded[1].rating_half_stars, 10);
 }
 
 #[test]
@@ -104,13 +104,13 @@ fn camera_roll_challenge_completion_preserves_a_zero_star_result() {
             challenge_definition_identifier: FIRST_CHALLENGE,
             completed: true,
             completed_by_photo_persistent_identifier: None,
-            rating_stars: 0,
+            rating_half_stars: 0,
         },
         PhotoChallengeProgressSnapshotRecord {
             challenge_definition_identifier: SECOND_CHALLENGE,
             completed: false,
             completed_by_photo_persistent_identifier: None,
-            rating_stars: 0,
+            rating_half_stars: 0,
         },
     ];
     let mut encoded = Vec::new();
@@ -119,7 +119,7 @@ fn camera_roll_challenge_completion_preserves_a_zero_star_result() {
         decode_and_validate_photo_snapshot_section(&encoded, challenge_section(encoded.len()))
             .unwrap();
     assert!(decoded[0].completed);
-    assert_eq!(decoded[0].rating_stars, 0);
+    assert_eq!(decoded[0].rating_half_stars, 0);
     assert!(decoded[0]
         .completed_by_photo_persistent_identifier
         .is_none());
@@ -194,6 +194,7 @@ fn restored_challenges_with_the_same_local_row_keep_distinct_photo_completions()
             image_width_pixels: 1,
             image_height_pixels: 1,
             rgba8_pixel_bytes: vec![id as u8, 10, 20, 255],
+            caption: None,
             challenge_photo_file_identifiers: vec![],
         })
         .collect();
@@ -243,8 +244,8 @@ fn restored_challenges_with_the_same_local_row_keep_distinct_photo_completions()
     .unwrap();
 
     for (entity, expected_id, photo_id, stars) in [
-        (challenges[0], SECOND_CHALLENGE, 42, 5),
-        (challenges[1], FIRST_CHALLENGE, 41, 2),
+        (challenges[0], SECOND_CHALLENGE, 42, 10),
+        (challenges[1], FIRST_CHALLENGE, 41, 4),
     ] {
         let challenge = world.get::<PhotoChallenge>(entity).unwrap();
         assert_eq!(challenge.id, expected_id);
@@ -259,7 +260,7 @@ fn restored_challenges_with_the_same_local_row_keep_distinct_photo_completions()
         );
         let progress = world.get::<PhotoChallengeProgress>(entity).unwrap();
         assert!(progress.completed);
-        assert_eq!(progress.rating_stars, stars);
+        assert_eq!(progress.rating_half_stars, stars);
         let photo_entity = progress.completed_by.unwrap();
         assert_eq!(
             world.get::<PersistentId>(photo_entity),

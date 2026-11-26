@@ -17,13 +17,16 @@ use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualLayer;
 use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
+use super::catalogue_type_list_policy_operations::CatalogueRestrictions;
 use super::catalogue_type_list_row_count_operations::OrderedCatalogueEntries;
 use super::catalogue_world_availability_context::{
-    catalogue_world_session_or_scenario_availability_changed,
-    resolve_catalogue_world_session_mode_and_scenario_availability, CatalogueResearchAccess,
+    CatalogueResearchAccess, catalogue_world_session_or_scenario_availability_changed,
+    resolve_catalogue_world_session_mode_and_scenario_availability,
 };
 use openzt2_interface_state::information::catalogue_types::CatalogueRowEntry;
+use openzt2_interface_state::information::catalogue_types::ScenarioCatalogueRestrictions;
 use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntry;
+use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId;
 
 pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
     mut commands: Commands,
@@ -38,8 +41,9 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
         ),
         With<WorldRoot>,
     >,
-    scenario_disabled: Query<Ref<openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions>, With<WorldRoot>>,
-    lists: Query<Ref<OrderedCatalogueEntries>>,
+    restrictions: CatalogueRestrictions,
+    mut retired_restrictions: RemovedComponents<ScenarioCatalogueRestrictions>,
+    lists: Query<(Ref<OrderedCatalogueEntries>, Option<Ref<UiNodeId>>)>,
     selected_entry: Single<Ref<SelectedCatalogueEntry>>,
     children: Query<&Children>,
     mut visual_images: Query<
@@ -62,10 +66,9 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
     let unlocks = unlocks.into_inner();
     let selected_entry = selected_entry.into_inner();
     let definitions_changed = active_definitions.is_changed() || definitions.is_changed();
-    let scenario_disabled = scenario_disabled.single().ok();
-    let availability_changed = scenario_disabled
-        .as_ref()
-        .is_some_and(|disabled| disabled.is_changed())
+    let restrictions_retired = retired_restrictions.read().count() != 0;
+    let availability_changed = restrictions_retired
+        || restrictions.changed()
         || research_availability.changed()
         || unlocks.is_changed()
         || catalogue_world_session_or_scenario_availability_changed(&worlds);
@@ -89,7 +92,7 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
         mut visibility,
     ) in &mut rows
     {
-        let Ok(entries) = lists.get(parent.parent()) else {
+        let Ok((entries, list)) = lists.get(parent.parent()) else {
             continue;
         };
         if bound.is_some()
@@ -98,6 +101,7 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
             && !definitions_changed
             && !availability_changed
             && !entries.is_changed()
+            && !list.as_ref().is_some_and(Ref::is_changed)
         {
             if details_changed {
                 if let (Some(bound), Some(mut selected)) = (bound, selected) {
@@ -121,9 +125,8 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
             *visibility = Visibility::Inherited;
         }
         if let Some(mut interaction_enabled) = interaction_enabled {
-            let enabled = !scenario_disabled
-                .as_ref()
-                .is_some_and(|disabled| disabled.0.contains(&entry.definition))
+            let enabled = restrictions
+                .allows(list.as_deref().map(|node| node.id), entry.definition)
                 && (catalogue_entry_can_be_researched(
                     catalog,
                     entry,

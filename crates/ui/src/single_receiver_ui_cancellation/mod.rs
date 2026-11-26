@@ -23,7 +23,6 @@ use super::authored_ui_activation_contracts::UiNodeActivated;
 use super::authored_ui_node_projection_components::UiDocumentOwner;
 use super::authored_ui_node_projection_components::UiDocumentRoot;
 use super::authored_ui_node_projection_components::UiNodeId;
-use super::authored_ui_target_lookup::AuthoredUiTargetLookup;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_interface_state::input::input_types::ActionRequest;
 use openzt2_interface_state::input::input_types::ActionSource;
@@ -42,14 +41,12 @@ pub(super) struct UiCancellationReceivers<'w, 's> {
     documents: Res<'w, Assets<UiDocumentAsset>>,
     roots: Query<'w, 's, &'static UiDocumentRoot>,
     owners: Query<'w, 's, &'static UiDocumentOwner>,
-    children: Query<'w, 's, &'static Children>,
     nodes: Query<
         'w,
         's,
         (Entity, &'static UiDocumentOwner, &'static UiNodeId),
         With<InheritedVisibility>,
     >,
-    targets: AuthoredUiTargetLookup<'w, 's>,
     settings: Query<
         'w,
         's,
@@ -120,7 +117,7 @@ pub(super) fn dismiss_one_active_ui_activity_from_cancel_requests(
     let candidates = ui
         .bindings
         .iter()
-        .filter_map(|(_, parent, binding, _, shell)| {
+        .filter_map(|(node, parent, binding, _, shell)| {
             let receiver = parent.parent();
             let owner = owners.get(receiver).ok()?.0;
             if !binding.is_cancel_activation()
@@ -139,13 +136,18 @@ pub(super) fn dismiss_one_active_ui_activity_from_cancel_requests(
                     document.canonical_ui_document().role
                         == openzt2_game_data::ui_document::document::UiDocumentRole::ApplicationRoot
                 });
-            Some((receiver, owner, application_root))
+            Some((node, receiver, owner, application_root))
         });
-    let receiver = candidates.max_by_key(|(receiver, _, application_root)| {
-        (!*application_root, context.navigation_order(*receiver))
+    let receiver = candidates.max_by_key(|(node, receiver, _, application_root)| {
+        (
+            !*application_root,
+            context.navigation_order(*receiver),
+            std::cmp::Reverse(node.to_bits()),
+        )
     });
     if source == ActionSource::KeyboardMouse
-        && receiver.is_none_or(|(_, owner, _)| Some(context.document_scope(owner)) != active_scope)
+        && receiver
+            .is_none_or(|(_, _, owner, _)| Some(context.document_scope(owner)) != active_scope)
     {
         if let Some(scope) = active_scope {
             if let Some((node, _, _)) = ui.settings.iter().find(|(node, owner, actions)| {
@@ -189,8 +191,12 @@ pub(super) fn dismiss_one_active_ui_activity_from_cancel_requests(
             }
         }
     }
-    if let Some((receiver, owner, _)) = receiver {
-        activate_cancel_hotkey_receiver(&ui, receiver, owner, modal, source, &mut activated);
+    if let Some((node, ..)) = receiver {
+        activated.write(UiNodeActivated {
+            node,
+            source,
+            trigger: UiTrigger::Press,
+        });
         return;
     }
     if source == ActionSource::KeyboardMouse {
@@ -273,151 +279,4 @@ fn binding_opens_overhead_options(
             .authored_action_records(document)
             .any(|record| record.action == UiShellAction::OpenInGameOptionsFromOverheadEscape)
     })
-}
-
-fn activate_cancel_hotkey_receiver(
-    ui: &UiCancellationReceivers,
-    receiver: Entity,
-    owner: Entity,
-    modal: Option<Entity>,
-    source: ActionSource,
-    activated: &mut MessageWriter<UiNodeActivated>,
-) {
-    let Some(document) = ui
-        .roots
-        .get(owner)
-        .ok()
-        .and_then(|root| ui.documents.get(&root.document))
-    else {
-        return;
-    };
-    let scope = ui.context.document_scope(owner);
-    let mut forwarded_targets = std::collections::HashSet::new();
-    for (entity, parent, binding, presentation, shell) in ui
-        .children
-        .get(receiver)
-        .into_iter()
-        .flat_map(|children| children.iter())
-        .filter_map(|child| ui.bindings.get(child).ok())
-    {
-        if parent.parent() != receiver
-            || !binding.is_cancel_activation()
-            || (!ui.overhead_mode.0 && binding_opens_overhead_options(ui, owner, shell))
-        {
-            continue;
-        }
-        let forwarded = presentation
-            .and_then(|actions| actions.authored_action_records(document).next())
-            .and_then(|record| match record.action {
-                UiPresentationAction::ActivateTargetNodeWithPress { target_node } => {
-                    Some(target_node)
-                }
-                _ => None,
-            });
-        let node = if let Some(target) = forwarded {
-            ui.targets
-                .candidates(owner, target)
-                .find(|entity| ui.context.eligible_in_scope(*entity, scope, modal))
-                .or_else(|| {
-                    ui.targets.candidates(owner, target).find(|entity| {
-                        ui.context.enabled(*entity)
-                            && modal.is_none_or(|modal| ui.context.is_in_modal(*entity, modal))
-                    })
-                })
-        } else {
-            Some(entity)
-        };
-        if let Some(node) = node {
-            if forwarded.is_none() || forwarded_targets.insert(node) {
-                activated.write(UiNodeActivated {
-                    node,
-                    source,
-                    trigger: UiTrigger::Press,
-                });
-            }
-        }
-    }
-}
-
-fn cancellation_action(
-    record: &UiActionRecord,
-    modal_id: Option<openzt2_game_data::AssetId>,
-    can_hide_document: bool,
-) -> (UiTrigger, bool) {
-    match record {
-        UiActionRecord::Presentation(record) => (
-            record.trigger,
-            (can_hide_document
-                && matches!(
-                    record.action,
-                    UiPresentationAction::HideOwningDocument
-                        | UiPresentationAction::HideOwningDocumentAfterAlertAcknowledgement
-                        | UiPresentationAction::HideOwningDocumentAfterConfirmationDismissal
-                ))
-                || matches!(record.action, UiPresentationAction::SetTargetNodeVisible { target_node, visible: false }
-                if Some(target_node) == modal_id),
-        ),
-        UiActionRecord::Information(record) => (
-            record.trigger,
-            matches!(
-                record.action,
-                UiInformationAction::ApplySetting {
-                    setting: InformationSettingAction::Back
-                }
-            ),
-        ),
-        UiActionRecord::Shell(record) => (
-            record.trigger,
-            matches!(
-                record.action,
-                UiShellAction::DismissExitConfirmationDialog
-                    | UiShellAction::NavigateBackFromDownloads
-                    | UiShellAction::NavigateBackFromOptions
-                    | UiShellAction::NavigateBackFromMapSelection
-            ),
-        ),
-        UiActionRecord::Construction(record) => (
-            record.trigger,
-            matches!(
-                record.action,
-                UiConstructionAction::ResolveConfirmation {
-                    confirmed: false,
-                    ..
-                }
-            ),
-        ),
-        UiActionRecord::Transport(record) => (
-            record.trigger,
-            matches!(
-                record.action,
-                UiTransportAction::ResolvePendingTransportPathDeletion {
-                    deletion_confirmed: false
-                }
-            ),
-        ),
-        UiActionRecord::Show(record) => (
-            record.trigger,
-            matches!(
-                record.action,
-                UiShowAction::ResolvePlatformDeletion { confirmed: false }
-            ),
-        ),
-        UiActionRecord::Photo(record) => (
-            record.trigger,
-            matches!(record.action, UiPhotoAction::CancelMovingSelectedPhoto),
-        ),
-        UiActionRecord::PopulateCatalogueTypeList(record) => (record.trigger, false),
-        UiActionRecord::Camera(record) => (record.trigger, false),
-        UiActionRecord::StartResearchForSelectedCatalogueItem(record) => (record.trigger, false),
-        UiActionRecord::AnimalHealth(record) => (record.trigger, false),
-        UiActionRecord::Scenario(record) => (record.trigger, false),
-        UiActionRecord::AudioSetting(record) => (record.trigger, false),
-        UiActionRecord::EnterImmersiveMode(record) => (record.trigger, false),
-        UiActionRecord::Staff(record) => (record.trigger, false),
-        UiActionRecord::Economy(record) => (record.trigger, false),
-        UiActionRecord::Animal(record) => (record.trigger, false),
-        UiActionRecord::Persistence(record) => (record.trigger, false),
-        UiActionRecord::Simulation(record) => (record.trigger, false),
-        UiActionRecord::Script(record) => (record.trigger, false),
-    }
 }

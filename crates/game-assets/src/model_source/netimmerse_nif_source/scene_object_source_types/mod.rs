@@ -19,6 +19,8 @@ pub(in super::super) struct NetImmerseNiAvObject {
 #[derive(Debug, Clone, PartialEq)]
 pub(in super::super) struct NetImmerseNiLight {
     pub(in super::super) av_object: NetImmerseNiAvObject,
+    pub(in super::super) enabled: bool,
+    pub(in super::super) affected_node_refs: Vec<i32>,
     pub(in super::super) dimmer: f32,
     pub(in super::super) ambient: [f32; 3],
     pub(in super::super) diffuse: [f32; 3],

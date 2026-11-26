@@ -47,3 +47,35 @@ pub enum UiTablePolicy {
     FinanceValues,
     WorldMap,
 }
+
+/// Authored catalogue kinds whose selection must leave list memory unchanged.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+pub struct CatalogueTypeListMemoryPolicy(pub Box<[AssetId]>);
+
+impl CatalogueTypeListMemoryPolicy {
+    pub fn remembers(
+        &self,
+        entry: &openzt2_game_data::world_definitions::catalogue_and_progression::catalogue_definition_types::CatalogueEntry,
+    ) -> bool {
+        !self
+            .0
+            .iter()
+            .any(|kind| entry.kind == *kind || entry.kinds.contains(kind))
+    }
+}
+
+/// The authored group fragment and authored rule fragment on a goal list.
+#[derive(Component, Debug, Clone)]
+pub struct UiScenarioGoalGroupDocument(pub Handle<UiDocumentAsset>);
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiScenarioGoalRow {
+    pub list: Entity,
+    pub objective: Entity,
+}
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiScenarioGoalGroup {
+    pub list: Entity,
+    pub group: AssetId,
+}

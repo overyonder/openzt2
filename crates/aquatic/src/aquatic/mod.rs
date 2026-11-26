@@ -18,6 +18,7 @@ mod tank_presentation;
 mod tank_scripted_wall_height;
 mod tank_wall_enclosure_promotion;
 mod water_filter_operation;
+pub mod water_filter_timing;
 
 use bevy::prelude::*;
 
@@ -65,6 +66,18 @@ impl Plugin for AquaticPlugin {
             .add_observer(tank_presentation::retire_tank_surfaces_on_demotion)
             .add_observer(tank_presentation::retire_tank_wall_panel)
             .add_observer(tank_geometry_edit_execution::restore_uncommitted_tank_geometry)
+            .add_observer(tank_geometry_edit_execution::restore_unprepared_tank_geometry)
+            .add_systems(
+                Update,
+                tank_geometry_edit_execution::capture_submitted_tank_geometry
+                    .in_set(openzt2_construction::construction::construction_transaction_preparation::ConstructionSubmissionSet),
+            )
+            .add_systems(
+                FixedUpdate,
+                tank_geometry_edit_execution::clear_submitted_tank_geometry
+                    .after(FixedConstructionSet::Prepare)
+                    .before(FixedConstructionSet::Apply),
+            )
             .add_observer(water_filter_operation::remove_water_filter_timing_and_target)
             .add_systems(
                 Update,
@@ -72,6 +85,12 @@ impl Plugin for AquaticPlugin {
                     .after(UiSet::DomainProjection)
                     .before(UiSet::Interaction)
                     .in_set(GameSet::Ui)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                Update,
+                water_filter_operation::publish_water_filter_dirty_attribute
+                    .in_set(GameSet::Intent)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(

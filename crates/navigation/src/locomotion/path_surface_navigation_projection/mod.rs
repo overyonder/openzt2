@@ -40,8 +40,16 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
         With<WorldRoot>,
     >,
     paths: Query<(Entity, &NavigationPathGeometry, &WorldMember)>,
-    changed_paths: Query<Entity, Or<(Changed<NavigationPathGeometry>, Changed<WorldMember>)>>,
+    changed_paths: Query<
+        Entity,
+        (
+            With<NavigationPathGeometry>,
+            Or<(Changed<NavigationPathGeometry>, Changed<WorldMember>)>,
+        ),
+    >,
+    has_path_geometry: Query<(), With<NavigationPathGeometry>>,
     mut removed_paths: RemovedComponents<NavigationPathGeometry>,
+    mut removed_memberships: RemovedComponents<WorldMember>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>, &WorldMember)>,
     mut path_changes: MessageWriter<NavigationPathGraphChanged>,
@@ -62,10 +70,18 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
     let Ok((root, mut graph, mut capacity, terrain_index)) = roots.single_mut() else {
         for _ in terrain_edits {}
         removed_paths.clear();
+        removed_memberships.clear();
         return;
     };
-    let mut changed: std::collections::BTreeMap<_, _> =
-        removed_paths.read().map(|entity| (entity, None)).collect();
+    let mut changed: std::collections::BTreeMap<_, _> = removed_paths
+        .read()
+        .chain(
+            removed_memberships
+                .read()
+                .filter(|&entity| has_path_geometry.contains(entity)),
+        )
+        .map(|entity| (entity, None))
+        .collect();
     if graph_replaced {
         changed.clear();
         changed.extend(
@@ -135,17 +151,14 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
         capacity.max_route_points = point_capacity;
     }
     if *phase.get() == GamePhase::InGame {
-        path_changes.write(NavigationPathGraphChanged {
-            root,
-            elevated: !changes.elevated_nodes.is_empty(),
-        });
+        path_changes.write(NavigationPathGraphChanged { root, changes });
     }
 }
 
 #[derive(Message)]
 pub(super) struct NavigationPathGraphChanged {
     pub(super) root: Entity,
-    pub(super) elevated: bool,
+    pub(super) changes: openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::NavigationPathSurfaceChanges,
 }
 
 #[allow(clippy::type_complexity)]

@@ -1,6 +1,6 @@
 use bevy::prelude::*;
-use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::AssetId;
+use openzt2_game_data::ui_document::document::UiDocumentRole;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
@@ -73,6 +73,14 @@ impl ZoopediaHistory {
             self.entries[31] = subject;
             self.cursor = 31;
             self.len = self.entries.len() as u8;
+        }
+    }
+
+    pub(super) fn replace_subject(&mut self, previous: AssetId, next: AssetId) {
+        for subject in &mut self.entries[..usize::from(self.len)] {
+            if *subject == previous {
+                *subject = next;
+            }
         }
     }
 

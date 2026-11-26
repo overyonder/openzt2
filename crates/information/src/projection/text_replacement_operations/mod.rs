@@ -26,3 +26,7 @@ pub(crate) fn replace_projected_editable_ui_text_if_changed(
     projected_ui_text.clear();
     projected_ui_text.editor_mut().set_text(current_domain_text);
 }
+
+pub(super) fn currency_cents(amount: openzt2_zoo_state::economy::money_types::Money) -> i64 {
+    (f64::from(amount.dollars()) * 100.0).round() as i64
+}

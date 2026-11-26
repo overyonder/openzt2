@@ -231,9 +231,6 @@ fn presents_originals(
         .is_some_and(|asset| asset.canonical_ui_document().role == UiDocumentRole::SavedGames)
 }
 
-#[derive(Component)]
-pub(super) struct OriginalSaveDeleteRestricted;
-
 pub(super) fn project_original_save_delete_control_state(
     mut commands: Commands,
     rows: Query<(&ChildOf, &UiSelected, &SavedGameSource), With<UiListRow>>,
@@ -249,31 +246,23 @@ pub(super) fn project_original_save_delete_control_state(
     roots: Query<&UiDocumentRoot>,
     documents: Res<Assets<UiDocumentAsset>>,
     mut document_events: MessageReader<AssetEvent<UiDocumentAsset>>,
-    context: openzt2_ui::active_authored_ui_context::ActiveAuthoredUiContext,
     controls: Query<(
         Entity,
         Ref<openzt2_interface_state::ui::authored_ui_action_projection_components::UiPersistenceActions>,
         &UiDocumentOwner,
-        Has<OriginalSaveDeleteRestricted>,
-        Has<bevy::ui::InteractionDisabled>,
+        Has<openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionRestriction>,
     )>,
-    mut enabled_controls: RemovedComponents<bevy::ui::InteractionDisabled>,
 ) {
     use openzt2_game_data::ui_document::action::persistence::UiPersistenceAction;
+    use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionRestriction;
 
     let selection_changed = !changed_rows.is_empty() | (removed_sources.read().count() != 0);
     let documents_changed = document_events.read().count() != 0;
-    let native_gate_changed = enabled_controls.read().any(|entity| {
-        controls
-            .get(entity)
-            .is_ok_and(|(_, _, _, restricted, _)| restricted)
-    });
-    for (entity, actions, owner, restricted, native_disabled) in &controls {
-        if !selection_changed && !documents_changed && !native_gate_changed && !actions.is_changed()
-        {
+    for (entity, actions, owner, restricted) in &controls {
+        if !selection_changed && !documents_changed && !actions.is_changed() {
             continue;
         }
-        let restrict = roots
+        let is_delete = roots
             .get(owner.0)
             .ok()
             .and_then(|root| documents.get(&root.document))
@@ -281,27 +270,18 @@ pub(super) fn project_original_save_delete_control_state(
                 actions.authored_action_records(document).any(|record| {
                     record.action == UiPersistenceAction::DeleteWorldSnapshotFromSelectedSlot
                 })
-            })
-            && matches!(
-                selected_save_slot_in_document(owner.0, &rows, &lists),
-                Some(SavedGameSource::Original(_))
-            );
-        if restrict {
-            if !restricted {
-                commands.entity(entity).insert(OriginalSaveDeleteRestricted);
-            }
-            if !native_disabled {
-                commands
-                    .entity(entity)
-                    .insert(bevy::ui::InteractionDisabled);
-            }
-        } else if restricted {
-            let authored_enabled = context.enabled(entity);
-            let mut entity = commands.entity(entity);
-            entity.remove::<OriginalSaveDeleteRestricted>();
-            if authored_enabled {
-                entity.remove::<bevy::ui::InteractionDisabled>();
-            }
+            });
+        if !is_delete {
+            continue;
+        }
+        let restrict = matches!(
+            selected_save_slot_in_document(owner.0, &rows, &lists),
+            Some(SavedGameSource::Original(_))
+        );
+        if restrict && !restricted {
+            commands.entity(entity).insert(UiInteractionRestriction);
+        } else if !restrict && restricted {
+            commands.entity(entity).remove::<UiInteractionRestriction>();
         }
     }
 }

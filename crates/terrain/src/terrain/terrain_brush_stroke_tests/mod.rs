@@ -1,3 +1,7 @@
+use openzt2_construction::construction::construction_transaction_preparation::{
+    SubmittedConstruction, SubmittedPreview,
+};
+use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 use std::time::Duration;
 
 use bevy::prelude::*;
@@ -158,6 +162,7 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
                     PointerInput::receive,
                     update_terrain_brush_preview_and_commit_completed_pointer_strokes,
                     crate::terrain::terrain_live_brush_application::dispatch_held_terrain_strokes,
+                    crate::terrain::terrain_edit_preparation::capture_submitted_terrain_brush_stroke,
                     prepare_terrain_sample_deltas_for_construction_transactions,
                     crate::terrain::terrain_edit_application::dispatch_committed_terrain_edits,
                 )
@@ -284,7 +289,25 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
             app.world().resource::<Messages<CommitConstruction>>().len(),
             1
         );
-        let transaction = app.world_mut().spawn(WorldMember { root }).id();
+        let brush = *app.world().get::<TerrainBrushPreview>(preview).unwrap();
+        let construction = app
+            .world()
+            .get::<ConstructionPreview>(preview)
+            .unwrap()
+            .clone();
+        let tool = *app.world().resource::<ConstructionTool>();
+        let transaction = app
+            .world_mut()
+            .spawn((
+                WorldMember { root },
+                SubmittedConstruction {
+                    source: preview,
+                    tool,
+                    preview: construction,
+                },
+                SubmittedPreview(brush),
+            ))
+            .id();
         app.world_mut().write_message(PrepareConstruction {
             transaction,
             preview,

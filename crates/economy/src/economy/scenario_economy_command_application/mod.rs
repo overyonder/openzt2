@@ -1,98 +1,90 @@
-use bevy::prelude::*;
-use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction;
-
+use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
+use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger;
 
 use super::{
-    account_transaction_types::{
-        Account, TransactionCompleted, TransactionKind, TransactionRejected, TransactionRequest,
-    },
+    account_transaction_types::RecordedAccountMovement,
+    account_transaction_types::{TransactionKind, TransactionRejection},
     guest_admission_types::AdmissionPrice,
     money_types::Money,
     scenario_economy_command_types::{ScenarioEconomyCommand, ScenarioEconomyOperation},
+    zoo_cash_types::{UnlimitedZooCash, ZooCash},
 };
 
-#[derive(Component)]
-pub(super) struct ScenarioEconomyCommandTransaction;
+#[derive(SystemParam)]
+pub struct ScenarioEconomyAccess<'w, 's> {
+    worlds: Query<
+        'w,
+        's,
+        (
+            &'static mut AdmissionPrice,
+            &'static mut ZooCash,
+            Option<&'static UnlimitedZooCash>,
+            Option<&'static mut GeneralEconomyLedger>,
+        ),
+        With<WorldRoot>,
+    >,
+    movements: MessageWriter<'w, RecordedAccountMovement<false>>,
+}
 
-pub(super) fn apply_scenario_cash_and_admission_commands(
-    mut commands: Commands,
-    mut admission: Query<&mut AdmissionPrice, With<WorldRoot>>,
-    world_members: Query<&WorldMember>,
-    mut scenario_commands: MessageReader<ScenarioEconomyCommand>,
-    mut transaction_requests: MessageWriter<TransactionRequest>,
-) {
-    for command in scenario_commands.read() {
-        let root = world_members
-            .get(command.terminal)
-            .map_or(command.terminal, |member| member.root);
-        if let ScenarioEconomyOperation::SetAdmission(value) = command.operation {
-            if let Ok(mut admission_price) = admission.get_mut(root) {
-                admission_price.set_if_neq(AdmissionPrice::from_adult(value));
+impl ScenarioEconomyAccess<'_, '_> {
+    /// Applies an operation against the selected zoo before the next script action.
+    pub fn apply(
+        &mut self,
+        root: Entity,
+        operation: ScenarioEconomyOperation,
+    ) -> Result<Money, TransactionRejection> {
+        let (mut admission, mut cash, unlimited, general) = self
+            .worlds
+            .get_mut(root)
+            .map_err(|_| TransactionRejection::MissingAccount)?;
+        let delta = match operation {
+            ScenarioEconomyOperation::GrantCash(amount) => amount,
+            ScenarioEconomyOperation::TakeCash(amount) => -amount,
+            ScenarioEconomyOperation::SetAdmission(amount) => {
+                admission.set_if_neq(AdmissionPrice::from_adult(amount));
+                return Ok(cash.0);
             }
-            continue;
-        }
-
-        if !admission.contains(root) {
-            continue;
-        }
-        let zoo_cash_change = match command.operation {
-            ScenarioEconomyOperation::GrantCash(value) => value.0,
-            ScenarioEconomyOperation::TakeCash(value) => value.0.saturating_neg(),
-            ScenarioEconomyOperation::SetAdmission(_) => unreachable!(),
         };
-        let (debit_account, credit_account, amount) =
-            create_external_account_transaction_for_zoo_cash_change(zoo_cash_change);
-        if amount == Money::ZERO {
-            continue;
+        if delta == Money::ZERO {
+            return Ok(cash.0);
         }
-
-        let transaction_operation = commands
-            .spawn((
-                WorldMember { root },
-                ScenarioEconomyCommandTransaction,
-                GeneralEconomyTransaction::CashGrant,
-            ))
-            .id();
-        transaction_requests.write(TransactionRequest {
-            operation: transaction_operation,
-            debit: debit_account,
-            credit: credit_account,
-            amount,
+        let next_cash = if delta < Money::ZERO && unlimited.is_some_and(|policy| policy.0) {
+            cash.0
+        } else {
+            if delta < Money::ZERO && cash.0 < delta.abs() {
+                return Err(TransactionRejection::InsufficientFunds);
+            }
+            cash.0
+                .checked_add(delta)
+                .ok_or(TransactionRejection::Overflow)?
+        };
+        if let Some(mut ledger) = general.filter(|ledger| ledger.cash().is_some()) {
+            ledger
+                .record_completed_transaction(delta)
+                .ok_or(TransactionRejection::Overflow)?;
+        }
+        cash.set_if_neq(ZooCash(next_cash));
+        self.movements.write(RecordedAccountMovement {
+            root,
             kind: TransactionKind::Reward,
             subject: None,
+            zoo_delta: delta,
+            named_payment: None,
         });
+        Ok(next_cash)
     }
 }
 
-pub(super) fn remove_resolved_scenario_economy_command_transactions(
-    mut commands: Commands,
-    scenario_transactions: Query<(), With<ScenarioEconomyCommandTransaction>>,
-    mut completed_transactions: MessageReader<TransactionCompleted>,
-    mut rejected_transactions: MessageReader<TransactionRejected>,
+pub(super) fn apply_scenario_cash_and_admission_commands(
+    world_members: Query<&WorldMember>,
+    mut commands: MessageReader<ScenarioEconomyCommand>,
+    mut economy: ScenarioEconomyAccess,
 ) {
-    completed_transactions
-        .read()
-        .map(|transaction| transaction.operation)
-        .chain(
-            rejected_transactions
-                .read()
-                .map(|transaction| transaction.operation),
-        )
-        .filter(|operation| scenario_transactions.contains(*operation))
-        .for_each(|operation| commands.entity(operation).despawn());
-}
-
-fn create_external_account_transaction_for_zoo_cash_change(
-    zoo_cash_change: i64,
-) -> (Account, Account, Money) {
-    if zoo_cash_change >= 0 {
-        (Account::External, Account::Zoo, Money(zoo_cash_change))
-    } else {
-        (
-            Account::Zoo,
-            Account::External,
-            Money(zoo_cash_change.saturating_abs()),
-        )
+    for command in commands.read() {
+        let root = world_members
+            .get(command.terminal)
+            .map_or(command.terminal, |member| member.root);
+        let _ = economy.apply(root, command.operation);
     }
 }

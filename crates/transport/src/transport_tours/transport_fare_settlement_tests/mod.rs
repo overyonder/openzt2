@@ -42,6 +42,8 @@ fn matching_completed_payment_emits_one_trip_and_consumes_fare_operation() {
         ))
         .id();
     application.world_mut().write_message(TransactionCompleted {
+        domain:
+            openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Simulation,
         operation: fare_operation,
         debit: Account::Entity(guest_entity),
         credit: Account::Zoo,
@@ -80,6 +82,8 @@ fn unrelated_completed_payment_does_not_complete_transport_trip() {
         ))
         .id();
     application.world_mut().write_message(TransactionCompleted {
+        domain:
+            openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Simulation,
         operation: fare_operation,
         debit: Account::Entity(guest_entity),
         credit: Account::Zoo,

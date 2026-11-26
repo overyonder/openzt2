@@ -278,10 +278,11 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
 ) -> Result<
     (
         WorldDefinitionDocument,
-        Option<super::timing::AuthoredTimekeeperPolicy>,
+        super::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAssetMetadata,
+        std::collections::BTreeSet<String>,
     ),
     BindError,
-> {
+>{
     if auxiliary.is_none() {
         if let Some(document) = documents.iter().find(|document| {
             matches!(
@@ -336,6 +337,22 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
         })
         .collect::<Vec<_>>();
     let mut output = WorldDefinitionLoweringTables::default();
+    let mut metadata = super::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAssetMetadata::default();
+    for record in &primary_records {
+        render_lod_source_lowering::lower_authored_render_lod_distances(
+            record,
+            &mut metadata.render_lod_distances,
+        )?;
+        if let Some(node) =
+            authored_presentation_physics_source_lowering::authored_environment_map_target_node(
+                record,
+            )
+        {
+            metadata
+                .environment_map_nodes
+                .insert(AssetId::from_key(record.key), node);
+        }
+    }
     output.document.animation_binder_rigs = primary_records
         .iter()
         .flat_map(animation_binder_rig_source_lowering::lower_authored_animation_binder_rigs)
@@ -445,6 +462,16 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
     if let Some(auxiliary) = auxiliary {
         bind_behavior_auxiliary(auxiliary, &mut output)?;
     }
+    for guest in &output.document.guests {
+        if let Some(record) = primary_records
+            .iter()
+            .find(|record| id(record.key) == guest.id)
+        {
+            if let Some(need) = guest_definition_source_lowering::lower_guest_show_need(record)? {
+                metadata.guest_show_needs.insert(guest.id, need);
+            }
+        }
+    }
 
     output.document.tank_edit_policy = tank_edit_policy;
     output.document.disease_exposure = disease_exposure;
@@ -466,6 +493,7 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
     output.sort_tables_and_reject_duplicate_identifiers()?;
     let (timing, timekeeper) =
         timing.map_or((None, None), |(timing, policy)| (Some(timing), policy));
+    let tank_material_paths = std::mem::take(&mut output.tank_material_paths);
     let mut document = output.finish_canonical_world_definition_document(
         timing,
         cleanliness,
@@ -474,7 +502,8 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
     );
     document.admission_price_bands_cents = admission_price_bands_cents;
     document.tranquilizer_mode = tranquilizer_mode;
-    Ok((document, timekeeper))
+    metadata.timekeeper = timekeeper;
+    Ok((document, metadata, tank_material_paths))
 }
 
 fn bind_record_shard(
@@ -766,7 +795,8 @@ fn bind_record_shard(
         }
         None => {}
     }
-    if authored_type_family_components(record, "ZTDevComponent").is_empty() {
+    let developer_only = !authored_type_family_components(record, "ZTDevComponent").is_empty();
+    if !developer_only {
         bind_authored_profile_lock_to_catalogue_unlock_requirement(record, &mut shard.tables);
         progression_definition_source_lowering::bind_authored_catalogue_research(
             record,
@@ -783,6 +813,13 @@ fn bind_record_shard(
         ];
     }
     for object in &mut shard.tables.document.objects {
+        if developer_only {
+            let tag = openzt2_game_data::AssetId::from_key("ztdevcomponent");
+            match object.behavior_type_identifiers.binary_search(&tag) {
+                Ok(_) => {}
+                Err(index) => object.behavior_type_identifiers.insert(index, tag),
+            }
+        }
         object.view_data = view_event_data_source_lowering::lower_view_data(record)?;
         object_water_boundary_source_lowering::apply_authored_water_boundary_property(
             record, object,
@@ -854,6 +891,7 @@ pub mod object_facility_staff_and_guest_source_vocabulary;
 pub mod object_selected_ui_broadcast_source_lowering;
 pub mod object_water_boundary_source_lowering;
 pub mod progression_definition_source_lowering;
+mod render_lod_source_lowering;
 pub mod show_and_training_source_lowering;
 pub mod show_platform_upgrade_source_lowering;
 pub mod show_policy_source_lowering;

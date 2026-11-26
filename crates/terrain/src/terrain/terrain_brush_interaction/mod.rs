@@ -231,6 +231,7 @@ pub(super) fn despawn_terrain_brush_previews_after_transaction_preparation(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut prepared: MessageReader<TerrainEditPrepared>,
     mut rejected: MessageReader<TerrainEditPreparationRejected>,
+    submissions: Query<&openzt2_construction::construction::construction_transaction_preparation::SubmittedConstruction>,
     pending: Query<
         (
             Entity,
@@ -240,10 +241,17 @@ pub(super) fn despawn_terrain_brush_previews_after_transaction_preparation(
         With<PendingTerrainBrushCommit>,
     >,
 ) {
-    if prepared.read().next().is_none() && rejected.read().next().is_none() {
-        return;
-    }
-    for (preview, mesh, material) in &pending {
+    let completed = prepared
+        .read()
+        .map(|edit| edit.transaction)
+        .chain(rejected.read().map(|edit| edit.transaction));
+    for transaction in completed {
+        let Ok(submission) = submissions.get(transaction) else {
+            continue;
+        };
+        let Ok((preview, mesh, material)) = pending.get(submission.source) else {
+            continue;
+        };
         if let Some(mesh) = mesh {
             meshes.remove(&mesh.0);
         }

@@ -9,7 +9,7 @@ use crate::{
     asset_source::AssetArchives,
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document,
-        path::{authored_source_reference_paths, is_authored_file_reference, AssetPath},
+        path::{AssetPath, authored_source_reference_paths, is_authored_file_reference},
         source_document_semantic_name::canonicalize_source_document_record_key,
     },
 };
@@ -24,6 +24,7 @@ pub(crate) struct AuthoredBinderSources {
 struct BinderDeclaration {
     path: PathBuf,
     reference_types: BTreeSet<String>,
+    archive_order: Option<(usize, usize)>,
 }
 
 impl Default for AuthoredBinderSources {
@@ -87,10 +88,16 @@ impl AuthoredBinderSources {
                 if document.root.name.eq_ignore_ascii_case("BFTypedBinder") {
                     if let Some(binder_type) = document.root.attribute_named_any(&["binderType"]) {
                         let reference_types = crate::species::source::collect_authored_species_type_source_references(&document);
+                        let archive_order = archives.resolved_winning_entry(&path)
+                            .filter(|winner| winner.normalized_asset_path == path)
+                            .map(|winner| (winner.archive_priority_index, winner.zip_entry_ordinal));
                         paths_by_type.entry(canonicalize_source_document_record_key(binder_type))
-                            .or_default().push(BinderDeclaration { path, reference_types });
+                            .or_default().push(BinderDeclaration { path, reference_types, archive_order });
                     }
                 }
+            }
+            for declarations in paths_by_type.values_mut() {
+                declarations.sort_unstable_by(|left, right| left.archive_order.cmp(&right.archive_order).then_with(|| left.path.cmp(&right.path)));
             }
             paths_by_type
         }))
@@ -101,67 +108,96 @@ impl AuthoredBinderSources {
         archives: &AssetArchives,
     ) -> io::Result<BTreeSet<PathBuf>> {
         let declarations = self.declarations(archives)?;
-        let types_by_path = declarations
+        #[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
+        enum BinderIdentity {
+            Registered(String),
+            File(PathBuf),
+        }
+
+        let mut pending = declarations
             .iter()
-            .flat_map(|(key, sources)| {
-                sources
-                    .iter()
-                    .map(move |source| (source.path.as_path(), key.as_str()))
+            .filter_map(|(key, sources)| {
+                let source = sources.last()?;
+                Some((
+                    BinderIdentity::Registered(key.clone()),
+                    source.path.clone(),
+                    source.reference_types.clone(),
+                ))
             })
-            .collect::<BTreeMap<_, _>>();
-        let mut dependents = BTreeMap::<String, BTreeSet<&str>>::new();
-        for (key, sources) in declarations {
-            for source in sources {
-                let from = source.path.to_string_lossy();
-                for reference in &source.reference_types {
-                    let ancestor = if is_authored_file_reference(reference) {
-                        resolve_binder_file_reference(archives, &from, reference)
-                            .and_then(|path| types_by_path.get(&path.as_path()).copied())
-                            .map(str::to_owned)
-                    } else {
-                        Some(canonicalize_source_document_record_key(reference))
+            .collect::<VecDeque<_>>();
+        let mut files = BTreeSet::new();
+        let mut dependents = BTreeMap::<BinderIdentity, BTreeSet<BinderIdentity>>::new();
+        while let Some((identity, path, references)) = pending.pop_front() {
+            let from = path.to_string_lossy();
+            for reference in references {
+                let ancestor = if is_authored_file_reference(&reference) {
+                    let Some(path) = resolve_binder_file_reference(archives, &from, &reference)
+                    else {
+                        continue;
                     };
-                    if let Some(ancestor) = ancestor {
-                        dependents.entry(ancestor).or_default().insert(key);
+                    let ancestor = BinderIdentity::File(path.clone());
+                    if files.insert(path.clone()) {
+                        match archives.read_source(&path).and_then(|bytes| {
+                            parse_blue_fang_source_document(
+                                AssetPath::new(path.to_string_lossy()),
+                                &bytes,
+                            )
+                            .map_err(io::Error::other)
+                        }) {
+                            Ok(document) => {
+                                let references = crate::species::source::collect_authored_species_type_source_references(&document);
+                                pending.push_back((ancestor.clone(), path, references));
+                            }
+                            Err(error) => {
+                                bevy::log::warn!(%error, path = %path.display(), "could not index referenced binder")
+                            }
+                        }
                     }
-                }
+                    ancestor
+                } else {
+                    BinderIdentity::Registered(canonicalize_source_document_record_key(&reference))
+                };
+                dependents
+                    .entry(ancestor)
+                    .or_default()
+                    .insert(identity.clone());
             }
         }
-        let mut pending = VecDeque::from(["animal"]);
-        let mut animal_types = BTreeSet::from(["animal"]);
+
+        let animal = BinderIdentity::Registered("animal".to_owned());
+        let mut pending = VecDeque::from([animal.clone()]);
+        let mut animal_types = BTreeSet::from([animal]);
         while let Some(ancestor) = pending.pop_front() {
-            for &dependent in dependents.get(ancestor).into_iter().flatten() {
-                if animal_types.insert(dependent) {
-                    pending.push_back(dependent);
+            for dependent in dependents.get(&ancestor).into_iter().flatten() {
+                if animal_types.insert(dependent.clone()) {
+                    pending.push_back(dependent.clone());
                 }
             }
         }
         Ok(animal_types
             .into_iter()
-            .filter_map(|key| declarations.get(key))
-            .flatten()
-            .map(|declaration| declaration.path.clone())
+            .filter_map(|identity| {
+                let BinderIdentity::Registered(key) = identity else {
+                    return None;
+                };
+                declarations
+                    .get(&key)?
+                    .last()
+                    .map(|declaration| declaration.path.clone())
+            })
             .collect())
     }
 
     pub(crate) fn resolve_binder_type_source_path(
         &self,
         archives: &AssetArchives,
-        from: &str,
         binder_type: &str,
     ) -> io::Result<Option<PathBuf>> {
         let declarations = self.declarations(archives)?;
-        match declarations
+        Ok(declarations
             .get(&canonicalize_source_document_record_key(binder_type))
-            .map(Vec::as_slice)
-        {
-            Some([declaration]) => Ok(Some(declaration.path.clone())),
-            Some(_) => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("{from} references ambiguous authored binder type {binder_type}"),
-            )),
-            None => Ok(None),
-        }
+            .and_then(|sources| sources.last())
+            .map(|declaration| declaration.path.clone()))
     }
 }
 

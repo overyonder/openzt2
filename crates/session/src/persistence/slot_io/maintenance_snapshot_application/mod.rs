@@ -23,8 +23,7 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::maintenance::maintenance_types::{
-    AnimalHabitatWaste, AnimalWasteProductionSchedule,
-    AnimalWasteProductionScheduleResolutionMarker, CompostPooLevel, FacilityContainedWaste,
+    AnimalHabitatWaste, AnimalWasteProductionSchedule, CompostPooLevel, FacilityContainedWaste,
     LooseLitterWaste,
 };
 
@@ -159,7 +158,6 @@ pub(super) struct RestoredMaintenanceComponents {
     waste: Option<&'static mut FacilityContainedWaste>,
     compost: Option<&'static mut CompostPooLevel>,
     schedule: Option<&'static mut AnimalWasteProductionSchedule>,
-    has_schedule_resolution: Has<AnimalWasteProductionScheduleResolutionMarker>,
 }
 
 pub(super) fn apply_maintained_object_records(
@@ -196,9 +194,6 @@ pub(super) fn apply_maintained_object_records(
             .map(|next_production_tick| AnimalWasteProductionSchedule {
                 next_production_tick,
             });
-        if schedule.is_some() && !live.has_schedule_resolution {
-            object.insert(AnimalWasteProductionScheduleResolutionMarker);
-        }
         restore_optional_component(&mut object, live.schedule, schedule, false);
     }
     Ok(())

@@ -1,6 +1,9 @@
 //! Direct adapter from shipped Blue Fang document shapes to the owned scenario schema input.
 
-use super::authored_world_scenario_state::{AuthoredWorldScenarioState, ScenarioNodePolicy};
+use super::authored_world_scenario_state::{
+    AuthoredScenarioUiModification, AuthoredScenarioUiState, AuthoredWorldScenarioState,
+    ScenarioNodePolicy,
+};
 use crate::world_scenario::world_scenario_source_reference_resolution::SourceReference;
 
 use std::{
@@ -13,6 +16,7 @@ use crate::source_document::ordered_source_document_types::{
 };
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use openzt2_game_data::{
+    AssetId,
     world_definitions::simulation_time::SimulationTimingDefinition,
     world_scenario::{
         CampaignScenarioRecord, PhotoChallengeMemberRecord, PhotoChallengeRule,
@@ -21,7 +25,6 @@ use openzt2_game_data::{
         ScenarioObjectiveGroupRecord, ScenarioObjectiveRecord, ScenarioRecordFlags,
         ScenarioScriptBinding, ScenarioScriptPhase, WorldLocationRecord, WorldScenarioDocument,
     },
-    AssetId,
 };
 
 pub(in crate::world_scenario) fn lower_documents(
@@ -48,7 +51,7 @@ pub(in crate::world_scenario) fn lower_documents(
                     dependencies,
                     actor_scene_paths,
                     timing,
-                    &mut authored.former_fence_types,
+                    &mut authored,
                 )?);
                 Ok(())
             }
@@ -127,28 +130,23 @@ pub(in crate::world_scenario) fn lower_documents(
                             )
                         })
                         .collect::<BTreeMap<_, _>>();
-                    if matches!(root, "BFScenarioGroup" | "ZTScenarioMgr") {
-                        collect_objective_groups(
+                    let root_nodes =
+                        if matches!(root, "BFScenarioGroup" | "ZTScenarioMgr" | "BFScenarioRule") {
+                            vec![&document.root]
+                        } else {
+                            document.root.element_children().collect()
+                        };
+                    let mut roots = Vec::new();
+                    for child in root_nodes {
+                        roots.extend(collect_objective_groups(
                             document,
-                            &document.root,
+                            child,
                             &scenario,
                             &rule_ids,
                             &mut objective_groups,
                             &mut bindings,
                             &mut authored.scenario_nodes,
-                        )?;
-                    } else {
-                        for child in document.root.element_children() {
-                            collect_objective_groups(
-                                document,
-                                child,
-                                &scenario,
-                                &rule_ids,
-                                &mut objective_groups,
-                                &mut bindings,
-                                &mut authored.scenario_nodes,
-                            )?;
-                        }
+                        )?);
                     }
                     let mut objectives = Vec::with_capacity(rules.len());
                     for (index, rule) in rules.into_iter().enumerate() {
@@ -215,8 +213,13 @@ pub(in crate::world_scenario) fn lower_documents(
                     if lower_path.contains("challenge") {
                         flags = flags.with_additional_flags(ScenarioRecordFlags::CHALLENGE);
                     }
+                    let scenario_id = AssetId::from_key(&scenario);
+                    authored.objective_roots.insert(scenario_id, roots);
+                    authored
+                        .ui_modifications
+                        .insert(scenario_id, lower_scenario_ui_modifications(&document.root));
                     let record = ScenarioDefinitionRecord {
-                        id: AssetId::from_key(&scenario),
+                        id: scenario_id,
                         name_key: document
                             .root
                             .attribute("name")
@@ -246,7 +249,7 @@ pub(in crate::world_scenario) fn lower_documents(
                             None => 1.0,
                         },
                         flags,
-                        ui_modifications: lower_scenario_ui_modifications(&document.root),
+                        ui_modifications: Vec::new(),
                     };
                     if let Some(existing) = output
                         .scenarios
@@ -257,7 +260,6 @@ pub(in crate::world_scenario) fn lower_documents(
                         existing.objective_groups = record.objective_groups;
                         existing.flags = record.flags;
                         existing.evaluation_interval_seconds = record.evaluation_interval_seconds;
-                        existing.ui_modifications = record.ui_modifications;
                         if existing.name_key == AssetId::default() {
                             existing.name_key = record.name_key;
                         }
@@ -581,21 +583,41 @@ fn scenario_group_overview(node: &OrderedSourceDocumentNode) -> Option<&str> {
     }
     node.element_children().find_map(scenario_group_overview)
 }
-/// `ZTScenarioMgr/uimods/mod[@name]/new/UIState@visible`.
-fn lower_scenario_ui_modifications(
+/// Scenario UI overrides retain the authored entry and exit states.
+pub(super) fn lower_scenario_ui_modifications(
     root: &OrderedSourceDocumentNode,
-) -> Vec<openzt2_game_data::world_scenario::ScenarioUiModification> {
+) -> Vec<AuthoredScenarioUiModification> {
     child(root, "uimods")
         .into_iter()
         .flat_map(|modifications| modifications.element_children())
         .filter(|modification| local(&modification.name) == "mod")
         .filter_map(|modification| {
-            let state = child(child(modification, "new")?, "UIState")?;
-            Some(openzt2_game_data::world_scenario::ScenarioUiModification {
+            let state = |side| {
+                child(modification, side)
+                    .and_then(|side| child(side, "UIState"))
+                    .map(|state| AuthoredScenarioUiState {
+                        visible: state.attribute("visible").map(|value| {
+                            !matches!(
+                                value.trim().to_ascii_lowercase().as_str(),
+                                "hidden" | "false" | "0"
+                            )
+                        }),
+                        active: state.attribute("active").map(|value| {
+                            !matches!(
+                                value.trim().to_ascii_lowercase().as_str(),
+                                "disabled" | "inactive" | "false" | "0"
+                            )
+                        }),
+                    })
+            };
+            Some(AuthoredScenarioUiModification {
+                document: modification
+                    .attribute_named_any(&["document", "file"])
+                    .map(crate::source_document::path::AssetPath::new)
+                    .map(|path| AssetId::from_virtual_path(&path.key())),
                 node: modification.attribute("name")?.to_owned(),
-                visible: !state
-                    .attribute("visible")
-                    .is_some_and(|visible| visible.eq_ignore_ascii_case("hidden")),
+                old: state("old").unwrap_or_default(),
+                new: state("new")?,
             })
         })
         .collect()

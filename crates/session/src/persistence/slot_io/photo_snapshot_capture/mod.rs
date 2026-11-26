@@ -22,6 +22,7 @@ pub(in crate::persistence) struct PhotoSnapshotCaptureQueries<'w, 's> {
         (
             &'static PersistentId,
             &'static Photo,
+            Option<&'static openzt2_photos::PhotoCaption>,
             Option<&'static PhotoAlbumOrder>,
             Option<&'static DurableChallengePhotoFileIdentifiers>,
         ),
@@ -47,11 +48,12 @@ pub(super) fn capture_sorted_photo_and_challenge_progress_snapshot_records_from_
             photo_entity,
             persistent_identifier,
             photo,
+            caption,
             optional_album_order,
             optional_challenge_photo_files,
         ) in members.iter().filter_map(|entity| {
-            let (id, photo, order, files) = capture.photos.get(entity).ok()?;
-            Some((entity, id, photo, order, files))
+            let (id, photo, caption, order, files) = capture.photos.get(entity).ok()?;
+            Some((entity, id, photo, caption, order, files))
         }) {
             let photo_image = capture
                 .images
@@ -83,6 +85,7 @@ pub(super) fn capture_sorted_photo_and_challenge_progress_snapshot_records_from_
                 image_width_pixels: image_size.width,
                 image_height_pixels: image_size.height,
                 rgba8_pixel_bytes: rgba8_pixel_bytes.clone(),
+                caption: caption.map(|caption| caption.0.clone()),
                 challenge_photo_file_identifiers: optional_challenge_photo_files.map_or_else(
                     Vec::new,
                     |challenge_photo_files| {
@@ -107,7 +110,7 @@ pub(super) fn capture_sorted_photo_and_challenge_progress_snapshot_records_from_
             challenge_definition_identifier: photo_challenge.id,
             completed: photo_challenge_progress.completed,
             completed_by_photo_persistent_identifier,
-            rating_stars: photo_challenge_progress.rating_stars,
+            rating_half_stars: photo_challenge_progress.rating_half_stars,
         });
     }
     challenge_progress_snapshot_records

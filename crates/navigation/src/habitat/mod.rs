@@ -6,6 +6,7 @@ pub mod habitat_region_derivation;
 mod habitat_region_rebuilding;
 mod habitat_terrain_summary_calculation;
 mod habitat_terrain_summary_refresh;
+pub mod placement_sectors;
 
 use bevy::prelude::*;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
@@ -14,11 +15,14 @@ use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
 
+use openzt2_zoo_state::habitat::habitat_cell_ownership_changes::HabitatCellOwnershipChanged;
 use openzt2_zoo_state::habitat::habitat_types::ContainmentChanged;
 use openzt2_zoo_state::habitat::habitat_types::HabitatChanged;
 use openzt2_zoo_state::habitat::habitat_types::RebuildHabitatRegionsWithinTopologyBounds;
 use openzt2_zoo_state::habitat::habitat_types::RefreshTerrainDerivedHabitatSummariesWithinTopologyBounds;
-use openzt2_zoo_state::habitat::habitat_types::{HabitatIndex, HabitatTopologyPublication};
+use openzt2_zoo_state::habitat::habitat_types::{
+    HabitatCellOf, HabitatIndex, HabitatTopologyPublication,
+};
 
 pub struct HabitatPlugin;
 
@@ -32,10 +36,11 @@ impl Plugin for HabitatPlugin {
             .add_message::<habitat_fence_inputs::HabitatFenceInputDiscarded>()
             .add_observer(habitat_fence_inputs::discard_habitat_fence_node)
             .add_observer(habitat_fence_inputs::discard_habitat_fence_raster)
-            .register_required_components::<WorldRoot, habitat_membership_and_containment::HabitatLocationCells>()
-            .add_message::<habitat_membership_and_containment::HabitatCellOwnershipChanged>()
+            .add_message::<HabitatCellOwnershipChanged>()
             .add_message::<habitat_membership_and_containment::LostHabitatMembership>()
-            .add_observer(habitat_membership_and_containment::retire_empty_habitat_location_cell)
+            .add_observer(habitat_membership_and_containment::retire_empty_habitat_location_cell::<habitat_membership_and_containment::HabitatCellOccupants>)
+            .add_observer(habitat_membership_and_containment::retire_empty_habitat_location_cell::<HabitatCellOf>)
+            .add_observer(habitat_membership_and_containment::retire_empty_habitat_location_cell::<habitat_membership_and_containment::HabitatCellSectors>)
             .add_observer(habitat_membership_and_containment::discard_habitat_location_cell)
             .add_observer(habitat_membership_and_containment::release_members_of_retired_habitat)
             .add_message::<HabitatChanged>()

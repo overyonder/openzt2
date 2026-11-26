@@ -9,6 +9,32 @@ pub(super) struct ShowStageSnapshotRecord {
     pub display_name: String,
     pub canopy_upgrade_persistent_identifier: Option<PersistentId>,
     pub television_upgrade_persistent_identifier: Option<PersistentId>,
+    pub running: Option<RunningShowSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub(super) struct RunningShowSnapshot {
+    pub row_id: u64,
+    pub phase: u8,
+    pub current_slot: u32,
+    pub trick_score: f32,
+    pub stars: f32,
+    pub completed_tricks: u32,
+    pub failed_tricks: u32,
+    pub remaining_ns: u64,
+}
+
+impl RunningShowSnapshot {
+    pub(super) fn phase(self) -> Option<openzt2_zoo_state::shows::running_show_types::ShowPhase> {
+        use openzt2_zoo_state::shows::running_show_types::ShowPhase;
+        Some(match self.phase {
+            0 => ShowPhase::Preshow,
+            1 => ShowPhase::Conducting,
+            2 => ShowPhase::Postshow,
+            3 => ShowPhase::BetweenShows,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -25,7 +51,8 @@ pub(super) struct ScheduledShowSnapshotRecord {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ScheduledShowPerformanceSnapshotRecord {
     pub performer_persistent_identifier: PersistentId,
-    pub trick_definition_identifier: AssetId,
+    pub trick_definition_identifier: Option<AssetId>,
+    pub time_slot: Option<u16>,
     pub duration_simulation_ticks: u32,
 }
 

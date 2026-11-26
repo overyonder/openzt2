@@ -1,22 +1,24 @@
 use super::{
-    normalized_species_model_path, SpeciesAsset, SpeciesAssets, SpeciesDocumentRow, SpeciesView,
+    SpeciesAsset, SpeciesAssets, SpeciesDocumentRow, SpeciesView, normalized_species_model_path,
 };
 use bevy::prelude::*;
 use openzt2_game_data::{
-    species::{NeedKind, Species, SpeciesVariant, SpeciesVariantBinding},
     AssetId,
+    species::{NeedKind, Species, SpeciesVariant, SpeciesVariantBinding},
 };
 
 impl SpeciesAssets {
     pub fn catalogue_load_is_pending(&self, _server: &AssetServer) -> bool {
-        !self.discovered || self.source_set_changed
+        self.source_handles.is_none() || self.pending_catalogue.is_some()
     }
 
     pub fn get<'a>(&'a self, assets: &'a Assets<SpeciesAsset>) -> Option<SpeciesView<'a>> {
-        (!self.source_set_changed && !self.loaded_handles.is_empty()).then_some(SpeciesView {
-            index: self,
-            assets,
-        })
+        (self.pending_catalogue.is_none() && !self.loaded_handles.is_empty()).then_some(
+            SpeciesView {
+                index: self,
+                assets,
+            },
+        )
     }
 }
 

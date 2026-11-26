@@ -29,7 +29,7 @@ pub(super) fn bind_authored_zoo_date_text(
             date,
         ) {
             (true, false) => {
-                commands.entity(entity).insert(UiZooDateText);
+                commands.entity(entity).insert_if_new(UiZooDateText);
             }
             (false, true) => {
                 commands.entity(entity).remove::<UiZooDateText>();
@@ -130,7 +130,9 @@ pub(super) fn bind_authored_pause_toggles(
             .unwrap_or(false);
         match (is_toggle, bindings.marked.contains(entity)) {
             (true, false) => {
-                commands.entity(entity).insert(UiSimulationPauseToggle);
+                commands
+                    .entity(entity)
+                    .insert_if_new(UiSimulationPauseToggle);
             }
             (false, true) => {
                 commands

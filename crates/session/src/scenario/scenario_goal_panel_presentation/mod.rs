@@ -102,7 +102,7 @@ pub(super) fn size_and_bind_authored_scenario_goal_rows(
             if category_filters.get(owner.0).is_err() {
                 commands
                     .entity(owner.0)
-                    .insert(ScenarioObjectiveCategoryFilter(AssetId::from_key(
+                    .insert_if_new(ScenarioObjectiveCategoryFilter(AssetId::from_key(
                         "overview",
                     )));
             }

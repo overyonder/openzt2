@@ -10,9 +10,9 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooMonth;
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 use super::{
-    account_transaction_settlement::RecordedAccountMovement,
-    account_transaction_types::TransactionKind, facility_economy_types::ServiceFacility,
-    money_types::Money, monthly_finance_types::MonthlyFinanceHistory, zoo_cash_types::ZooCash,
+    account_transaction_types::RecordedAccountMovement, account_transaction_types::TransactionKind,
+    facility_economy_types::ServiceFacility, monthly_finance_types::MonthlyFinanceHistory,
+    zoo_cash_types::ZooCash,
 };
 
 pub(super) fn enter_published_zoo_finance_month(
@@ -49,7 +49,7 @@ pub(super) fn record_completed_transactions_in_monthly_finance_history<const PLA
 ) {
     let world_definitions = active_world_definitions.get(&world_definition_assets);
     for transaction in completed_transactions.read() {
-        let zoo_cash_change = transaction.zoo_delta.0;
+        let zoo_cash_change = transaction.zoo_delta;
         let Ok((zoo_cash, mut finance_history)) = histories.get_mut(transaction.root) else {
             continue;
         };
@@ -57,7 +57,7 @@ pub(super) fn record_completed_transactions_in_monthly_finance_history<const PLA
             continue;
         }
         finance_history.record_completed_transaction(transaction.kind, zoo_cash_change, zoo_cash.0);
-        if transaction.kind != TransactionKind::Service || zoo_cash_change <= 0 {
+        if transaction.kind != TransactionKind::Service || !zoo_cash_change.is_positive() {
             continue;
         }
 
@@ -73,9 +73,9 @@ pub(super) fn record_completed_transactions_in_monthly_finance_history<const PLA
                     "concessions_food_drink",
                 ))
             {
-                finance_history.record_food_drink_sale(Money(zoo_cash_change));
+                finance_history.record_food_drink_sale(zoo_cash_change);
             } else if category == Some(openzt2_game_data::AssetId::from_key("concessions_gifts")) {
-                finance_history.record_gift_sale(Money(zoo_cash_change));
+                finance_history.record_gift_sale(zoo_cash_change);
             }
             continue;
         }
@@ -93,9 +93,9 @@ pub(super) fn record_completed_transactions_in_monthly_finance_history<const PLA
         };
         match facility_definition.service {
             FacilityServiceKind::Food | FacilityServiceKind::Drink => {
-                finance_history.record_food_drink_sale(Money(zoo_cash_change));
+                finance_history.record_food_drink_sale(zoo_cash_change);
             }
-            FacilityServiceKind::Gift => finance_history.record_gift_sale(Money(zoo_cash_change)),
+            FacilityServiceKind::Gift => finance_history.record_gift_sale(zoo_cash_change),
             _ => {}
         }
     }

@@ -83,7 +83,6 @@ use openzt2_interface_state::ui::ui_document_asset_load_failure;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts;
 
 use self::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
-use self::cursor::SetWaitCursor;
 mod authored_scrollbar;
 
 use bevy::{
@@ -148,9 +147,10 @@ impl Plugin for GameUiPlugin {
         app.register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, openzt2_interface_state::information::zoo_message_types::ZooMessages>()
             .register_required_components::<InGameUiOwner, authored_zoo_message_lists::LatestZooMessagePresentation>()
             .add_message::<ShowUiDocument>()
-            .add_message::<SetWaitCursor>()
             .add_message::<SetUiListRowCount>()
             .add_message::<ShowUiRole>()
+            .add_message::<ui_document_lifecycle_contracts::ShowUiRoleInScope>()
+            .add_message::<openzt2_interface_state::information::award_presentation_types::AwardProgramEffect>()
             .add_message::<ui_document_lifecycle_contracts::AuthoredUiDocumentOperation>()
             .add_message::<HideUiDocument>()
             .init_resource::<active_authored_ui_context::AuthoredFocusScope>()
@@ -171,6 +171,21 @@ impl Plugin for GameUiPlugin {
             .add_message::<notification_contracts::NotificationRejected>()
             .add_message::<ui_document_asset_load_failure::UiDocumentAssetLoadFailed>()
             .add_observer(authored_text_edit_bevy_adaptation::dispatch_authored_change_activation_after_bevy_text_edit)
+            .add_systems(
+                Update,
+                (
+                    notification::load_authored_guest_thought_fragments,
+                    notification::project_selected_guest_thoughts
+                        .after(notification::load_authored_guest_thought_fragments),
+                    notification::initialize_authored_guest_thought_text
+                        .after(notification::project_selected_guest_thoughts),
+                ).in_set(UiSet::DomainProjection),
+            )
+            .add_systems(
+                Update,
+                projection::ui_document_opening::open_authored_award_panel
+                    .in_set(UiSet::Routing),
+            )
             .add_systems(
                 Startup,
                 (
@@ -217,6 +232,12 @@ impl Plugin for GameUiPlugin {
                         projection::authored_list_row_projection::reconcile_changed_ui_list_row_counts
                             .after(projection::authored_list_row_projection::record_requested_ui_list_row_counts)
                             .after(authored_zoo_message_lists::size_zoo_message_lists),
+                        projection::authored_scenario_goal_projection::project_authored_scenario_goal_trees,
+                        projection::authored_list_row_projection::project_authored_award_group_rows,
+                        projection::authored_list_row_projection::hydrate_authored_award_group_rows
+                            .after(projection::authored_list_row_projection::project_authored_award_group_rows),
+                        projection::authored_list_row_projection::project_authored_award_milestone_presentation
+                            .after(projection::authored_list_row_projection::hydrate_authored_award_group_rows),
                         projection::authored_list_row_projection::materialize_ready_ui_list_rows
                             .after(projection::authored_list_row_projection::reconcile_changed_ui_list_row_counts),
                         authored_zoo_message_lists::bind_zoo_message_rows
@@ -287,6 +308,7 @@ impl Plugin for GameUiPlugin {
                         authored_toggle_selection_transitions::transition_pressed_authored_toggles
                             .after(authored_composite_button_activation_forwarding::forward_authored_composite_button_activations_to_projected_child_controls),
                         authored_ui_interaction_visual_presentation::present_authored_ui_interaction_visual_state
+                            .after(active_authored_ui_context::project_native_widget_interaction_from_authored_enablement)
                             .after(authored_pointer_events::activate_authored_pointer_events)
                             .after(authored_toggle_selection_transitions::transition_pressed_authored_toggles),
                         authored_tree_expansion_and_row_indentation::toggle_authored_tree_expansion_from_presses.after(authored_pointer_events::activate_authored_pointer_events),
@@ -307,9 +329,8 @@ impl Plugin for GameUiPlugin {
             .add_systems(
                 Update,
                 (
-                    cursor::apply_wait_cursor_requests.run_if(on_message::<SetWaitCursor>),
                     cursor::project_cursor_window_scale,
-                    cursor::resolve_requested_window_cursor.after(cursor::apply_wait_cursor_requests).after(cursor::project_cursor_window_scale),
+                    cursor::resolve_requested_window_cursor.after(cursor::project_cursor_window_scale),
                     cursor::apply_cached_or_unscaled_window_cursor.after(cursor::resolve_requested_window_cursor),
                     cursor::synthesize_requested_cursor_image.after(cursor::apply_cached_or_unscaled_window_cursor)
                         .run_if(on_message::<cursor::SynthesizeCursorImage>),
@@ -348,7 +369,6 @@ impl Plugin for GameUiPlugin {
                         graph_tick_projection::write_graph_tick_text
                             .after(graph_presentation::update_visible_authored_graph_drawings),
                         held_button_repeat::repeat_held_buttons,
-                        authored_wheel_scroll::scroll_captured_authored_list_or_window_from_mouse_wheel,
                         authored_window_interaction::move_authored_windows_from_pointer_drags,
                         authored_drag_gesture::apply_authored_drag_gestures_to_bevy_layout_or_scroll_position,
                         (

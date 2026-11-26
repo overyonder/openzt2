@@ -217,6 +217,7 @@ fn empty_prefab_entity(key: &str, parent: u32) -> PrefabEntity {
         billboards: Vec::new(),
         lights: Vec::new(),
         effects: Vec::new(),
+        terrain_decal: None,
     }
 }
 

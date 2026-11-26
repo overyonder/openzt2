@@ -7,7 +7,7 @@ pub struct OpenZt2AssetLoadingPluginGroup;
 impl PluginGroup for OpenZt2AssetLoadingPluginGroup {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
-            .add(super::asset_source::ArchiveOverlayPublicationPlugin)
+            .add(super::asset_source::ArchiveOverlayPlugin)
             .add(super::animation::AnimationAssetLoadingPlugin)
             .add(super::audio::AudioAssetPlugin)
             .add(super::behavior::BehaviorDocumentAssetPlugin)

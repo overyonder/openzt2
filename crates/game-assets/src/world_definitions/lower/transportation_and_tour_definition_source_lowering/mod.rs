@@ -488,6 +488,11 @@ pub(super) fn bind_track(
         cardinal_endpoint_offsets_metres,
         diagonal_endpoint_offsets_metres,
         max_grade_permille: maximum_grade_permille as u16,
+        ground_track_physics: if kind == TransportationTrackKind::Ground {
+            lower_ground_track_physics(record)?
+        } else {
+            None
+        },
         purchase_cost_cents,
         sky_maximum_connection_distance_metres,
         sky_rope_clearance_metres,
@@ -545,6 +550,42 @@ pub(super) fn bind_track(
         });
     }
     Ok(())
+}
+
+fn lower_ground_track_physics(
+    record: &RecordView<'_, '_>,
+) -> Result<
+    Option<
+        openzt2_game_data::world_definitions::transportation_and_tours::GroundTrackPhysicsPolicy,
+    >,
+    BindError,
+> {
+    use openzt2_game_data::world_definitions::transportation_and_tours::GroundTrackPhysicsPolicy;
+    let names = [
+        "f_MaximumAcrossSlope",
+        "f_CollisionDetectionRadius",
+        "f_MinVelocityForObstruction",
+    ];
+    let authored = names.map(|name| {
+        authored_type_family_component_attribute(record, "BFAIEntityDataShared", name)
+            .or_else(|| record.value(&[name]))
+    });
+    if authored.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    let number = |index: usize| {
+        authored[index]
+            .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .ok_or_else(|| {
+                BindError::record(record, format!("invalid ground-track {}", names[index]))
+            })
+    };
+    Ok(Some(GroundTrackPhysicsPolicy {
+        maximum_across_grade: number(0)?,
+        collision_radius: number(1)?,
+        minimum_obstruction_speed_squared: number(2)?,
+    }))
 }
 
 pub(super) fn bind_vehicle(

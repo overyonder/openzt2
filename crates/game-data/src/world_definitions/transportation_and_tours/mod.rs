@@ -38,6 +38,8 @@ pub struct TransportationTrackDefinition {
     pub cardinal_endpoint_offsets_metres: [[f32; 3]; 2],
     pub diagonal_endpoint_offsets_metres: [[f32; 3]; 2],
     pub max_grade_permille: u16,
+    #[serde(default)]
+    pub ground_track_physics: Option<GroundTrackPhysicsPolicy>,
     pub purchase_cost_cents: i64,
     #[serde(default)]
     pub sky_maximum_connection_distance_metres: Option<f32>,
@@ -47,6 +49,13 @@ pub struct TransportationTrackDefinition {
     pub ground_piece_presentations: Vec<GroundTransportTrackPiecePresentationDefinition>,
     #[serde(default)]
     pub sky_tower_presentation: Option<SkyTowerTrackPresentationDefinition>,
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct GroundTrackPhysicsPolicy {
+    pub maximum_across_grade: f32,
+    pub collision_radius: f32,
+    pub minimum_obstruction_speed_squared: f32,
 }
 
 #[allow(

@@ -4,8 +4,8 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::{
-    world_definitions::animal_shows_and_training::{TrickDefinition, TrickLevel},
     AssetId,
+    world_definitions::animal_shows_and_training::{TrickDefinition, TrickLevel},
 };
 use openzt2_world_state::{
     simulation_time::simulation_clock_types::ZooClock,
@@ -13,7 +13,8 @@ use openzt2_world_state::{
 };
 use openzt2_zoo_state::{
     animal_behavior::{
-        behavior_random_stream_state::BehaviorRandomStream, behavior_token_types::BehaviorSelfToken,
+        behavior_random_stream_state::BehaviorRandomStream,
+        behavior_token_types::{BehaviorSelfToken, BehaviorTrickDestination},
     },
     animal_health::types::Dead,
     animal_lifecycle::types::Animal,
@@ -29,26 +30,28 @@ use openzt2_zoo_state::{
 use super::{
     authored_show_rewards::{AuthoredShowRewards, AuthoredShowRewardsSource},
     show_scoring::{decay_popularity, zoo_fame},
+    show_timing_operations::fixed_ticks_for_seconds,
     show_trick_props::ShowPropPlacement,
 };
 
 #[derive(Component)]
 #[relationship(relationship_target = ShowTrickTokens)]
-pub(super) struct TrickTokenForShow(pub(super) Entity);
+pub struct TrickTokenForShow(pub Entity);
 
 #[derive(Component)]
 #[relationship_target(relationship = TrickTokenForShow, linked_spawn)]
-pub(super) struct ShowTrickTokens(Vec<Entity>);
+pub struct ShowTrickTokens(Vec<Entity>);
 
 #[derive(Component)]
-pub(super) struct ScheduledTrickToken {
-    pub(super) slot: Entity,
+pub struct ScheduledTrickToken {
+    pub slot: Entity,
 }
 
 pub(super) fn start_scheduled_tricks_with_authored_outcome_tokens(
     mut commands: Commands,
     mut requests: MessageReader<BeginScheduledShowTrick>,
     clock: Single<&ZooClock>,
+    time: Res<Time<Fixed>>,
     rewards_source: Res<AuthoredShowRewardsSource>,
     rewards: Res<Assets<AuthoredShowRewards>>,
     definitions: Res<WorldDefinitions>,
@@ -99,7 +102,7 @@ pub(super) fn start_scheduled_tricks_with_authored_outcome_tokens(
         if name == AssetId::default() {
             continue;
         }
-        let Some(target) = props.spawn(
+        let Some((target, position)) = props.spawn(
             definitions,
             trick,
             request.stage,
@@ -113,13 +116,13 @@ pub(super) fn start_scheduled_tricks_with_authored_outcome_tokens(
         if let Ok((mut popularity, fame)) = popularity.get_mut(world.root) {
             decay_popularity(&mut popularity, trick, zoo_fame(fame), &rewards.popularity);
         }
-        let token_lifetime = (f64::from(rewards.trick_token_timeout_seconds)
-            * f64::from(definitions.timing().fixed_hz))
-        .ceil() as u64;
+        let token_lifetime =
+            fixed_ticks_for_seconds(rewards.trick_token_timeout_seconds, time.timestep());
         commands.spawn((
             ChildOf(request.performer),
             TrickTokenForShow(*active.collection()),
             ScheduledTrickToken { slot: request.slot },
+            BehaviorTrickDestination(position),
             BehaviorSelfToken {
                 name,
                 available_at: clock.tick,

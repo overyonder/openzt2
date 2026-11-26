@@ -300,6 +300,7 @@ fn create_rail_camera_scene_prefab_entity(
         billboards: Vec::new(),
         lights: Vec::new(),
         effects: Vec::new(),
+        terrain_decal: None,
     }
 }
 

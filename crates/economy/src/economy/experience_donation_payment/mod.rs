@@ -7,11 +7,11 @@ use openzt2_world_state::{
 use openzt2_zoo_state::{
     animal_behavior::behavior_token_types::{BehaviorSelfToken, ClaimedBehaviorSelfToken},
     behavior_task_execution_types::{
-        running_actions::{
-            mark_behavior_task_for_failure_and_stop_navigation, BehaviorInstructionId,
-            RunBehaviorEconomy, RunningBehaviorInstruction, WhenBehaviorAction,
-        },
         BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+        running_actions::{
+            BehaviorInstructionId, RunBehaviorEconomy, RunningBehaviorInstruction,
+            WhenBehaviorAction, mark_behavior_task_for_failure_and_stop_navigation,
+        },
     },
     donations::{
         donation_opportunity_types::{DonationAcceptor, DonationOpportunity},
@@ -106,6 +106,8 @@ pub(super) fn request_experience_donation_payments(
         ShowDonationInstruction(instruction.id()),
     ));
     payments.write(TransactionRequest {
+        domain:
+            openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Simulation,
         operation: operation.id(),
         debit: Account::Entity(guest),
         credit: Account::Zoo,

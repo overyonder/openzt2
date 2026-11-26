@@ -3,33 +3,18 @@ use bevy::{
         entity::EntityHashSet, entity_disabling::Disabled, query::Allow,
         relationship::RelationshipTarget, world::EntityWorldMut,
     },
-    platform::collections::HashMap,
     prelude::*,
 };
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::habitat::{
+    habitat_cell_ownership_changes::HabitatCellOwnershipChanged,
     habitat_topology_cell_queries::convert_finite_world_position_to_topology_cell,
     habitat_types::{
-        Containment, ContainmentChanged, HabitatChanged, HabitatIndex, HabitatLocatable,
-        HabitatMember, HabitatMembers, HabitatSummary,
+        Containment, ContainmentChanged, HabitatCellOf, HabitatChanged, HabitatGridCell,
+        HabitatIndex, HabitatLocatable, HabitatMember, HabitatMembers, HabitatSummary,
     },
 };
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
-
-#[derive(Component, Default)]
-pub(super) struct HabitatLocationCells(HashMap<IVec2, Entity>);
-
-#[derive(Component)]
-pub(super) struct HabitatLocationCell {
-    root: Entity,
-    coordinate: IVec2,
-}
-
-#[derive(Message)]
-pub(super) struct HabitatCellOwnershipChanged {
-    pub(super) root: Entity,
-    pub(super) cells: Vec<IVec2>,
-}
 
 #[derive(Component)]
 #[relationship(relationship_target = HabitatCellOccupants)]
@@ -39,32 +24,50 @@ pub(super) struct HabitatLocationOf(Entity);
 #[relationship_target(relationship = HabitatLocationOf)]
 pub(super) struct HabitatCellOccupants(Vec<Entity>);
 
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct HabitatCellSectors(pub(super) [Option<Entity>; 4]);
+
+impl HabitatCellSectors {
+    pub(super) fn habitat_at(
+        &self,
+        position: Vec2,
+        tile: IVec2,
+        grid: TopologyGrid,
+    ) -> Option<Entity> {
+        let centre = grid.origin + (tile.as_vec2() + Vec2::splat(0.5)) * grid.spacing_m;
+        let offset = position - centre;
+        let side = super::placement_sectors::sector_for_offset(Vec2::new(offset.x, -offset.y));
+        self.0[usize::from(side / 2)]
+    }
+}
+
 #[derive(Message)]
 pub(super) struct LostHabitatMembership(Entity);
 
-pub(super) fn retire_empty_habitat_location_cell(
-    removed: On<Remove<HabitatCellOccupants>>,
+pub(super) fn retire_empty_habitat_location_cell<C: Component>(
+    removed: On<Remove<C>>,
     mut commands: Commands,
 ) {
     commands
         .entity(removed.entity)
         .queue_silenced(|entity: EntityWorldMut| {
-            if !entity.contains::<HabitatCellOccupants>() {
+            if !entity.contains::<HabitatCellOccupants>()
+                && !entity.contains::<HabitatCellOf>()
+                && !entity.contains::<HabitatCellSectors>()
+            {
                 entity.despawn();
             }
         });
 }
 
 pub(super) fn discard_habitat_location_cell(
-    discarded: On<Discard<HabitatLocationCell>>,
-    cells: Query<&HabitatLocationCell, Allow<Disabled>>,
-    mut locations: Query<&mut HabitatLocationCells>,
+    discarded: On<Discard<HabitatGridCell>>,
+    cells: Query<(&HabitatGridCell, &ChildOf), Allow<Disabled>>,
+    mut indexes: Query<&mut HabitatIndex>,
 ) {
-    if let Ok(cell) = cells.get(discarded.entity) {
-        if let Ok(mut locations) = locations.get_mut(cell.root) {
-            if locations.0.get(&cell.coordinate) == Some(&discarded.entity) {
-                locations.0.remove(&cell.coordinate);
-            }
+    if let Ok((cell, root)) = cells.get(discarded.entity) {
+        if let Ok(mut index) = indexes.get_mut(root.parent()) {
+            index.remove_cell(cell.0, discarded.entity);
         }
     }
 }
@@ -87,16 +90,10 @@ pub(super) fn release_members_of_retired_habitat(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn resolve_changed_habitat_membership_and_containment(
     mut commands: Commands,
-    roots: Single<
-        (
-            Entity,
-            &HabitatIndex,
-            Ref<TopologyGrid>,
-            &mut HabitatLocationCells,
-        ),
-        With<WorldRoot>,
-    >,
+    roots: Single<(Entity, &mut HabitatIndex, Ref<TopologyGrid>), With<WorldRoot>>,
     cell_occupants: Query<&HabitatCellOccupants>,
+    cell_owners: Query<&HabitatCellOf>,
+    partitioned: Query<&HabitatCellSectors>,
     habitat_members: Query<&HabitatMembers>,
     habitat_summaries: Query<&HabitatSummary>,
     mut habitat_changes: MessageReader<HabitatChanged>,
@@ -125,7 +122,7 @@ pub(super) fn resolve_changed_habitat_membership_and_containment(
     >,
     mut notifications: MessageWriter<ContainmentChanged>,
 ) {
-    let (root, habitat_index, grid, mut locations) = roots.into_inner();
+    let (root, mut habitat_index, grid) = roots.into_inner();
     let mut affected: EntityHashSet = changed_locatables.iter().collect();
     let lost: EntityHashSet = lost.read().map(|lost| lost.0).collect();
     affected.extend(lost.iter().copied());
@@ -142,10 +139,9 @@ pub(super) fn resolve_changed_habitat_membership_and_containment(
     }
     for change in cell_changes.read().filter(|change| change.root == root) {
         for coordinate in &change.cells {
-            if let Some(occupants) = locations
-                .0
-                .get(coordinate)
-                .and_then(|&cell| cell_occupants.get(cell).ok())
+            if let Some(occupants) = habitat_index
+                .cell_at(*coordinate)
+                .and_then(|cell| cell_occupants.get(cell).ok())
             {
                 affected.extend(occupants.iter());
             }
@@ -164,10 +160,12 @@ pub(super) fn resolve_changed_habitat_membership_and_containment(
             grid.spacing_m,
         );
         let location = cell.map(|coordinate| {
-            *locations.0.entry(coordinate).or_insert_with(|| {
-                commands
-                    .spawn((HabitatLocationCell { root, coordinate }, ChildOf(root)))
-                    .id()
+            habitat_index.cell_at(coordinate).unwrap_or_else(|| {
+                let cell = commands
+                    .spawn((HabitatGridCell(coordinate), ChildOf(root)))
+                    .id();
+                habitat_index.record_cell(coordinate, cell);
+                cell
             })
         });
         if old_location.map(|location| location.0) != location {
@@ -177,7 +175,13 @@ pub(super) fn resolve_changed_habitat_membership_and_containment(
                 commands.entity(entity).remove::<HabitatLocationOf>();
             }
         }
-        let habitat = cell.and_then(|cell| habitat_index.habitat_for_topology_cell(cell));
+        let habitat =
+            location
+                .zip(cell)
+                .and_then(|(location, tile)| match partitioned.get(location) {
+                    Ok(sectors) => sectors.habitat_at(transform.translation().xz(), tile, *grid),
+                    Err(_) => cell_owners.get(location).ok().map(|owner| owner.0),
+                });
         let previous = old_habitat.map(|membership| membership.habitat_entity);
         let is_contained = habitat
             .and_then(|habitat| habitat_summaries.get(habitat).ok())

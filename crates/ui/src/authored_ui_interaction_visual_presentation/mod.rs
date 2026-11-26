@@ -13,8 +13,8 @@ use openzt2_game_data::ui_document::node_presentation::UiNodeVisualState;
 use openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioClip;
 
 use super::{
+    active_authored_ui_context::EffectiveUiInteraction,
     authored_ui_focus_navigation_and_activation::AuthoredHoverPresentation,
-    authored_ui_interaction_enabled_state::UiInteractionEnabled,
     authored_ui_selection_state::UiSelected,
     authored_ui_visual_types::{
         UiVisualImageColor, UiVisualLayer, UiVisualPicking, UiVisualSound, UiVisualTextColor,
@@ -26,7 +26,7 @@ pub(super) fn present_authored_ui_interaction_visual_state(
     parents: Query<(
         Entity,
         Ref<DirectlyHovered>,
-        Option<Ref<UiInteractionEnabled>>,
+        Option<Ref<EffectiveUiInteraction>>,
         Option<Ref<AuthoredHoverPresentation>>,
         Option<Ref<UiSelected>>,
         Ref<Children>,

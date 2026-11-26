@@ -335,9 +335,15 @@ pub(super) fn initialize(app: &mut App) {
     );
     app.init_resource::<UiPointerCapture>()
         .add_message::<AuthoredWheelTarget>()
+        .add_message::<openzt2_interface_state::ui::pointer_capture_types::WorldWheelInput>()
+        .add_message::<super::authored_wheel_scroll_diagnostic_types::AuthoredWheelScrollConsumption>()
         .add_systems(
             PreUpdate,
-            project_resolved_pointer_capture.after(PickingSystems::Hover),
+            (
+                project_resolved_pointer_capture.after(PickingSystems::Hover),
+                super::authored_wheel_scroll::scroll_captured_authored_list_or_window_from_mouse_wheel
+                    .after(project_resolved_pointer_capture),
+            ),
         )
         .add_systems(
             PreUpdate,

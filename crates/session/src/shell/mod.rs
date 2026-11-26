@@ -7,14 +7,14 @@ mod in_game_options_overlay_lifecycle;
 mod in_game_shell_ui_action_routing;
 mod loading_screen_presentation;
 mod main_menu_screen_lifecycle_and_presentation;
-pub(crate) mod main_mode_cash;
+mod main_mode_cash;
 mod map_selection_screen_lifecycle;
 mod menu_screen_lifecycle;
 mod online_message_operations;
 mod online_message_types;
 mod profile_dialog_lifecycle;
 mod profile_selection_list_presentation;
-mod shell_navigation_and_world_launch;
+pub(crate) mod shell_navigation_and_world_launch;
 pub mod shell_navigation_request_types;
 mod shell_ui_action_routing;
 #[cfg(test)]
@@ -41,12 +41,11 @@ pub struct ShellPlugin;
 
 impl Plugin for ShellPlugin {
     fn build(&self, app: &mut App) {
-        app.init_asset::<main_mode_cash::MainModeCash>()
-            .init_asset_loader::<main_mode_cash::MainModeCashLoader>()
-            .init_resource::<main_mode_cash::MainModeCashAsset>()
+        app.add_systems(Startup, main_mode_cash::load_main_mode_cash)
             .add_sub_state::<ShellMenuPage>()
             .add_message::<shell_navigation_request_types::ContinueCampaign>()
             .init_resource::<ShellSelection>()
+            .init_resource::<shell_navigation_and_world_launch::SelectedModeDocument>()
             .add_message::<NavigateShellBack>()
             .add_message::<ShowOptions>()
             .add_message::<ShowDownloads>()
@@ -82,6 +81,7 @@ impl Plugin for ShellPlugin {
                 boot_splash_lifecycle::reflect_game_phase_in_shared_menu_backdrop_visibility
                     .in_set(openzt2_interface_state::ui::UiSet::DomainProjection),
             )
+            .add_systems(OnEnter(GamePhase::MainMenu), shell_navigation_and_world_launch::clear_selected_mode_document)
             .add_systems(
                 OnEnter(ShellMenuPage::MainMenu),
                 main_menu_screen_lifecycle_and_presentation::
@@ -142,7 +142,8 @@ impl Plugin for ShellPlugin {
                         shell_navigation_and_world_launch::select_requested_compatible_world,
                         shell_navigation_and_world_launch::request_campaign_launch_after_world_exit,
                         shell_navigation_and_world_launch::begin_loading_selected_world,
-                    ).chain_ignore_deferred(),
+                    ).chain_ignore_deferred()
+                     .after_ignore_deferred(shell_ui_action_routing::route_authored_shell_ui_actions_to_navigation_requests),
                     in_game_shell_ui_action_routing::route_authored_in_game_shell_ui_actions,
                     in_game_options_overlay_lifecycle::close_finished_in_game_options_overlays
                         .after(in_game_shell_ui_action_routing::route_authored_in_game_shell_ui_actions),

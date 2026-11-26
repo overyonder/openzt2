@@ -1,78 +1,119 @@
 use bevy::prelude::*;
-
 use openzt2_game_assets::application_lifecycle::GamePhase;
-use openzt2_interface_state::shell::shell_screen_presentation_types::ShellClearCamera;
-use openzt2_interface_state::shell::shell_screen_presentation_types::ShellUiCamera;
+use openzt2_interface_state::shell::shell_screen_presentation_types::{
+    ShellClearCamera, ShellUiCamera,
+};
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 use super::super::camera_runtime_state_types::ZooCamera;
 
-/// Use the zoo camera as Bevy's single world-and-UI camera during gameplay.
-/// Shell screens retain their dedicated 2D camera before a world exists, so
-/// two cameras never compete to composite the live game target.
+type CameraRole = Or<(With<ZooCamera>, With<ShellUiCamera>, With<ShellClearCamera>)>;
+
+/// Route only one camera to the default UI surface, with the shell taking
+/// over during loading or whenever there is no usable zoo camera.
 pub(crate) fn route_default_ui_camera(
     phase: Res<State<GamePhase>>,
-    added: Query<
+    roots: Query<(), With<WorldRoot>>,
+    changed_roles: Query<
         (),
         (
-            Or<(With<ZooCamera>, With<ShellUiCamera>, With<ShellClearCamera>)>,
+            With<Camera>,
+            CameraRole,
             Or<(
                 Added<Camera>,
                 Added<ZooCamera>,
                 Added<ShellUiCamera>,
                 Added<ShellClearCamera>,
+                Changed<WorldMember>,
             )>,
         ),
     >,
-    mut removed_zoo_cameras: RemovedComponents<ZooCamera>,
+    role_entities: Query<(), CameraRole>,
+    mut removed_zoo: RemovedComponents<ZooCamera>,
+    mut removed_ui: RemovedComponents<ShellUiCamera>,
+    mut removed_clear: RemovedComponents<ShellClearCamera>,
     mut removed_cameras: RemovedComponents<Camera>,
+    mut removed_worlds: RemovedComponents<WorldMember>,
+    mut cameras: ParamSet<(
+        Query<
+            (
+                Entity,
+                Has<ZooCamera>,
+                Has<ShellUiCamera>,
+                Option<&WorldMember>,
+            ),
+            (With<Camera>, CameraRole),
+        >,
+        Query<(
+            Entity,
+            &mut Camera,
+            Has<ZooCamera>,
+            Has<ShellUiCamera>,
+            Has<ShellClearCamera>,
+            Has<IsDefaultUiCamera>,
+        )>,
+    )>,
     mut commands: Commands,
-    mut shell_cameras: Query<
-        (Entity, &mut Camera, Has<IsDefaultUiCamera>),
-        (With<ShellUiCamera>, Without<ZooCamera>),
-    >,
-    mut zoo_cameras: Query<
-        (Entity, &mut Camera, Has<IsDefaultUiCamera>),
-        (With<ZooCamera>, Without<ShellUiCamera>),
-    >,
-    mut shell_clear_cameras: Query<
-        &mut Camera,
-        (
-            With<ShellClearCamera>,
-            Without<ShellUiCamera>,
-            Without<ZooCamera>,
-        ),
-    >,
 ) {
-    let removed = !removed_zoo_cameras.is_empty() || !removed_cameras.is_empty();
-    removed_zoo_cameras.clear();
-    removed_cameras.clear();
-    if !phase.is_changed() && !removed && added.is_empty() {
+    let removed_roles = removed_zoo
+        .read()
+        .chain(removed_ui.read())
+        .chain(removed_clear.read())
+        .collect::<bevy::ecs::entity::EntityHashSet>();
+    let camera_removed = removed_cameras
+        .read()
+        .chain(removed_worlds.read())
+        .fold(false, |removed, entity| {
+            removed || role_entities.contains(entity)
+        });
+    if !phase.is_changed()
+        && removed_roles.is_empty()
+        && !camera_removed
+        && changed_roles.is_empty()
+    {
         return;
     }
-    let use_zoo = *phase.get() == GamePhase::InGame && !zoo_cameras.is_empty();
-    for (entity, camera, is_default) in &mut shell_cameras {
+    let candidates = cameras.p0();
+    let zoo = (*phase.get() == GamePhase::InGame)
+        .then(|| {
+            candidates
+                .iter()
+                .filter(|(_, zoo, _, world)| {
+                    *zoo && world.is_some_and(|world| roots.contains(world.root))
+                })
+                .map(|(entity, ..)| entity)
+                .min_by_key(|entity| entity.to_bits())
+        })
+        .flatten();
+    let shell = candidates
+        .iter()
+        .filter(|(_, _, ui, _)| *ui)
+        .map(|(entity, ..)| entity)
+        .min_by_key(|entity| entity.to_bits());
+    let target = zoo.or(shell);
+
+    for (entity, camera, is_zoo, is_shell, is_clear, is_default) in &mut cameras.p1() {
+        if !(is_zoo || is_shell || is_clear || removed_roles.contains(&entity)) {
+            continue;
+        }
+        let active = if is_zoo {
+            zoo == Some(entity)
+        } else if is_shell {
+            zoo.is_none() && shell == Some(entity)
+        } else {
+            is_clear && zoo.is_none()
+        };
         camera
             .map_unchanged(|camera| &mut camera.is_active)
-            .set_if_neq(!use_zoo);
-        if use_zoo && is_default {
-            commands.entity(entity).remove::<IsDefaultUiCamera>();
-        } else if !use_zoo && !is_default {
-            commands.entity(entity).insert(IsDefaultUiCamera);
-        }
-    }
-    for (entity, camera, is_default) in &mut zoo_cameras {
-        camera
-            .map_unchanged(|camera| &mut camera.is_active)
-            .set_if_neq(use_zoo);
-        if use_zoo && !is_default {
-            commands.entity(entity).insert(IsDefaultUiCamera);
-        } else if !use_zoo && is_default {
-            commands.entity(entity).remove::<IsDefaultUiCamera>();
-        }
-    }
-    for mut camera in &mut shell_clear_cameras {
-        if camera.is_active == use_zoo {
-            camera.is_active = !use_zoo;
+            .set_if_neq(active);
+        match (is_default, target == Some(entity)) {
+            (true, false) => {
+                commands.entity(entity).remove::<IsDefaultUiCamera>();
+            }
+            (false, true) => {
+                commands.entity(entity).insert(IsDefaultUiCamera);
+            }
+            _ => {}
         }
     }
 }

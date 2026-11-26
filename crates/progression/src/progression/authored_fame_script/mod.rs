@@ -3,7 +3,6 @@ use std::{
     collections::BTreeSet,
 };
 
-use super::zoo_rating_input_types::GuestSpeciesSeen;
 use bevy::{ecs::{entity_disabling::Disabled, query::Allow, relationship::RelationshipTarget, system::SystemParam}, prelude::*};
 use mlua::{Function, Lua, MultiValue, Scope, Table, Value};
 use openzt2_game_assets::lua_script::{
@@ -21,7 +20,7 @@ use openzt2_world_state::world_spawn::world_membership_types::{
     DefinitionId, WorldMembers, WorldRoot,
 };
 use openzt2_zoo_state::progression::{
-    fame_types::{Fame, FameAuthoredPresentation, FameGateAppearanceRequested},
+    fame_types::{Fame, FameAuthoredPresentation, FameGateAppearanceRequested, GuestSpeciesFameViews, ZooSpeciesFameViews},
     profile_scenario_variables::ProfileScenarioVariables,
 };
 
@@ -51,6 +50,7 @@ pub(super) struct FameEntityFacts<'w, 's> {
         ),
         With<Guest>,
     >,
+    guest_views: Query<'w, 's, &'static GuestSpeciesFameViews, With<Guest>>,
     gates: Query<
         'w,
         's,
@@ -155,7 +155,7 @@ impl AuthoredFameScript {
         &mut self,
         sources: &LuaScriptSources,
         assets: &Assets<LuaScriptAsset>,
-        views: Option<&GuestSpeciesSeen>,
+        views: Option<&ZooSpeciesFameViews>,
         old: Fame,
         award_points: u32,
         scenario_points: u32,
@@ -277,7 +277,7 @@ fn install_fame_scene<'scope, 'env: 'scope>(
     lua: &Lua,
     scope: &'scope Scope<'scope, 'env>,
     status: &Table,
-    views: Option<&'env GuestSpeciesSeen>,
+    views: Option<&'env ZooSpeciesFameViews>,
     facts: &'env FameEntityFacts<'_, '_>,
     members: Option<&'env WorldMembers>,
     definitions: WorldDefinitionsView<'env>,
@@ -406,18 +406,45 @@ fn install_fame_scene<'scope, 'env: 'scope>(
         "resolveTable",
         lua.create_function(|_, value: Value| Ok(value))?,
     )?;
+    let view_row_methods = lua.create_table()?;
+    view_row_methods.set(
+        "__index",
+        scope.create_function(move |_, (row, key): (Table, String)| {
+            if key != "guestViews" {
+                return Ok(None);
+            }
+            let id = row.raw_get::<mlua::String>("_species")?;
+            let Ok(bytes) = <[u8; 16]>::try_from(id.as_bytes().as_ref()) else {
+                return Ok(None);
+            };
+            let species = AssetId(bytes);
+            let count = facts
+                .guest_views
+                .iter_many(members.into_iter().flat_map(RelationshipTarget::iter))
+                .flatten()
+                .filter(|view| view.0.get(&species).is_some_and(|view| view.events != 0))
+                .count();
+            row.raw_set("guestViews", count)?;
+            Ok(Some(count))
+        })?,
+    )?;
     globals.set(
         "getSpeciesSeenData",
         scope.create_function(move |lua, _: Table| {
             let result = lua.create_table()?;
             for (species, seen) in views.into_iter().flat_map(|views| views.0.iter()) {
                 let record = lua.create_table()?;
-                record.set("guestViews", seen.guests)?;
+                record.set("_species", lua.create_string(species.0)?)?;
+                record.set_metatable(Some(view_row_methods.clone()))?;
                 record.set("viewEvents", seen.events)?;
                 record.set("entertain", seen.entertainment)?;
                 record.set("donate", seen.donation)?;
                 result.set(species.to_lowercase_hexadecimal_string(), record)?;
             }
+            let count = views.map_or(0, |views| views.0.len());
+            let collection = lua.create_table()?;
+            collection.set("__len", lua.create_function(move |_, _: Table| Ok(count))?)?;
+            result.set_metatable(Some(collection))?;
             Ok(result)
         })?,
     )?;

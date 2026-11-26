@@ -3,8 +3,15 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
+use openzt2_game_assets::animation::{
+    animation_clip_source_queries::AnimationClipSources,
+    animation_set_asset_types::AnimationSetAsset,
+};
 use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
 use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
+use openzt2_game_data::animation::animation_set::AuthoredAnimationPlaybackPolicy;
+use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
+use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
 
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
@@ -99,4 +106,61 @@ pub(super) fn invalidate_animal_routes_after_policy_changes(
         route.clear();
         destination.set_changed();
     }
+}
+
+#[derive(SystemParam)]
+pub(super) struct ActiveLocomotionClipPolicy<'w, 's> {
+    sets: Option<Res<'w, Assets<AnimationSetAsset>>>,
+    clips: Option<AnimationClipSources<'w>>,
+    controllers: Query<'w, 's, &'static AnimationPlaybackController>,
+    presentations: Query<'w, 's, &'static AnimationPresentations>,
+}
+
+impl ActiveLocomotionClipPolicy<'_, '_> {
+    pub(super) fn get(
+        &self,
+        actor: Entity,
+        presentation: Option<Entity>,
+    ) -> Option<&AuthoredAnimationPlaybackPolicy> {
+        let sets = self.sets.as_deref()?;
+        let controller = presentation
+            .and_then(|controller| self.controllers.get(controller).ok())
+            .or_else(|| {
+                AnimationPresentations::for_subject(actor, self.presentations.get(actor).ok())
+                    .find_map(|controller| self.controllers.get(controller).ok())
+            })?;
+        let set = sets.get(&controller.animation_set_asset)?;
+        self.clips
+            .as_ref()?
+            .get(set, &controller.animation_clip_asset_key)?
+            .policy
+    }
+
+    pub(super) fn resolves_unit_contacts(&self, actor: Entity) -> bool {
+        self.get(actor, None)
+            .and_then(|policy| policy.resolve_unit_collisions)
+            .unwrap_or(true)
+    }
+}
+
+pub(super) fn advance_clip_turn(
+    current: Quat,
+    desired: Quat,
+    rates: [Option<f32>; 3],
+    step: f32,
+) -> Quat {
+    let (yaw, pitch, roll) = (current.inverse() * desired).to_euler(EulerRot::YXZ);
+    let advance = |angle: f32, rate: Option<f32>| {
+        rate.filter(|rate| rate.is_finite()).map_or(angle, |rate| {
+            let bound = rate.abs() * step;
+            angle.clamp(-bound, bound)
+        })
+    };
+    current
+        * Quat::from_euler(
+            EulerRot::YXZ,
+            advance(yaw, rates[0]),
+            advance(pitch, rates[1]),
+            advance(roll, rates[2]),
+        )
 }

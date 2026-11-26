@@ -1,6 +1,6 @@
 //! Loaded canonical terrain data and its typed Bevy dependency handles.
 
-use std::io;
+use std::{io, path::PathBuf};
 
 use bevy::{audio::AudioSource, platform::collections::HashMap, prelude::*};
 use openzt2_game_data::terrain::{TerrainBiome, TerrainGrid, TerrainShorelineRippleTiming};
@@ -45,6 +45,8 @@ pub struct TerrainAsset {
     #[dependency]
     pub(in crate::terrain) water_particle_effects_by_normalized_system:
         HashMap<String, Handle<ParticleEffectDocumentAsset>>,
+    pub(in crate::terrain) named_water_particle_sources:
+        HashMap<openzt2_game_data::AssetId, PathBuf>,
 }
 
 impl TerrainAsset {
@@ -134,6 +136,15 @@ impl TerrainAsset {
     ) -> Option<&Handle<ParticleEffectDocumentAsset>> {
         self.water_particle_effects_by_normalized_system
             .get(&system.to_ascii_lowercase())
+    }
+
+    /// Resolves a named water particle system on demand.
+    pub fn load_named_water_particle_effect(
+        &self,
+        system: openzt2_game_data::AssetId,
+        assets: &AssetServer,
+    ) -> Option<Handle<ParticleEffectDocumentAsset>> {
+        Some(assets.load(self.named_water_particle_sources.get(&system)?.clone()))
     }
 
     pub(in crate::terrain) fn index_authored_water_region_membership(

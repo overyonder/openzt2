@@ -12,9 +12,10 @@ use openzt2_zoo_state::{
 pub(super) fn initialize_tour_need(
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
-    mut guests: Query<(Entity, &GuestArchetype, &mut GuestRng), Without<GuestTourDepartureGate>>,
+    mut guests: Query<(Entity, Ref<GuestArchetype>, &mut GuestRng), Without<GuestTourDepartureGate>>,
     mut commands: Commands,
 ) {
+    let definitions_changed = definitions.is_changed() || assets.is_changed();
     let Some(definitions) = definitions.get(&assets) else {
         return;
     };
@@ -22,6 +23,9 @@ pub(super) fn initialize_tour_need(
         return;
     };
     for (guest, archetype, mut random) in &mut guests {
+        if !definitions_changed && !archetype.is_changed() {
+            continue;
+        }
         let Some(policy) = definitions
             .find_guest(archetype.0)
             .and_then(|guest| guest.view_scoring.tour_need)

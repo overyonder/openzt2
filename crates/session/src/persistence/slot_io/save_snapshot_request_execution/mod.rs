@@ -11,7 +11,9 @@ use openzt2_interface_state::persistence::{
     profile_types::ProfileOptions,
     save_slot_types::{SaveSlotRecord, SaveWorldSnapshotToSlot},
 };
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_world_state::world_spawn::{
+    persistent_id_types::PersistentId, world_membership_types::WorldRoot,
+};
 use openzt2_zoo_state::{
     progression::fame_types::Fame, topology::topology_edit_types::TopologySnapshot,
 };
@@ -97,7 +99,10 @@ use super::{
 };
 
 #[derive(Component)]
-#[require(PersistenceSlotOperation)]
+#[require(
+    PersistenceSlotOperation,
+    openzt2_interface_state::persistence::save_slot_types::PersistenceBusy
+)]
 struct SnapshotCaptureRequest {
     profile: AssetId,
     requests: Vec<(SaveWorldSnapshotToSlot, Option<SaveDialogSubmission>)>,
@@ -274,16 +279,21 @@ fn capture_animals(
     mut commands: Commands,
     request: CapturingSnapshot,
     animals: AnimalSnapshotEntities,
-    tokens: PendingTokenSnapshotEntities,
+    (tokens, latches, identities): (
+        PendingTokenSnapshotEntities,
+        Query<openzt2_animals::animal_welfare::need_latch_types::AnimalNeedLatches>,
+        Query<&PersistentId>,
+    ),
     crates: NativeCrateSnapshotEntities,
 ) {
     let Ok(operation) = request.single() else {
         return;
     };
-    let capture = capture_animal_snapshot_records(&animals, &tokens).and_then(|mut records| {
-        capture_native_crate_links(&animals, &crates, &mut records)?;
-        Ok(records)
-    });
+    let capture = capture_animal_snapshot_records(&animals, &tokens, &latches, &identities)
+        .and_then(|mut records| {
+            capture_native_crate_links(&animals, &crates, &mut records)?;
+            Ok(records)
+        });
     commands.entity(operation).insert(Captured::new(capture));
 }
 

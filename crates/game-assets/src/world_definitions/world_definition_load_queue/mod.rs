@@ -4,8 +4,8 @@ use std::{
     io,
     path::PathBuf,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -28,16 +28,21 @@ pub(super) fn request_world_definition_loads(
 ) -> Handle<WorldDefinitionLoadCompletion> {
     let server_for_loads = server.clone();
     server.add_async(async move {
-        let handles = load_world_definition_sources(server_for_loads, paths, completed_loads).await;
+        let handles = load_asset_paths_in_order::<WorldDefinitionAsset>(
+            server_for_loads,
+            paths,
+            completed_loads,
+        )
+        .await;
         Ok::<_, io::Error>(WorldDefinitionLoadCompletion { handles })
     })
 }
 
-async fn load_world_definition_sources(
+pub(crate) async fn load_asset_paths_in_order<A: Asset>(
     server: AssetServer,
     paths: Vec<PathBuf>,
     completed_loads: Arc<AtomicUsize>,
-) -> Vec<Handle<WorldDefinitionAsset>> {
+) -> Vec<Handle<A>> {
     let paths: Arc<[PathBuf]> = paths.into();
     let next_path_index = Arc::new(AtomicUsize::new(0));
     let workers: [_; MAXIMUM_ACTIVE_DEFINITION_LOADS] = std::array::from_fn(|_| {
@@ -56,7 +61,7 @@ async fn load_world_definition_sources(
                 let handle = server
                     .load_builder()
                     .with_guard(load_guard)
-                    .load::<WorldDefinitionAsset>(path.clone());
+                    .load::<A>(path.clone());
                 let _ = completion.recv().await;
                 completed_loads.fetch_add(1, Ordering::Relaxed);
                 handles.push((index, handle));
@@ -78,8 +83,8 @@ mod tests {
     use bevy::{
         app::TaskPoolPlugin,
         asset::{
-            io::{memory::MemoryAssetReader, AssetSourceBuilder, AssetSourceId, Reader},
             AssetApp, AssetLoader, AssetPlugin, LoadContext,
+            io::{AssetSourceBuilder, AssetSourceId, Reader, memory::MemoryAssetReader},
         },
     };
     use std::{
@@ -121,8 +126,8 @@ mod tests {
     }
 
     #[test]
-    fn definition_queue_preserves_order_and_advances_after_failures_without_app_frames(
-    ) -> io::Result<()> {
+    fn definition_queue_preserves_order_and_advances_after_failures_without_app_frames()
+    -> io::Result<()> {
         let reader = MemoryAssetReader::default();
         let paths = (0..32)
             .map(|index| PathBuf::from(format!("{index}.queue-test")))
@@ -145,7 +150,7 @@ mod tests {
         });
         app.update();
         let server = app.world().resource::<AssetServer>().clone();
-        let mut task = IoTaskPool::get().spawn(load_world_definition_sources(
+        let mut task = IoTaskPool::get().spawn(load_asset_paths_in_order::<WorldDefinitionAsset>(
             server.clone(),
             paths.clone(),
             Arc::new(AtomicUsize::new(0)),

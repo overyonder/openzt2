@@ -32,10 +32,19 @@ fn bfb_key(index: usize) -> String {
     format!("bfb_{index:08x}")
 }
 
+fn particle_resource_path(name: &str) -> Option<String> {
+    (!name.is_empty()).then(|| {
+        if name.to_ascii_lowercase().ends_with(".psys") {
+            format!("particle/{name}")
+        } else {
+            format!("particle/{name}.psys")
+        }
+    })
+}
+
 pub(in super::super) fn lower_blue_fang_scene_prefab(
     document: &BlueFangBfbDocument,
     source: &str,
-    animation_manifest: Option<&str>,
 ) -> Result<ScenePrefabDocument> {
     let model_path = source.to_owned();
     let mut builder = ScenePrefabDocumentAssembler::new(&model_path);
@@ -111,12 +120,7 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
             BlueFangBfbNodeKind::ParticleSystem { resource_name } => {
                 // An empty authored reference leaves the attachment node empty
                 // in the native loader, while retaining its children/transform.
-                if !resource_name.is_empty() {
-                    let resource_path = if resource_name.to_ascii_lowercase().ends_with(".psys") {
-                        format!("particle/{resource_name}")
-                    } else {
-                        format!("particle/{resource_name}.psys")
-                    };
+                if let Some(resource_path) = particle_resource_path(resource_name) {
                     let effect = AssetId::from_virtual_path(&resource_path);
                     builder.effect(entity, PrefabEffect { effect });
                     builder.dependency(
@@ -259,13 +263,6 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
                 },
             );
         }
-    }
-    if let Some(path) = animation_manifest {
-        builder.dependency(
-            AssetId::from_virtual_path(path),
-            path.to_owned(),
-            ScenePrefabAssetDependencyKind::Animation,
-        );
     }
     builder.finish()
 }

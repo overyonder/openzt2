@@ -81,21 +81,21 @@ pub(super) async fn load_primary_supporting_and_referenced_ui_source_documents(
         .await?;
     }
 
-    let mut scanned_hotkey_references = 0;
+    let mut scanned_sources = 0;
     loop {
-        let hotkey_paths = source_documents[scanned_hotkey_references..]
+        let hotkey_paths = source_documents[scanned_sources..]
             .iter()
             .flat_map(collect_authored_hotkey_file_paths)
             .collect::<BTreeSet<_>>();
-        scanned_hotkey_references = source_documents.len();
         let unplanned_source_paths = collect_referenced_ui_template_source_paths(
-            &source_documents,
+            &source_documents[scanned_sources..],
             template_declaration_paths,
         )
         .into_iter()
         .chain(hotkey_paths)
         .filter(|source_path| !planned_source_paths.contains(&AssetPath::new(source_path).key()))
         .collect::<Vec<_>>();
+        scanned_sources = source_documents.len();
         if unplanned_source_paths.is_empty() {
             break;
         }

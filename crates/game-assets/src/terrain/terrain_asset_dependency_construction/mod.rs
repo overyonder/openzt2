@@ -286,6 +286,7 @@ pub(super) async fn build_terrain_asset_dependencies(
         water_biomes_by_material.entry(id).or_insert(index);
     }
     Ok(TerrainAsset {
+        named_water_particle_sources: super::source::blue_fang_terrain_presentation_source_lowering::index_named_water_particle_sources(asset_archives.source_paths_under(std::path::Path::new("particle"))),
         canonical_terrain_grid,
         authored_water_region_membership,
         water_biomes_by_material,

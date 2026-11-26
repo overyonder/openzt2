@@ -63,7 +63,11 @@ pub(super) fn validate_staff_snapshot_records(
                 .any(|value| !value.is_finite())
             || (Quat::from_array(record.rotation).length_squared() - 1.0).abs() > 0.001
             || record.scale.iter().any(|value| *value <= 0.0)
-            || record.wage_cents_per_month < 0
+            || match (record.wage_dollars_per_month, record.wage_cents_per_month) {
+                (Some(amount), None) => !amount.is_finite() || amount < 0.0,
+                (None, Some(cents)) => cents < 0,
+                _ => true,
+            }
         {
             return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
         }

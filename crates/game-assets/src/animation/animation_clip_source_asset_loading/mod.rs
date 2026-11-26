@@ -137,23 +137,24 @@ fn prepare_animation_clip_source(
             .collect::<Vec<_>>();
     timeline.sort_by_key(|key| key.milliseconds);
     let timeline: Arc<[_]> = timeline.into();
+    if let Some(last) = timeline.last() {
+        clip.set_duration(clip.duration().max(last.milliseconds as f32 / 1000.0));
+    }
     let mut first_key = 0;
     while first_key < timeline.len() {
-        let milliseconds = timeline[first_key].milliseconds;
+        let time = forward_bevy_event_time(timeline[first_key].milliseconds);
         let end_key = first_key
-            + timeline[first_key..].partition_point(|key| key.milliseconds == milliseconds);
+            + timeline[first_key..]
+                .partition_point(|key| forward_bevy_event_time(key.milliseconds) == time);
         let keys = timeline.clone();
-        clip.add_event_fn(
-            milliseconds as f32 / 1000.0,
-            move |commands, entity, _, _| {
-                commands.trigger(AuthoredAnimationKeyframeEvent {
-                    entity,
-                    timeline: keys.clone(),
-                    first_key,
-                    end_key,
-                });
-            },
-        );
+        clip.add_event_fn(time, move |commands, entity, _, _| {
+            commands.trigger(AuthoredAnimationKeyframeEvent {
+                entity,
+                timeline: keys.clone(),
+                first_key,
+                end_key,
+            });
+        });
         first_key = end_key;
     }
     let animation_clip_handle =
@@ -168,6 +169,21 @@ fn prepare_animation_clip_source(
         animation_graph,
         animation_node,
         loop_bounds,
+    }
+}
+
+fn forward_bevy_event_time(milliseconds: u32) -> f32 {
+    if milliseconds == 0 {
+        return 0.0;
+    }
+    // Bevy's forward events exclude the destination. Use the last representable
+    // time below the inclusive key boundary, including seek-time rounding.
+    let boundary = (f64::from(milliseconds) - 0.0001) / 1000.0;
+    let rounded = boundary as f32;
+    if f64::from(rounded) < boundary {
+        rounded
+    } else {
+        rounded.next_down()
     }
 }
 

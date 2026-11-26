@@ -273,8 +273,7 @@ pub struct ScenarioObjectiveGroupRecord {
     pub all_success: bool,
 }
 
-/// One authored `uimods/mod`: the named interface node's visibility under
-/// the scenario (`new/UIState@visible`).
+/// The visibility value stored in older scenario documents.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ScenarioUiModification {
     pub node: String,

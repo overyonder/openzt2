@@ -7,6 +7,7 @@ mod transport_track_preview_presentation;
 mod behavior_rider_view_animation;
 mod behavior_tour_execution;
 mod ground_track_policy;
+mod sky_station_travel;
 mod sky_tower_navigation;
 mod topology;
 pub mod tour_donation;
@@ -102,6 +103,14 @@ impl Plugin for TransportToursPlugin {
             TransportCircuit,
             openzt2_zoo_state::donations::donation_opportunity_types::DonationOpportunity,
         >(tour_donation::tour_donation_opportunity)
+            .init_asset::<sky_station_travel::SkyStationStopNodes>()
+            .init_asset_loader::<sky_station_travel::SkyStationStopNodesLoader>()
+            .init_resource::<sky_station_travel::SkyStationStopSource>()
+            .add_message::<sky_station_travel::DiscardedStationCableNode>()
+            .add_observer(sky_station_travel::notify_discarded_station_cable_node)
+            .add_systems(PostUpdate, sky_station_travel::project_sky_station_travel
+                .after(bevy::transform::TransformSystems::Propagate)
+                .run_if(in_state(GamePhase::InGame)))
             .init_asset::<tour_donation::TourDonationPolicy>()
             .init_asset_loader::<tour_donation::TourDonationPolicyLoader>()
             .add_systems(
@@ -230,10 +239,11 @@ impl Plugin for TransportToursPlugin {
                     (
                         topology::disconnect_tracks,
                         topology::attach_stations,
-                        topology::detach_stations,
-                        topology::connect_tracks,
+                        topology::detach_stations
+                            .after(topology::disconnect_tracks)
+                            .after(topology::attach_stations),
+                        topology::connect_tracks.after(topology::detach_stations),
                     )
-                        .chain()
                         .after(crate::transport_tours::transport_track_construction_transaction::apply_prepared_transport_track_construction_edits)
                         .after(transport_road_cut::apply_prepared_road_cuts),
                 )

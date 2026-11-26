@@ -61,10 +61,14 @@ pub(crate) struct RunningDelayedAnimalTask {
 }
 
 /// Samples one authored delay range in whole fixed ticks.
-pub(super) fn sample_task_delay_ticks(delay_seconds: [f32; 2], unit: f32, fixed_hz: u16) -> u64 {
+pub(super) fn sample_task_delay_ticks(
+    delay_seconds: [f32; 2],
+    unit: f32,
+    step: std::time::Duration,
+) -> u64 {
     let [minimum, maximum] = delay_seconds;
     let seconds = (maximum - minimum).mul_add(unit, minimum);
-    let ticks = (f64::from(seconds) * f64::from(fixed_hz)).ceil();
+    let ticks = (f64::from(seconds) / step.as_secs_f64()).ceil();
     // Lowering accepts only finite, non-negative ranges.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let ticks = ticks as u64;

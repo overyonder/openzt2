@@ -89,8 +89,8 @@ pub(super) struct BiomeAutomaticPlacementRandomStream(DeterministicRng);
 pub(super) struct BiomeMaskStart(IVec2);
 
 /// The range table authored by the active foliage-mix control.
-#[derive(Component, Clone, PartialEq, Eq)]
-pub struct BiomeAutomaticPlacementRanges(pub Vec<BiomeAutomaticPlacementRange>);
+#[derive(Component, Clone, Default, PartialEq, Eq)]
+pub struct BiomeAutomaticPlacementRanges(pub Option<Vec<BiomeAutomaticPlacementRange>>);
 
 #[derive(Component, Clone)]
 pub(super) struct BiomeObjectDrag {
@@ -98,7 +98,7 @@ pub(super) struct BiomeObjectDrag {
     dabs: Vec<TerrainBrushDab>,
     offset: IVec2,
     dependencies: BiomeAutomaticPlacementAssetDependencies,
-    ranges: Option<BiomeAutomaticPlacementRanges>,
+    ranges: Option<Vec<BiomeAutomaticPlacementRange>>,
 }
 
 pub(super) fn begin_biome_object_drag(
@@ -148,18 +148,21 @@ pub(super) fn begin_biome_object_drag(
 }
 
 pub(super) fn capture_biome_object_drag(
-    submissions: Query<(Entity, &SubmittedConstruction), Added<SubmittedConstruction>>,
+    submissions: Query<
+        (Entity, &SubmittedConstruction, &WorldMember),
+        Added<SubmittedConstruction>,
+    >,
+    selection: Query<&BiomeAutomaticPlacementRanges>,
     sources: Query<(
         &TerrainBrushPreview,
         Option<&TerrainBrushPath>,
         &BiomeMaskStart,
         &BiomeAutomaticPlacementAssetDependencies,
-        Option<&BiomeAutomaticPlacementRanges>,
     )>,
     mut commands: Commands,
 ) {
-    for (transaction, submission) in submissions {
-        let Ok((brush, path, start, dependencies, ranges)) = sources.get(submission.source) else {
+    for (transaction, submission, world) in submissions {
+        let Ok((brush, path, start, dependencies)) = sources.get(submission.source) else {
             continue;
         };
         let dabs = path.map_or_else(Vec::new, |path| path.0.clone());
@@ -170,7 +173,10 @@ pub(super) fn capture_biome_object_drag(
                 dabs,
                 offset: start.0,
                 dependencies: dependencies.clone(),
-                ranges: ranges.cloned(),
+                ranges: selection
+                    .get(world.root)
+                    .ok()
+                    .and_then(|selection| selection.0.clone()),
             }));
     }
 }
@@ -235,9 +241,9 @@ pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_bru
         Entity,
         Ref<TerrainBrushPreview>,
         Option<&mut BiomeAutomaticPlacementAssetDependencies>,
-        Option<Ref<BiomeAutomaticPlacementRanges>>,
+        &WorldMember,
     )>,
-    mut removed_ranges: RemovedComponents<BiomeAutomaticPlacementRanges>,
+    selection: Query<Ref<BiomeAutomaticPlacementRanges>>,
 ) {
     let seed = seed.into_inner();
     for root in &roots {
@@ -255,13 +261,12 @@ pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_bru
         return;
     };
     let catalogue_changed = active_definitions.is_changed() || definitions.is_changed();
-    let removed: bevy::ecs::entity::EntityHashSet = removed_ranges.read().collect();
-    for (entity, preview, retained, ranges) in &mut previews {
+    for (entity, preview, retained, world) in &mut previews {
+        let selection = selection.get(world.root).ok();
         if retained.is_some()
             && !preview.is_changed()
             && !catalogue_changed
-            && !ranges.as_ref().is_some_and(|ranges| ranges.is_changed())
-            && !removed.contains(&entity)
+            && !selection.as_ref().is_some_and(|value| value.is_changed())
         {
             continue;
         }
@@ -306,12 +311,13 @@ pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_bru
                 }
             })
             .flat_map(|variation| &variation.ranges);
-        let authored_ranges = ranges.as_ref().filter(|_| !water);
-        let effective_ranges = default_ranges.filter(|_| authored_ranges.is_none()).chain(
-            authored_ranges
-                .into_iter()
-                .flat_map(|ranges| ranges.0.iter()),
-        );
+        let authored_ranges = selection
+            .as_ref()
+            .filter(|_| !water)
+            .and_then(|value| value.0.as_deref());
+        let effective_ranges = default_ranges
+            .filter(|_| authored_ranges.is_none())
+            .chain(authored_ranges.into_iter().flat_map(|ranges| ranges.iter()));
         let mut candidate_object_identifiers = effective_ranges
             .flat_map(|range| &range.choices)
             .filter_map(|choice| choice.object)
@@ -438,7 +444,7 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
         let effective_ranges = ranges
             .as_ref()
             .filter(|_| !water)
-            .map(|ranges| ranges.0.as_slice())
+            .map(Vec::as_slice)
             .or_else(|| {
                 biome_definition
                     .automatic_placement_variations
@@ -571,7 +577,8 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                 continue;
             }
             if water
-                && (!definition.surface_policy.water
+                && (!rules.object_detail_allows(definition.minimum_object_detail)
+                    || !definition.surface_policy.water
                     || !object
                         .properties
                         .contains_all(WorldObjectPropertyFlags::WATER_PLACEABLE))

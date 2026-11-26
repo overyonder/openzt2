@@ -188,7 +188,7 @@ impl TerrainWaterMembershipChanged {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::terrain) enum WaterMembershipProjectionStatus {
     HeightSupportUnresolved,
     DefinitionsPending,
@@ -200,17 +200,28 @@ pub(in crate::terrain) enum WaterMembershipProjectionStatus {
     Ready,
 }
 
-fn report_membership_status(
-    previous: &mut Option<(
-        bevy::asset::AssetId<TerrainAsset>,
-        WaterMembershipProjectionStatus,
-    )>,
-    terrain: bevy::asset::AssetId<TerrainAsset>,
+fn set_membership_status(
+    commands: &mut Commands,
+    statuses: &mut Query<&mut WaterMembershipProjectionStatus>,
+    owner: Entity,
     status: WaterMembershipProjectionStatus,
 ) {
-    if *previous != Some((terrain, status)) {
+    if let Ok(mut current) = statuses.get_mut(owner) {
+        current.set_if_neq(status);
+    } else {
+        commands.entity(owner).insert(status);
+    }
+}
+
+pub(in crate::terrain) fn report_changed_membership_status(
+    statuses: Query<
+        (&TerrainChunk, &WaterMembershipProjectionStatus),
+        Changed<WaterMembershipProjectionStatus>,
+    >,
+) {
+    for (chunk, status) in statuses {
+        let terrain = chunk.asset.id();
         info!(target: "openzt2_water_membership", ?terrain, ?status, "water membership projection status changed");
-        *previous = Some((terrain, status));
     }
 }
 
@@ -245,12 +256,7 @@ pub(in crate::terrain) fn project_terrain_water_membership(
     selector_fences: selector_projection::SelectorFences,
     topology: Single<Ref<TopologyGrid>>,
     mut inputs: MembershipInputs,
-    mut diagnostic: Local<
-        Option<(
-            bevy::asset::AssetId<TerrainAsset>,
-            WaterMembershipProjectionStatus,
-        )>,
-    >,
+    mut statuses: Query<&mut WaterMembershipProjectionStatus>,
 ) {
     let topology = topology.into_inner();
     let mut changes: Vec<_> = changes
@@ -309,13 +315,13 @@ pub(in crate::terrain) fn project_terrain_water_membership(
         .iter()
         .find(|(_, chunk, _)| chunk.source_coord == IVec2::ZERO)
     else {
-        *diagnostic = None;
         return;
     };
     let Some(definitions) = active_definitions.get(&definition_assets) else {
-        report_membership_status(
-            &mut diagnostic,
-            root.asset.id(),
+        set_membership_status(
+            &mut commands,
+            &mut statuses,
+            root_entity,
             WaterMembershipProjectionStatus::DefinitionsPending,
         );
         return;
@@ -614,9 +620,10 @@ pub(in crate::terrain) fn project_terrain_water_membership(
             candidate.asset.id() == chunk.asset.id() && edited.is_some()
         });
         let Some(asset) = assets.get(&chunk.asset) else {
-            report_membership_status(
-                &mut diagnostic,
-                chunk.asset.id(),
+            set_membership_status(
+                &mut commands,
+                &mut statuses,
+                entity,
                 WaterMembershipProjectionStatus::TerrainPending,
             );
             if index.is_some() {
@@ -637,9 +644,10 @@ pub(in crate::terrain) fn project_terrain_water_membership(
             commands
                 .entity(entity)
                 .remove::<(TerrainWaterHeightLimits, TerrainWaterMembershipIndex)>();
-            report_membership_status(
-                &mut diagnostic,
-                chunk.asset.id(),
+            set_membership_status(
+                &mut commands,
+                &mut statuses,
+                entity,
                 WaterMembershipProjectionStatus::HeightSupportUnresolved,
             );
             continue;
@@ -656,9 +664,10 @@ pub(in crate::terrain) fn project_terrain_water_membership(
             commands
                 .entity(entity)
                 .remove::<(TerrainWaterSelectorProjection, TerrainWaterMembershipIndex)>();
-            report_membership_status(
-                &mut diagnostic,
-                chunk.asset.id(),
+            set_membership_status(
+                &mut commands,
+                &mut statuses,
+                entity,
                 WaterMembershipProjectionStatus::SelectorProjectionUnresolved,
             );
             continue;
@@ -682,9 +691,10 @@ pub(in crate::terrain) fn project_terrain_water_membership(
             .zip(&grid.water_regions)
             .position(|(owner, row)| owner.is_none() && !row.row_major_cell_indices.is_empty())
         {
-            report_membership_status(
-                &mut diagnostic,
-                chunk.asset.id(),
+            set_membership_status(
+                &mut commands,
+                &mut statuses,
+                entity,
                 WaterMembershipProjectionStatus::SourceOwnerMissing(row),
             );
             if stale {
@@ -714,9 +724,10 @@ pub(in crate::terrain) fn project_terrain_water_membership(
                 .tank_depth_policy()
                 .map(|policy| policy.minimum_water_depth_cm as f32 * 0.01),
         ) else {
-            report_membership_status(
-                &mut diagnostic,
-                chunk.asset.id(),
+            set_membership_status(
+                &mut commands,
+                &mut statuses,
+                entity,
                 WaterMembershipProjectionStatus::SourceAcceptanceUnresolved,
             );
             if stale {
@@ -738,9 +749,10 @@ pub(in crate::terrain) fn project_terrain_water_membership(
                 }),
                 &live_regions,
             ) else {
-                report_membership_status(
-                    &mut diagnostic,
-                    chunk.asset.id(),
+                set_membership_status(
+                    &mut commands,
+                    &mut statuses,
+                    entity,
                     WaterMembershipProjectionStatus::EditedAffiliationUnresolved,
                 );
                 if stale {
@@ -784,9 +796,10 @@ pub(in crate::terrain) fn project_terrain_water_membership(
             commands.entity(entity).insert(index);
             commands.write_message(change);
         }
-        report_membership_status(
-            &mut diagnostic,
-            chunk.asset.id(),
+        set_membership_status(
+            &mut commands,
+            &mut statuses,
+            entity,
             WaterMembershipProjectionStatus::Ready,
         );
     }

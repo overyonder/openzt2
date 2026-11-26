@@ -1,13 +1,15 @@
 use bevy::{ecs::entity::EntityHashSet, prelude::*};
+use openzt2_construction::construction::construction_transaction_preparation::{
+    SubmittedConstruction, SubmittedPreview,
+};
 use openzt2_game_data::world_definitions::object_placement::PlacementConstraints;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_zoo_state::aquatic::tank_geometry_edit_types::TankGeometryEdit;
-use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementFailure;
+use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 use openzt2_zoo_state::construction::construction_transaction_types::PrepareConstruction;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_transform;
@@ -35,14 +37,11 @@ use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
 pub(super) fn prepare_authored_object_placement_terrain_flattening(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,
-    previews: Query<
-        (
-            &ConstructionPreview,
-            &WorldMember,
-            Option<&ObjectPlacementPrefabSource>,
-        ),
-        Without<TankGeometryEdit>,
-    >,
+    submissions: Query<(
+        &SubmittedConstruction,
+        &WorldMember,
+        Option<&SubmittedPreview<ObjectPlacementPrefabSource>>,
+    )>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     scene_footprints: Option<Res<ScenePlacementFootprints>>,
@@ -60,9 +59,13 @@ pub(super) fn prepare_authored_object_placement_terrain_flattening(
         return;
     };
     for request in requests.read() {
-        let Ok((preview, member, scene)) = previews.get(request.preview) else {
+        let Ok((submission, member, scene)) = submissions.get(request.transaction) else {
             continue;
         };
+        let preview = &submission.preview;
+        if !matches!(submission.tool, ConstructionTool::Place(id) if id == preview.definition) {
+            continue;
+        }
         let Some(definition) = resolve_object_placeable_definition(catalogue, preview.definition)
         else {
             continue;
@@ -80,7 +83,10 @@ pub(super) fn prepare_authored_object_placement_terrain_flattening(
         let geometry = scene_footprints
             .as_ref()
             .map_or(definition.into(), |footprints| {
-                footprints.resolve(definition, scene.map(|source| &source.0))
+                footprints.resolve(
+                    definition,
+                    scene.map(|SubmittedPreview(ObjectPlacementPrefabSource(source))| source),
+                )
             });
         let mut occupied_cells = Vec::new();
         let Some(occupied_cells) = collect_occupied_placement_cells_for_transform(

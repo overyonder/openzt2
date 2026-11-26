@@ -18,6 +18,13 @@ use super::shell_navigation_request_types::{
 };
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
+#[derive(Resource, Default)]
+pub(crate) struct SelectedModeDocument(pub(crate) Option<Handle<WorldScenarioDocumentAsset>>);
+
+pub(super) fn clear_selected_mode_document(mut document: ResMut<SelectedModeDocument>) {
+    document.0 = None;
+}
+
 /// Requests a normal application exit.
 pub(super) fn exit_application_after_request(
     mut requests: MessageReader<ExitApplication>,
@@ -99,6 +106,7 @@ pub(super) fn begin_loading_selected_world(
     active_scenarios: Res<WorldScenarios>,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
     main_mode_cash: super::main_mode_cash::MainModeStartingCash,
+    selected_mode_document: Option<Res<SelectedModeDocument>>,
     mut next_phase: ResMut<NextState<GamePhase>>,
     mut begin_load: MessageWriter<BeginWorldLoad>,
     profile_variables: Res<
@@ -144,6 +152,11 @@ pub(super) fn begin_loading_selected_world(
         }
         begin_load.write(BeginWorldLoad {
             saved_world_document: None,
+            mode_document: selected_mode_document
+                .as_deref()
+                .and_then(|selected| selected.0.as_ref())
+                .filter(|_| mode == WorldSessionMode::Challenge)
+                .map(Handle::id),
             operation: None,
             scenario,
             mode,

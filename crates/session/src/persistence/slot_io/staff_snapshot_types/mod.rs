@@ -14,7 +14,10 @@ pub(super) struct StaffSnapshotRecord {
     pub translation: [f32; 3],
     pub rotation: [f32; 4],
     pub scale: [f32; 3],
-    pub wage_cents_per_month: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wage_cents_per_month: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wage_dollars_per_month: Option<f32>,
     pub hired_tick: u64,
     pub hired_month_ordinal: u32,
     /// Older records use a single value for the two caffeine flags.

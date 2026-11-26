@@ -21,6 +21,21 @@ impl AnimationSetAsset {
                 .entry(clip.animation_clip_asset_key.clone())
                 .or_insert(index);
         }
+        let mut graph_node_indices = HashMap::with_capacity(animation_graph_nodes.len());
+        for (index, node) in animation_graph_nodes.iter().enumerate() {
+            graph_node_indices
+                .entry(node.animation_graph_node_asset_key.clone())
+                .or_insert(index);
+        }
+        let mut outgoing_edges = vec![Vec::new(); animation_graph_nodes.len()];
+        for (index, edge) in animation_graph_edges.iter().enumerate() {
+            if let Some((&source, &target)) = graph_node_indices
+                .get(&edge.source_animation_graph_node_asset_key)
+                .zip(graph_node_indices.get(&edge.target_animation_graph_node_asset_key))
+            {
+                outgoing_edges[source].push((target as u32, index));
+            }
+        }
         Self {
             model_asset_path,
             skeleton_asset_path,
@@ -30,6 +45,8 @@ impl AnimationSetAsset {
             animation_graph_nodes,
             animation_graph_order,
             animation_graph_edges,
+            graph_node_indices,
+            outgoing_edges,
             animation_graph_metadata,
             animation_clip_source_references: Vec::new(),
             clip_source_reference_indices: HashMap::default(),
@@ -77,12 +94,15 @@ impl AnimationSetAsset {
         &self,
         animation_graph_node_asset_key: &str,
     ) -> Option<usize> {
-        self.animation_graph_nodes
-            .iter()
-            .position(|animation_graph_node| {
-                animation_graph_node.animation_graph_node_asset_key
-                    == animation_graph_node_asset_key
-            })
+        self.graph_node_indices
+            .get(animation_graph_node_asset_key)
+            .copied()
+    }
+
+    pub fn outgoing_graph_edges(&self, node: u32) -> &[(u32, usize)] {
+        self.outgoing_edges
+            .get(node as usize)
+            .map_or(&[], Vec::as_slice)
     }
 }
 

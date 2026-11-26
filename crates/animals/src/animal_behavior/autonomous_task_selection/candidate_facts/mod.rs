@@ -3,9 +3,9 @@
 use crate::animal_welfare::need_latch_types::AnimalNeedLatches;
 use bevy::{ecs::query::QueryData, prelude::*};
 use openzt2_game_data::{
+    AssetId,
     behavior::eligibility::*,
     species::{LifeStage, Sex},
-    AssetId,
 };
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::animal_lineage::AnimalMate;
@@ -24,14 +24,14 @@ use openzt2_zoo_state::animal_welfare::types::ExerciseNeed;
 use openzt2_zoo_state::animal_welfare::types::HealthNeed;
 use openzt2_zoo_state::animal_welfare::types::Hunger;
 use openzt2_zoo_state::animal_welfare::types::HygieneNeed;
+use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
 use openzt2_zoo_state::animal_welfare::types::PrivacyNeed;
+use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
 use openzt2_zoo_state::animal_welfare::types::RestNeed;
 use openzt2_zoo_state::animal_welfare::types::SocialNeed;
 use openzt2_zoo_state::animal_welfare::types::StimulationNeed;
 use openzt2_zoo_state::animal_welfare::types::Thirst;
-use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
-use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
-use openzt2_zoo_state::animal_welfare::types::{ReproductionNeed, REPRODUCTION_TRIGGER_INDEX};
+use openzt2_zoo_state::animal_welfare::types::{REPRODUCTION_TRIGGER_INDEX, ReproductionNeed};
 use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
@@ -187,6 +187,16 @@ impl AnimalCandidateFactsItem<'_, '_> {
             BehaviorEntityStateEligibilityFact::Frozen => self.frozen,
             BehaviorEntityStateEligibilityFact::Dead => self.dead,
             BehaviorEntityStateEligibilityFact::Moving => self.velocity?.0.length_squared() > 0.0,
+            BehaviorEntityStateEligibilityFact::Floating => {
+                self.authored_values
+                    .and_then(|values| values.get(AssetId::from_key("isfloating")))
+                    .is_some_and(|value| value != 0.0)
+            }
+            BehaviorEntityStateEligibilityFact::InCloningCenter => {
+                self.authored_values
+                    .and_then(|values| values.get(AssetId::from_key("b_incloningcenter")))
+                    .is_some_and(|value| value != 0.0)
+            }
             BehaviorEntityStateEligibilityFact::Swimming => *self.mode? == LocomotionMode::Swim,
             BehaviorEntityStateEligibilityFact::InHabitat => self.habitat.is_some(),
             BehaviorEntityStateEligibilityFact::HasMate => self.mate.is_some(),
@@ -195,12 +205,9 @@ impl AnimalCandidateFactsItem<'_, '_> {
         })
     }
 
-    pub(super) fn age_q16(&self, tick: u64, ticks_per_day: u32) -> Option<i32> {
-        let age = self.age.filter(|_| ticks_per_day != 0)?;
-        Some(
-            (age.ticks_at(tick) as f64 * f64::from(Q16_ONE) / f64::from(ticks_per_day)).round()
-                as i32,
-        )
+    pub(super) fn age_q16(&self, tick: u64, ticks_per_day: f64) -> Option<i32> {
+        let age = self.age.filter(|_| ticks_per_day > 0.0)?;
+        Some((age.ticks_at(tick) as f64 * f64::from(Q16_ONE) / ticks_per_day).round() as i32)
     }
 
     /// Canonical wellness uses 0..1000; authored BFAI values are deprivation 0..100.
@@ -208,6 +215,12 @@ impl AnimalCandidateFactsItem<'_, '_> {
         if name == AssetId::from_key("breath") {
             let value = self.authored_value(name);
             return Some((value, value > 0));
+        }
+        if name == AssetId::from_key("lifespan") {
+            return self
+                .authored_values?
+                .get(name)
+                .map(|value| ((value * Q16_ONE as f32).round() as i32, true));
         }
         let needs = [
             self.hunger.0,
@@ -245,7 +258,7 @@ impl AnimalCandidateFactsItem<'_, '_> {
         &self,
         fact: &BehaviorCandidateEligibilityFact,
         tick: u64,
-        ticks_per_day: u32,
+        ticks_per_day: f64,
         authored_types: &[AssetId],
     ) -> bool {
         use openzt2_zoo_state::locomotion::locomotion_types::SwimLayer;
@@ -321,23 +334,17 @@ impl AnimalCandidateFactsItem<'_, '_> {
                     let key = match state {
                         BehaviorEntityStateEligibilityFact::Attacked => "b_attacked",
                         BehaviorEntityStateEligibilityFact::Electric => "b_electric",
-                        BehaviorEntityStateEligibilityFact::InCloningCenter => "b_incloningcenter",
                         BehaviorEntityStateEligibilityFact::NurseYoung => "b_nurseyoung",
                         BehaviorEntityStateEligibilityFact::ScentEmitter => "b_scentemitter",
                         BehaviorEntityStateEligibilityFact::Teleportable => "b_teleport",
                         BehaviorEntityStateEligibilityFact::Talking => "b_talking",
                         BehaviorEntityStateEligibilityFact::InTrainingArea => "issubjectinta",
-                        BehaviorEntityStateEligibilityFact::Floating => "isfloating",
                         BehaviorEntityStateEligibilityFact::Elevated => "iselevated",
                         _ => return false,
                     };
                     authored_types.contains(&AssetId::from_key(key))
                 });
-                if value {
-                    Q16_ONE
-                } else {
-                    0
-                }
+                if value { Q16_ONE } else { 0 }
             }
             BehaviorEligibilityFactInput::Taxonomy(taxonomy) => {
                 let key = match taxonomy {
@@ -359,7 +366,11 @@ impl AnimalCandidateFactsItem<'_, '_> {
                 BehaviorConditionEligibilityFact::NeedPointsBad,
             ) => (self.need_points().1 * Q16_ONE as f32).round() as i32,
             BehaviorEligibilityFactInput::Welfare(BehaviorWelfareEligibilityFact::Lifespan) => {
-                let Some(age) = self.age_q16(tick, ticks_per_day) else {
+                let Some(age) = self
+                    .source_need(AssetId::from_key("lifespan"))
+                    .map(|(value, _)| value)
+                    .or_else(|| self.age_q16(tick, ticks_per_day))
+                else {
                     return false;
                 };
                 age

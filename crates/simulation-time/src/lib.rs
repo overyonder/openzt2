@@ -1,6 +1,6 @@
 use openzt2_world_state::simulation_time::{
-    deterministic_random_stream, simulation_clock_types, simulation_control_queries,
-    simulation_control_types, zoo_calendar_calculation,
+    deterministic_random_stream, simulation_clock_types, simulation_control_types,
+    zoo_calendar_calculation,
 };
 
 mod authored_simulation_control_bindings;
@@ -27,9 +27,7 @@ use openzt2_world_state::{
 };
 use openzt2_zoo_state::environment::environment_state_types::ZooTickAdvanced;
 
-use simulation_clock_types::{
-    ZooDayAdvanced, ZooHeartbeatElapsed, ZooSlowTickElapsed, ZooYearAdvanced,
-};
+use simulation_clock_types::{ZooDayAdvanced, ZooTimekeeperElapsed, ZooYearAdvanced};
 use simulation_control_types::{
     SetSimulationSpeed, SimulationControlChanged, SimulationPauseRequest,
 };
@@ -56,20 +54,19 @@ impl Plugin for SimulationTimePlugin {
             .add_message::<ZooDayAdvanced>()
             .add_message::<ZooTickAdvanced>()
             .add_message::<ZooYearAdvanced>()
-            .add_message::<ZooSlowTickElapsed>()
-            .add_message::<ZooHeartbeatElapsed>()
+            .add_message::<ZooTimekeeperElapsed>()
             .configure_sets(
                 FixedUpdate,
                 ZooSlowTick
-                    .after(timekeeper_cadence::advance_slow_tick)
-                    .run_if(on_message::<ZooSlowTickElapsed>),
+                    .after(openzt2_world_state::simulation_time::simulation_clock_types::ZooClockAdvance)
+                    .run_if(timekeeper_cadence::slow_tick_elapsed),
             )
             .configure_sets(
                 RunFixedMainLoop,
                 ZooHeartbeat
-                    .in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop)
-                    .after(timekeeper_cadence::advance_heartbeat)
-                    .run_if(on_message::<ZooHeartbeatElapsed>),
+                    .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop)
+                    .after(timekeeper_cadence::finish_heartbeat_frame)
+                    .run_if(timekeeper_cadence::heartbeat_elapsed),
             )
             .add_systems(
                 Update,
@@ -122,20 +119,19 @@ impl Plugin for SimulationTimePlugin {
             )
             .add_systems(
                 FixedUpdate,
-                (
-                    zoo_clock_advancement::advance_authoritative_zoo_clock_and_calendar
-                        .in_set(openzt2_world_state::simulation_time::simulation_clock_types::ZooClockAdvance),
-                    timekeeper_cadence::advance_slow_tick
-                        .after(openzt2_world_state::simulation_time::simulation_clock_types::ZooClockAdvance),
-                )
+                zoo_clock_advancement::advance_authoritative_zoo_clock_and_calendar
+                    .in_set(openzt2_world_state::simulation_time::simulation_clock_types::ZooClockAdvance)
                     .in_set(FixedGameSet::Clock)
-                    .run_if(in_state(GamePhase::InGame))
-                    .run_if(simulation_control_queries::simulation_is_running),
+                    .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 RunFixedMainLoop,
-                timekeeper_cadence::advance_heartbeat
-                    .in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
+                (
+                    timekeeper_cadence::sample_heartbeat_frame
+                        .in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
+                    timekeeper_cadence::finish_heartbeat_frame
+                        .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop),
+                ),
             );
     }
 }

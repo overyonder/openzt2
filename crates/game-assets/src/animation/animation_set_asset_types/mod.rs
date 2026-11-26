@@ -24,6 +24,8 @@ pub struct AnimationSetAsset {
     pub animation_graph_nodes: Vec<AuthoredAnimationGraphNode>,
     pub animation_graph_order: Vec<String>,
     pub animation_graph_edges: Vec<AuthoredAnimationGraphEdge>,
+    graph_node_indices: HashMap<String, usize>,
+    outgoing_edges: Vec<Vec<(u32, usize)>>,
     pub animation_graph_metadata: Option<AuthoredAnimationGraphMetadata>,
     pub(crate) animation_clip_source_references: Vec<AuthoredAnimationSetClipReference>,
     pub(crate) clip_source_reference_indices: HashMap<String, usize>,

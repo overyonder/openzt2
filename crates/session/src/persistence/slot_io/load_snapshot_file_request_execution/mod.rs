@@ -62,6 +62,7 @@ pub(in super::super) fn begin_loading_requested_world_snapshot_from_save_slot(
                 persistence_operation: WorldSnapshotPersistenceOperation::LoadFromSlot,
                 save_slot_identifier,
             },
+            openzt2_interface_state::persistence::save_slot_types::PersistenceBusy,
             PersistenceSlotFilesystemTask {
                 filesystem_task: IoTaskPool::get().spawn(async move {
                     Ok(

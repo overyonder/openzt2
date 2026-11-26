@@ -30,7 +30,7 @@ use openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushPreview;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_world_state::world_spawn::world_entity_crating::RemoveWorldEntityFromCrate;
-use openzt2_world_state::world_spawn::world_entity_crating::ScriptedCrating;
+use openzt2_world_state::world_spawn::world_entity_crating::{CratedWorldEntity, ScriptedCrating};
 
 use crate::topology::topology_construction_preview_types::FencePreview;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiConstructionActions;
@@ -151,6 +151,8 @@ pub(super) fn route_authored_construction_tool_activations(
 #[derive(SystemParam)]
 pub(super) struct ConstructionUiIntents<'w, 's> {
     animals: Query<'w, 's, (), With<openzt2_zoo_state::animal_lifecycle::types::Animal>>,
+    crated: Query<'w, 's, (), CratedWorldEntity>,
+    scripted_crating: Query<'w, 's, (), With<ScriptedCrating>>,
     animal_moves: MessageWriter<
         'w,
         openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::BeginAnimalRelocation,
@@ -192,10 +194,16 @@ pub(super) fn route_construction_ui_actions(
     mut pending_rotations: Query<&mut PlacementRotationRequest>,
     (mut previews, mut placement_ranges): (
         Query<(Entity, Option<&mut TerrainBrushPreview>), With<ConstructionPreview>>,
-        Query<&mut crate::placement::biome_automatic_object_placement_edit_preparation::BiomeAutomaticPlacementRanges>,
+        Query<
+            &mut crate::placement::BiomeAutomaticPlacementRanges,
+            With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
+        >,
     ),
     mut commands: Commands,
 ) {
+    let mut new_rotations = bevy::ecs::entity::EntityHashMap::<i8>::default();
+    let mut new_relocation = None;
+    let mut new_crating = bevy::ecs::entity::EntityHashSet::default();
     for activation in activations.read() {
         let Ok((range, owner)) = action_nodes.get(activation.node) else {
             continue;
@@ -240,17 +248,20 @@ pub(super) fn route_construction_ui_actions(
                 }
                 UiConstructionAction::MoveSelected => {
                     if let Some(animal) = selected.subject().filter(|entity| {
-                        intents.animals.contains(*entity)
-                            && !intents.animal_crates.contains(*entity)
+                        intents.animals.contains(*entity) && !intents.crated.contains(*entity)
                     }) {
                         intents.animal_moves.write(openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::BeginAnimalRelocation(animal));
                         continue;
                     }
                     if let Some((entity, placeable)) = selected.subject().and_then(|entity| {
-                        let entity = intents
-                            .animal_crates
-                            .get(entity)
-                            .map_or(entity, |link| link.0);
+                        let entity = if let Ok(link) = intents.animal_crates.get(entity) {
+                            link.0
+                        } else {
+                            if intents.crated.contains(entity) {
+                                return None;
+                            }
+                            entity
+                        };
                         placeables
                             .get(entity)
                             .ok()
@@ -263,7 +274,17 @@ pub(super) fn route_construction_ui_actions(
                                     .remove::<(RelocatingPlacedObject, PlacementRotationRequest)>();
                             }
                         }
-                        commands.entity(entity).insert(RelocatingPlacedObject);
+                        if new_relocation != Some(entity) {
+                            if let Some(previous) = new_relocation.replace(entity) {
+                                commands
+                                    .entity(previous)
+                                    .remove::<(RelocatingPlacedObject, PlacementRotationRequest)>();
+                                new_rotations.remove(&previous);
+                            }
+                            if !relocating.contains(entity) {
+                                commands.entity(entity).insert(RelocatingPlacedObject);
+                            }
+                        }
                         intents
                             .tools
                             .write(SelectConstructionTool(ConstructionTool::Place(
@@ -293,10 +314,14 @@ pub(super) fn route_construction_ui_actions(
                         && relocating.is_empty();
                     let rotation_selection = selected.subject().filter(|_| !purchasing);
                     if let Some((entity, placeable)) = rotation_selection.and_then(|entity| {
-                        let entity = intents
-                            .animal_crates
-                            .get(entity)
-                            .map_or(entity, |link| link.0);
+                        let entity = if let Ok(link) = intents.animal_crates.get(entity) {
+                            link.0
+                        } else {
+                            if intents.crated.contains(entity) {
+                                return None;
+                            }
+                            entity
+                        };
                         placeables
                             .get(entity)
                             .ok()
@@ -309,15 +334,23 @@ pub(super) fn route_construction_ui_actions(
                                     .remove::<(RelocatingPlacedObject, PlacementRotationRequest)>();
                             }
                         }
-                        if !relocating.contains(entity) {
-                            commands.entity(entity).insert(RelocatingPlacedObject);
+                        if new_relocation != Some(entity) {
+                            if let Some(previous) = new_relocation.replace(entity) {
+                                commands
+                                    .entity(previous)
+                                    .remove::<(RelocatingPlacedObject, PlacementRotationRequest)>();
+                                new_rotations.remove(&previous);
+                            }
+                            if !relocating.contains(entity) {
+                                commands.entity(entity).insert(RelocatingPlacedObject);
+                            }
                         }
                         if let Ok(mut rotation) = pending_rotations.get_mut(entity) {
-                            rotation.set_if_neq(PlacementRotationRequest(*steps));
+                            let steps = rotation.0.wrapping_add(*steps);
+                            rotation.set_if_neq(PlacementRotationRequest(steps));
                         } else {
-                            commands
-                                .entity(entity)
-                                .insert(PlacementRotationRequest(*steps));
+                            let pending = new_rotations.entry(entity).or_default();
+                            *pending = pending.wrapping_add(*steps);
                         }
                         intents
                             .tools
@@ -390,14 +423,23 @@ pub(super) fn route_construction_ui_actions(
                     policy.repeat_placement = false;
                 }
                 UiConstructionAction::CrateSelected => {
-                    if let Some(entity) = selected
-                        .subject()
-                        .filter(|entity| placeables.get(*entity).is_ok())
-                    {
-                        commands.entity(entity).insert(ScriptedCrating);
+                    if let Some(entity) = selected.subject().filter(|entity| {
+                        placeables.get(*entity).is_ok()
+                            && !intents.scripted_crating.contains(*entity)
+                    }) {
+                        if new_crating.insert(entity) {
+                            commands.entity(entity).insert(ScriptedCrating);
+                        }
                     }
                 }
                 UiConstructionAction::SetBiome { biome } => {
+                    if policy.selected_biome != *biome {
+                        if let Ok(mut selection) = placement_ranges.single_mut() {
+                            selection.set_if_neq(
+                                crate::placement::BiomeAutomaticPlacementRanges::default(),
+                            );
+                        }
+                    }
                     policy.selected_biome = openzt2_game_data::AssetId(biome.0);
                     intents
                         .tools
@@ -451,17 +493,10 @@ pub(super) fn route_construction_ui_actions(
                     policy.biome_paint_trees = *enabled;
                 }
                 UiConstructionAction::SetBiomeAutomaticPlacementTable { ranges } => {
-                    use crate::placement::biome_automatic_object_placement_edit_preparation::BiomeAutomaticPlacementRanges;
-                    for (entity, brush) in &mut previews {
-                        if brush.is_none() {
-                            continue;
-                        }
-                        let next = BiomeAutomaticPlacementRanges(ranges.clone());
-                        if let Ok(mut current) = placement_ranges.get_mut(entity) {
-                            current.set_if_neq(next);
-                        } else {
-                            commands.entity(entity).insert(next);
-                        }
+                    if let Ok(mut selection) = placement_ranges.single_mut() {
+                        selection.set_if_neq(crate::placement::BiomeAutomaticPlacementRanges(
+                            Some(ranges.clone()),
+                        ));
                     }
                 }
                 UiConstructionAction::SetBiomeAutomaticPlacementVariation { variation } => {
@@ -651,5 +686,10 @@ pub(super) fn route_construction_ui_actions(
                 }
             }
         }
+    }
+    for (entity, steps) in new_rotations {
+        commands
+            .entity(entity)
+            .insert(PlacementRotationRequest(steps));
     }
 }

@@ -21,8 +21,8 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
-    ui_document::{action::UiTrigger, document::UiDocumentRole},
     AssetId,
+    ui_document::{action::UiTrigger, document::UiDocumentRole},
 };
 use openzt2_interface_state::ui::{
     authored_ui_activation_contracts::UiNodeActivated,
@@ -44,10 +44,10 @@ use openzt2_zoo_state::{
 };
 
 use super::{
+    EditShowMixerSlot, ShowMixerSlotChoice, ShowMixerTimeSlot, ShowMixerWait,
     scheduled_trick_execution::performance_level,
     show_editor_interaction_types::{EditedShow, ShowEditing},
     show_timing_operations::convert_authored_nanoseconds_to_fixed_simulation_ticks,
-    EditShowMixerSlot, ShowMixerSlotChoice, ShowMixerTimeSlot, ShowMixerWait,
 };
 
 const MIXER_FRAGMENTS: [&str; 4] = [
@@ -76,7 +76,9 @@ pub(super) struct ShowMixerPanels(Entity);
 
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ShowMixerMenu {
-    Animals,
+    Animals {
+        replacing: Option<Entity>,
+    },
     Tricks {
         animal: Entity,
         slot: Option<Entity>,
@@ -357,7 +359,11 @@ pub(super) fn project_live_show_mixer(
                             ShowMixerFieldValues {
                                 label: name,
                                 icon: None,
-                                kind: None,
+                                kind: can_edit.then_some(ShowMixerControl::Open(
+                                    ShowMixerMenu::Animals {
+                                        replacing: Some(animal.0),
+                                    },
+                                )),
                             },
                         )
                         .unwrap_or(panel)
@@ -454,12 +460,30 @@ pub(super) fn project_live_show_mixer(
                 ShowMixerFieldValues {
                     label: None,
                     icon: show_mixer_icon(definitions_view, "addanimal"),
-                    kind: Some(ShowMixerControl::Open(ShowMixerMenu::Animals)),
+                    kind: Some(ShowMixerControl::Open(ShowMixerMenu::Animals {
+                        replacing: None,
+                    })),
                 },
             );
         }
         match menu.map(|menu| **menu) {
-            Some(ShowMixerMenu::Animals) => {
+            Some(ShowMixerMenu::Animals { replacing }) => {
+                if let Some(animal) = replacing {
+                    fragments.project(
+                        &mut commands,
+                        panel,
+                        2,
+                        ShowMixerFieldValues {
+                            label: None,
+                            icon: show_mixer_icon(definitions_view, "removeanimal"),
+                            kind: Some(ShowMixerControl::Edit {
+                                slot: None,
+                                time_slot: None,
+                                choice: ShowMixerSlotChoice::RemovePerformer { animal },
+                            }),
+                        },
+                    );
+                }
                 for animal in members
                     .as_deref()
                     .into_iter()
@@ -479,6 +503,36 @@ pub(super) fn project_live_show_mixer(
                     }) {
                         continue;
                     }
+                    if let Some(previous) = replacing {
+                        let compatible = inputs
+                            .slots
+                            .iter_many(
+                                slots
+                                    .as_deref()
+                                    .into_iter()
+                                    .flat_map(RelationshipTarget::iter),
+                            )
+                            .flatten()
+                            .filter(|(_, performer, ..)| {
+                                performer
+                                    .as_ref()
+                                    .is_some_and(|performer| performer.0 == previous)
+                            })
+                            .all(|(performance, ..)| {
+                                performance.is_none_or(|performance| {
+                                    definitions_view.find_trick(performance.trick).is_some_and(
+                                        |trick| {
+                                            trick.species.contains(&species.species)
+                                                && performance_level(trick, training.as_deref())
+                                                    .is_some()
+                                        },
+                                    )
+                                })
+                            });
+                        if !compatible {
+                            continue;
+                        }
+                    }
                     fragments.project(
                         &mut commands,
                         panel,
@@ -486,7 +540,18 @@ pub(super) fn project_live_show_mixer(
                         ShowMixerFieldValues {
                             label: name.map(|name| name.as_str().to_owned()),
                             icon: None,
-                            kind: Some(ShowMixerControl::SelectAnimal(animal)),
+                            kind: Some(if let Some(previous) = replacing {
+                                ShowMixerControl::Edit {
+                                    slot: None,
+                                    time_slot: None,
+                                    choice: ShowMixerSlotChoice::ReplacePerformer {
+                                        previous,
+                                        animal,
+                                    },
+                                }
+                            } else {
+                                ShowMixerControl::SelectAnimal(animal)
+                            }),
                         },
                     );
                 }

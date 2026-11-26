@@ -6,3 +6,5 @@ pub mod entity_selection_types;
 pub mod information_graph_types;
 pub mod overview;
 pub mod zoo_message_types;
+
+pub mod award_presentation_types;

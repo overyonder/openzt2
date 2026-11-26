@@ -231,6 +231,26 @@ pub(super) fn append_encoded_progression_snapshot_section(
         progression_snapshot_section_bytes.extend_from_slice(b"FAM1");
         progression_snapshot_section_bytes.extend_from_slice(&percent.to_le_bytes());
     }
+    let globals = &progression_snapshot_records.award_globals;
+    let presentation = &progression_snapshot_records.award_presentation;
+    if !globals.is_empty() || !presentation.is_empty() {
+        let bytes = progression_snapshot_section_bytes;
+        bytes.extend_from_slice(b"AWD1");
+        bytes.extend_from_slice(&(globals.len() as u64).to_le_bytes());
+        for (id, value) in globals {
+            bytes.extend_from_slice(&id.0);
+            bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(value.as_bytes());
+        }
+        bytes.extend_from_slice(&(presentation.len() as u64).to_le_bytes());
+        for (id, (name, seen)) in presentation {
+            bytes.extend_from_slice(&id.to_le_bytes());
+            bytes.push(u8::from(*seen) | (u8::from(name.is_some()) << 1));
+            if let Some(name) = name {
+                bytes.extend_from_slice(&name.0);
+            }
+        }
+    }
 }
 
 pub(super) fn decode_and_validate_progression_snapshot_section(
@@ -438,13 +458,41 @@ pub(super) fn decode_and_validate_progression_snapshot_section(
             })
         })
         .collect::<Result<Vec<_>, WorldSnapshotPersistenceFailure>>()?;
-    if progression_snapshot_section_reader.remaining_byte_count() == 8 {
-        if progression_snapshot_section_reader.read_fixed_byte_array::<4>()? != *b"FAM1" {
-            return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+    let mut award_globals = std::collections::BTreeMap::new();
+    let mut award_presentation = std::collections::BTreeMap::new();
+    let reader = &mut progression_snapshot_section_reader;
+    while reader.remaining_byte_count() != 0 {
+        match &reader.read_fixed_byte_array::<4>()? {
+            b"FAM1" if fame.current_percent.is_none() => {
+                fame.current_percent = Some(f32::from_le_bytes(reader.read_fixed_byte_array()?));
+            }
+            b"AWD1" if award_globals.is_empty() && award_presentation.is_empty() => {
+                for _ in 0..reader.read_u64()? {
+                    let id = reader.read_asset_identifier()?;
+                    let value = reader.read_string()?;
+                    if award_globals.insert(id, value).is_some() {
+                        return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+                    }
+                }
+                for _ in 0..reader.read_u64()? {
+                    let id = reader.read_u64()?;
+                    let flags = reader.read_u8()?;
+                    if !(1..=3).contains(&flags) {
+                        return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+                    }
+                    let name = (flags & 2 != 0)
+                        .then(|| reader.read_asset_identifier())
+                        .transpose()?;
+                    if award_presentation
+                        .insert(id, (name, flags & 1 != 0))
+                        .is_some()
+                    {
+                        return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+                    }
+                }
+            }
+            _ => return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection),
         }
-        fame.current_percent = Some(f32::from_le_bytes(
-            progression_snapshot_section_reader.read_fixed_byte_array()?,
-        ));
     }
     let progression_snapshot_records = ProgressionSnapshotRecords {
         fame,
@@ -452,6 +500,8 @@ pub(super) fn decode_and_validate_progression_snapshot_section(
         unlocked_catalogue_definition_count,
         unlocked_catalogue_definition_bit_words,
         scenario_award_points,
+        award_globals,
+        award_presentation,
         endangered_animal_birth_count,
         animal_adoption_availability_policy,
         fame_history_samples,
@@ -509,6 +559,22 @@ impl<'a> ProgressionSnapshotSectionReader<'a> {
             .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
         self.current_byte_offset = value_end_byte_offset;
         Ok(fixed_value_bytes)
+    }
+
+    fn read_string(&mut self) -> Result<String, WorldSnapshotPersistenceFailure> {
+        let length = usize::try_from(self.read_u64()?)
+            .map_err(|_| WorldSnapshotPersistenceFailure::CapacityExceeded)?;
+        let end = self
+            .current_byte_offset
+            .checked_add(length)
+            .ok_or(WorldSnapshotPersistenceFailure::CapacityExceeded)?;
+        let value = self
+            .progression_snapshot_section_bytes
+            .get(self.current_byte_offset..end)
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
+        self.current_byte_offset = end;
+        Ok(value.to_owned())
     }
 
     fn read_u8(&mut self) -> Result<u8, WorldSnapshotPersistenceFailure> {

@@ -7,14 +7,18 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::extinct_animal_recovery::{
-    FossilPieceDefinition, FossilSlotDefinition,
+    FossilPieceDefinition,
+};
+
+use super::fossil_assembly::FossilAssemblyPiecePose;
+use openzt2_zoo_state::extinct_animals::fossil_collection_and_assembly_types::{
+    CollectedFossilPiece, FossilPieceInSlot,
 };
 
 #[derive(Resource, Default)]
 pub(super) struct FossilDefinitionIndex {
     piece_indices: HashMap<AssetId, usize>,
-    pub(super) pieces: Vec<FossilPieceDefinition>,
-    pub(super) slots: Vec<FossilSlotDefinition>,
+    pieces: Vec<FossilPieceDefinition>,
     pub(super) sets: Vec<AssetId>,
     pub(super) placeable_rewards: Vec<Vec<FossilRewardCandidate>>,
     pub(super) cash_rewards: Vec<Vec<FossilRewardCandidate>>,
@@ -53,7 +57,6 @@ pub(super) fn index_winning_fossil_definitions(
         return;
     };
     index.pieces = definitions.fossil_pieces().copied().collect();
-    index.slots = definitions.fossil_slots().copied().collect();
     let mut seen = HashSet::<AssetId>::default();
     index.sets = index
         .pieces
@@ -105,5 +108,82 @@ pub(super) fn index_winning_fossil_definitions(
         };
         index.placeable_rewards = groups(&policy.placeable_objects, true);
         index.cash_rewards = groups(&policy.non_placeable_objects, false);
+    }
+}
+
+#[derive(Component)]
+pub(super) struct FossilPiecePicture(Entity);
+
+pub(super) fn bind_fossil_piece_pictures(
+    mut commands: Commands,
+    definitions: Res<WorldDefinitions>,
+    definitions_assets: Res<Assets<WorldDefinitionAsset>>,
+    (mut meshes, mut materials): (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
+    pieces: Query<
+        (Entity, &CollectedFossilPiece, Option<&FossilPiecePicture>),
+        Or<(With<FossilAssemblyPiecePose>, With<FossilPieceInSlot>)>,
+    >,
+    changed_pieces: Query<
+        Entity,
+        Or<(
+            Changed<CollectedFossilPiece>,
+            Added<FossilAssemblyPiecePose>,
+            Added<FossilPieceInSlot>,
+        )>,
+    >,
+    mut ready: MessageReader<AssetEvent<WorldDefinitionAsset>>,
+    pictures: Query<&MeshMaterial3d<StandardMaterial>>,
+) {
+    let definitions_changed = definitions.is_changed()
+        || ready.read().any(|event| {
+            matches!(
+                event,
+                AssetEvent::Added { .. }
+                    | AssetEvent::Modified { .. }
+                    | AssetEvent::LoadedWithDependencies { .. }
+            )
+        });
+    ready.clear();
+    let Some(definitions) = definitions.get(&definitions_assets) else {
+        return;
+    };
+    let entities: Vec<_> = if definitions_changed {
+        pieces.iter().map(|(entity, ..)| entity).collect()
+    } else {
+        changed_pieces.iter().collect()
+    };
+    for (entity, piece, picture) in pieces.iter_many(entities).flatten() {
+        let Some(texture) = definitions
+            .find_fossil_piece(piece.0)
+            .and_then(|piece| definitions.texture_image(piece.model))
+        else {
+            continue;
+        };
+        if let Some(picture) = picture {
+            if let Ok(material) = pictures.get(picture.0) {
+                if let Some(material) = materials.get_mut(&material.0) {
+                    if material.base_color_texture.as_ref() != Some(&texture) {
+                        material.base_color_texture = Some(texture);
+                    }
+                }
+            }
+        } else {
+            let material = materials.add(StandardMaterial {
+                base_color_texture: Some(texture),
+                alpha_mode: AlphaMode::Blend,
+                unlit: true,
+                cull_mode: None,
+                ..default()
+            });
+            let child = commands
+                .spawn((
+                    ChildOf(entity),
+                    Mesh3d(meshes.add(Rectangle::new(1.0, 1.0))),
+                    MeshMaterial3d(material),
+                    Transform::IDENTITY,
+                ))
+                .id();
+            commands.entity(entity).insert(FossilPiecePicture(child));
+        }
     }
 }

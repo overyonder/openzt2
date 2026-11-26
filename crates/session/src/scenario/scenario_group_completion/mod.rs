@@ -12,7 +12,7 @@ use openzt2_zoo_state::scenario::scenario_objective_types::{
 pub(super) struct ScenarioCompletionGroup;
 
 #[derive(Component)]
-pub(super) struct ScenarioRootGroup;
+pub(super) struct ScenarioRootGroup(pub usize);
 
 #[derive(Component)]
 #[relationship(relationship_target = ScenarioGroupChildren)]
@@ -47,11 +47,16 @@ pub(super) fn reduce_group(
 pub(crate) fn spawn_scenario_objective_groups(
     commands: &mut Commands,
     owner: Entity,
+    scenario: AssetId,
     groups: &[ScenarioObjectiveGroupRecord],
     mut members: BTreeMap<AssetId, Entity>,
     mut statuses: BTreeMap<AssetId, ScenarioObjectiveStatus>,
     authored: &AuthoredWorldScenarioState,
 ) {
+    let grouped: std::collections::BTreeSet<_> = groups
+        .iter()
+        .flat_map(|group| group.members.iter().copied())
+        .collect();
     for (record_index, group) in groups.iter().enumerate() {
         let status = statuses.get(&group.id).copied().unwrap_or_else(|| {
             if statuses.is_empty() {
@@ -91,15 +96,28 @@ pub(crate) fn spawn_scenario_objective_groups(
                     .insert(ScenarioGroupChildOf(group_entity));
             }
         }
-        if record_index + 1 == groups.len() {
-            commands.entity(group_entity).insert(ScenarioRootGroup);
-            if !is_optional(authored, group.id) {
-                commands
-                    .entity(group_entity)
-                    .insert(ScenarioCompletionGroup);
+        members.insert(group.id, group_entity);
+    }
+    if let Some(roots) = authored.objective_roots.get(&scenario) {
+        for (index, id) in roots.iter().enumerate() {
+            if let Some(&entity) = members.get(id) {
+                let mut root = commands.entity(entity);
+                root.insert(ScenarioRootGroup(index));
+                if !is_optional(authored, *id) {
+                    root.insert(ScenarioCompletionGroup);
+                }
             }
         }
-        members.insert(group.id, group_entity);
+    } else {
+        for (index, group) in groups.iter().enumerate() {
+            if !grouped.contains(&group.id) {
+                let mut root = commands.entity(members[&group.id]);
+                root.insert(ScenarioRootGroup(index));
+                if !is_optional(authored, group.id) {
+                    root.insert(ScenarioCompletionGroup);
+                }
+            }
+        }
     }
 }
 
