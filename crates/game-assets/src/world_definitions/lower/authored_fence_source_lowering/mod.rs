@@ -419,6 +419,11 @@ fn bind_authored_fence_catalogue_entry(
             .and_then(|element| element.attribute_named_any(&["ids"]))
             .map(id)
             .unwrap_or_default(),
+        tooltip_keys:
+            super::world_definition_source_value_reading_and_conversion::help_tooltip_keys(
+                find_descendant(button, "UIHelpInfo")
+                    .and_then(|element| element.attribute_named_any(&["ids"])),
+            ),
         icon: find_descendant(button, "default")
             .and_then(|element| element.attribute_named_any(&["image"]))
             .map(id)

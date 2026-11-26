@@ -69,11 +69,12 @@ pub(super) fn bind_authored_path(
         .and_then(|element| element.attribute_named_any(&["image"]))
         .map(id)
         .unwrap_or_default();
-    let name_key = purchase_button
+    let help_ids = purchase_button
         .and_then(|button| find_descendant(button, "UIHelpInfo"))
-        .and_then(|element| element.attribute_named_any(&["ids"]))
-        .map(id)
-        .unwrap_or_default();
+        .and_then(|element| element.attribute_named_any(&["ids"]));
+    let name_key = help_ids.map(id).unwrap_or_default();
+    let tooltip_keys =
+        super::world_definition_source_value_reading_and_conversion::help_tooltip_keys(help_ids);
     let price_cents = record
         .descendant_named("ZTEconomyComponent")
         .and_then(|element| element.attribute_named_any(&["cost"]))
@@ -209,6 +210,7 @@ pub(super) fn bind_authored_path(
             authored_type_registry_source_order: [u64::MAX; 3],
             filters: CatalogueFilterFlags::BUILDABLE,
             name_key,
+            tooltip_keys,
             icon,
         });
     }

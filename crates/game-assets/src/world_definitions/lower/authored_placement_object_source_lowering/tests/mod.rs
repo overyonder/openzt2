@@ -188,3 +188,39 @@ fn a_ruin_or_stump_can_be_put_down_although_it_has_no_placement_data(
     assert_eq!(tables.document.placeables.len(), 2);
     Ok(())
 }
+
+#[test]
+fn a_purchase_button_takes_its_tooltips_from_its_help_ids() -> Result<(), Box<dyn std::error::Error>>
+{
+    // As the shipped burger stand, whose `ids` names no string of its own but
+    // whose `_stt` and `_ltt` strings are its tooltips.
+    let documents = [(
+        "entities/foodstand_burger_df.xml",
+        r#"<BFTypedBinder binderType="foodstand_burger_df"><types><entity><building/></entity></types><shared><UIToggleButton><UIAspect><default image="burger_icon.dds"/></UIAspect><UIHelpInfo ids="entityname:foodstand_burger"/><event msg="ZT_SETPLACEMENTOBJECT"/></UIToggleButton><BFPhysObj/></shared></BFTypedBinder>"#,
+    )]
+    .map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()))
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
+    let index = SourceIndex::build(&documents)?;
+    let mut tables = WorldDefinitionLoweringTables::default();
+    bind_authored_placement_object(
+        &index.find("foodstand_burger_df").ok_or("burger")?,
+        &[],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &mut tables,
+    )?;
+    let key = openzt2_game_data::AssetId::from_key;
+    assert_eq!(
+        tables
+            .document
+            .catalogue
+            .first()
+            .map(|entry| entry.tooltip_keys),
+        Some([
+            key("entityname:foodstand_burger_stt"),
+            key("entityname:foodstand_burger_ltt")
+        ])
+    );
+    Ok(())
+}

@@ -207,14 +207,23 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
         }
         if definitions_changed || bound.is_none_or(|bound| bound.definition != definition) {
             let name = AssetId(entry.name_key.0);
+            let [short, long] = entry.tooltip_keys.map(|key| AssetId(key.0));
             commands.entity(entity).insert((
                 CatalogueRowEntry { definition },
                 UiDisplayNameKey(name),
-                UiShortTooltipKey(name),
+                UiShortTooltipKey(if short == AssetId::default() {
+                    name
+                } else {
+                    short
+                }),
             ));
-            let description = catalog
-                .find_object(definition)
-                .map(|object| AssetId(object.description_key.0))
+            let description = Some(long)
+                .filter(|key| *key != AssetId::default())
+                .or_else(|| {
+                    catalog
+                        .find_object(definition)
+                        .map(|object| AssetId(object.description_key.0))
+                })
                 .filter(|key| *key != AssetId::default());
             if let Some(description) = description {
                 commands

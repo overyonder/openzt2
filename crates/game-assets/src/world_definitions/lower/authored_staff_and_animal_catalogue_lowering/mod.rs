@@ -830,10 +830,11 @@ pub(super) fn bind_authored_staff_catalogue(
         .and_then(|element| element.attribute_named_any(&["image"]))
         .map(id)
         .unwrap_or_default();
-    let name_key = find_descendant(purchase_button, "UIHelpInfo")
-        .and_then(|element| element.attribute_named_any(&["ids"]))
-        .map(id)
-        .unwrap_or_default();
+    let help_ids = find_descendant(purchase_button, "UIHelpInfo")
+        .and_then(|element| element.attribute_named_any(&["ids"]));
+    let name_key = help_ids.map(id).unwrap_or_default();
+    let tooltip_keys =
+        super::world_definition_source_value_reading_and_conversion::help_tooltip_keys(help_ids);
     let economy = actor_record
         .descendant_named("ZTEconomyComponent")
         .or_else(|| record.descendant_named("ZTEconomyComponent"));
@@ -1119,6 +1120,7 @@ pub(super) fn bind_authored_staff_catalogue(
         authored_type_registry_source_order: [u64::MAX; 3],
         filters: CatalogueFilterFlags::HIREABLE,
         name_key,
+        tooltip_keys,
         icon,
     });
     Ok(())
@@ -1182,10 +1184,11 @@ pub(super) fn bind_authored_animal_catalogue(
         .and_then(|element| element.attribute_named_any(&["image"]))
         .map(id)
         .unwrap_or_default();
-    let name_key = find_descendant(purchase_button, "UIHelpInfo")
-        .and_then(|element| element.attribute_named_any(&["ids"]))
-        .map(id)
-        .unwrap_or_default();
+    let help_ids = find_descendant(purchase_button, "UIHelpInfo")
+        .and_then(|element| element.attribute_named_any(&["ids"]));
+    let name_key = help_ids.map(id).unwrap_or_default();
+    let tooltip_keys =
+        super::world_definition_source_value_reading_and_conversion::help_tooltip_keys(help_ids);
     let price_cents = record
         .descendant_named("ZTEconomyComponent")
         .and_then(|element| element.attribute_named_any(&["cost"]))
@@ -1328,6 +1331,7 @@ pub(super) fn bind_authored_animal_catalogue(
         authored_type_registry_source_order: [u64::MAX; 3],
         filters: CatalogueFilterFlags::ADOPTABLE,
         name_key,
+        tooltip_keys,
         icon,
     });
     Ok(())
