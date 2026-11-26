@@ -30,7 +30,10 @@ use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
 
-/// Identifies only navigation created here; other agent owners are untouched.
+/// The walking clip this projection requested for an animal and its rate.
+/// An animal whose agent has none yet, such as one a save restored with its
+/// agent, is taken over: skipping it left the restored agent at its saved
+/// speed, so the animal slid along with still legs.
 #[derive(Component, Clone, Copy)]
 pub(super) struct AnimalNavigationAnimationOwner {
     move_request_id: Option<usize>,
@@ -155,9 +158,6 @@ pub(super) fn project_animal_animation_motion_to_navigation(
         let has_agent = agent.is_some();
         let task_animation =
             task_animation || held_animation || docking_poses.contains(animal_entity);
-        if agent.is_some() && owner.is_none() {
-            continue;
-        }
         if mode.is_some_and(|mode| !matches!(*mode, LocomotionMode::Ground | LocomotionMode::Swim))
         {
             wait(
