@@ -57,6 +57,7 @@ pub(super) fn push_animal_bodies_apart(
             Entity,
             &GlobalTransform,
             &mut Transform,
+            &NavAgent,
             Has<openzt2_zoo_state::locomotion::locomotion_types::Destination>,
         ),
         (
@@ -79,7 +80,10 @@ pub(super) fn push_animal_bodies_apart(
 ) {
     let bodies = animals
         .iter()
-        .map(|(animal, global, transform, walking)| {
+        .map(|(animal, global, transform, agent, heading_somewhere)| {
+            // Only an animal its walking clip carries; one waiting for it, or
+            // for a way through, stands with still legs.
+            let walking = heading_somewhere && agent.max_speed_mps > 0.0;
             let moved = transform.translation - global.translation();
             (
                 animal,
@@ -115,7 +119,7 @@ pub(super) fn push_animal_bodies_apart(
     }
     for ((animal, ..), push) in bodies.into_iter().zip(pushes) {
         if push != Vec2::ZERO {
-            if let Ok((_, _, mut transform, _)) = animals.get_mut(animal) {
+            if let Ok((_, _, mut transform, ..)) = animals.get_mut(animal) {
                 transform.translation += Vec3::new(push.x, 0.0, push.y);
             }
         }
