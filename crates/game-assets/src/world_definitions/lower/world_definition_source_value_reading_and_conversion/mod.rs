@@ -275,6 +275,14 @@ pub(super) fn parse_element_scalar<T: FromStr>(value: &str, field: &str) -> Resu
 pub(super) fn id(value: &str) -> AssetId {
     AssetId::from_key(&canonicalize_source_document_record_key(value))
 }
+/// A button's short and long tooltips: `zt.exe` shows its `UIHelpInfo ids`
+/// with `_stt` and `_ltt`, as `entityname:foodstand_burger_stt` for a stand
+/// whose `ids` names no string of its own.
+pub(super) fn help_tooltip_keys(ids: Option<&str>) -> [AssetId; 2] {
+    ids.map_or([AssetId::default(); 2], |ids| {
+        ["_stt", "_ltt"].map(|suffix| id(&format!("{ids}{suffix}")))
+    })
+}
 pub(super) fn asset(record: &RecordView<'_, '_>, names: &[&str]) -> AssetId {
     record
         .value(names)

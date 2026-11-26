@@ -88,6 +88,7 @@ pub(super) fn bind_catalogue(
         authored_type_registry_source_order: [u64::MAX; 3],
         filters,
         name_key: asset(record, &["nameKey", "displayName"]),
+        tooltip_keys: Default::default(),
         icon: asset(record, &["icon"]),
     });
     Ok(())
@@ -128,11 +129,12 @@ pub(super) fn bind_authored_type_list_entry(
             "elevated-curb purchase row has no default icon",
         ));
     };
-    let name_key = record
+    let help_ids = record
         .descendant_named("UIHelpInfo")
-        .and_then(|element| element.attribute_named_any(&["ids"]))
-        .map(id)
-        .unwrap_or_default();
+        .and_then(|element| element.attribute_named_any(&["ids"]));
+    let name_key = help_ids.map(id).unwrap_or_default();
+    let tooltip_keys =
+        super::world_definition_source_value_reading_and_conversion::help_tooltip_keys(help_ids);
     let template = button
         .attribute_named_any(&["template"])
         .unwrap_or_default();
@@ -157,6 +159,7 @@ pub(super) fn bind_authored_type_list_entry(
         authored_type_registry_source_order: [u64::MAX; 3],
         filters: CatalogueFilterFlags::BUILDABLE,
         name_key,
+        tooltip_keys,
         icon: id(image),
     });
     Ok(())
@@ -201,6 +204,7 @@ pub(super) fn bind_authored_placement_catalogue_entry(
     record: &RecordView<'_, '_>,
     object_kind: WorldObjectKind,
     name_key: AssetId,
+    tooltip_keys: [AssetId; 2],
     icon: AssetId,
     output: &mut WorldDefinitionLoweringTables,
 ) {
@@ -266,6 +270,7 @@ pub(super) fn bind_authored_placement_catalogue_entry(
         authored_type_registry_source_order: [u64::MAX; 3],
         filters: catalogue_filters,
         name_key,
+        tooltip_keys,
         icon,
     });
 }

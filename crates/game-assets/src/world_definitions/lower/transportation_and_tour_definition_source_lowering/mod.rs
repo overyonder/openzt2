@@ -496,10 +496,13 @@ pub(super) fn bind_track(
             .ok_or_else(|| {
                 BindError::record(record, "authored transport track has no catalogue icon")
             })?;
-        let name_key = find_descendant(purchase_button, "UIHelpInfo")
-            .and_then(|element| element.attribute_named_any(&["ids"]))
-            .map(id)
-            .unwrap_or_default();
+        let help_ids = find_descendant(purchase_button, "UIHelpInfo")
+            .and_then(|element| element.attribute_named_any(&["ids"]));
+        let name_key = help_ids.map(id).unwrap_or_default();
+        let tooltip_keys =
+            super::world_definition_source_value_reading_and_conversion::help_tooltip_keys(
+                help_ids,
+            );
         let mut type_tokens = record.type_tokens();
         if type_tokens.is_empty() {
             type_tokens.push(record.key.to_owned());
@@ -525,6 +528,7 @@ pub(super) fn bind_track(
             filters: CatalogueFilterFlags::PURCHASABLE
                 .with_additional_flags(CatalogueFilterFlags::BUILDABLE),
             name_key,
+            tooltip_keys,
             icon,
         });
     }
@@ -600,11 +604,12 @@ pub(super) fn bind_vehicle(
     else {
         return Ok(());
     };
-    let name_key = record
+    let help_ids = record
         .descendant_named("UIHelpInfo")
-        .and_then(|element| element.attribute_named_any(&["ids"]))
-        .map(id)
-        .unwrap_or_default();
+        .and_then(|element| element.attribute_named_any(&["ids"]));
+    let name_key = help_ids.map(id).unwrap_or_default();
+    let tooltip_keys =
+        super::world_definition_source_value_reading_and_conversion::help_tooltip_keys(help_ids);
     let mut type_tokens = record.type_tokens();
     if type_tokens.is_empty() {
         type_tokens.push(record.key.to_owned());
@@ -626,6 +631,7 @@ pub(super) fn bind_vehicle(
         authored_type_registry_source_order: [u64::MAX; 3],
         filters: CatalogueFilterFlags::PURCHASABLE,
         name_key,
+        tooltip_keys,
         icon,
     });
     Ok(())

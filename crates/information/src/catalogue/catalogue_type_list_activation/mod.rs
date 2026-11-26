@@ -174,6 +174,7 @@ mod tests {
                     authored_type_registry_source_order: [0; 3],
                     filters: CatalogueFilterFlags::default(),
                     name_key: AssetId::default(),
+                    tooltip_keys: Default::default(),
                     icon: AssetId::default(),
                 })
                 .collect(),

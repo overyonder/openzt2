@@ -35,6 +35,9 @@ pub struct CatalogueEntry {
     pub authored_type_registry_source_order: [u64; 3],
     pub filters: CatalogueFilterFlags,
     pub name_key: AssetId,
+    /// Its short and long tooltips, or none for an entry no button authors.
+    #[serde(default)]
+    pub tooltip_keys: [AssetId; 2],
     pub icon: AssetId,
 }
 

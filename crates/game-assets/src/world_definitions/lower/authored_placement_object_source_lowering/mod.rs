@@ -241,11 +241,12 @@ pub(super) fn bind_authored_placement_object(
         .and_then(|element| element.attribute_named_any(&["image"]))
         .map(id)
         .unwrap_or_default();
-    let name_key = information_button
+    let help_ids = information_button
         .and_then(|button| find_descendant(button, "UIHelpInfo"))
-        .and_then(|element| element.attribute_named_any(&["ids"]))
-        .map(id)
-        .unwrap_or_default();
+        .and_then(|element| element.attribute_named_any(&["ids"]));
+    let name_key = help_ids.map(id).unwrap_or_default();
+    let tooltip_keys =
+        super::world_definition_source_value_reading_and_conversion::help_tooltip_keys(help_ids);
     // An object inherits its cost from its type family, as the sky tram pole
     // takes it from the skytower binder. A station's first economy component
     // takes donations and has no cost, so look past it.
@@ -575,7 +576,14 @@ pub(super) fn bind_authored_placement_object(
             actor_scene_paths,
         )
     {
-        bind_authored_placement_catalogue_entry(record, object_kind, name_key, icon, output);
+        bind_authored_placement_catalogue_entry(
+            record,
+            object_kind,
+            name_key,
+            tooltip_keys,
+            icon,
+            output,
+        );
     }
     Ok(())
 }
