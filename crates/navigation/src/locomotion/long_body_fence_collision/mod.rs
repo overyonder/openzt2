@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::locomotion::fence_navigation_policy::FenceNavigationPolicy;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabBodyCapsule;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
-use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
+use openzt2_zoo_state::locomotion::locomotion_types::{NavAgent, NavFlags};
 
 #[cfg(test)]
 mod tests;
@@ -60,6 +60,13 @@ pub(super) fn push_animal_bodies_apart(
             Without<openzt2_zoo_state::locomotion::locomotion_types::Docking>,
         ),
     >,
+    mut people: Query<
+        (&NavAgent, &mut Transform),
+        (
+            Without<AnimalVariant>,
+            Without<openzt2_zoo_state::locomotion::locomotion_types::Docking>,
+        ),
+    >,
     children: Query<&Children>,
     capsules: Query<(&GlobalTransform, &PrefabBodyCapsule)>,
 ) {
@@ -72,6 +79,25 @@ pub(super) fn push_animal_bodies_apart(
         .filter(|(_, segments)| !segments.is_empty())
         .collect::<Vec<_>>();
     let pushes = body_pushes(bodies.iter().map(|(_, segments)| segments.as_slice()));
+    // A keeper or guest is tested the same way, but walks round an animal
+    // rather than shoving it, so only the person moves.
+    let walkers = NavFlags(NavFlags::GUEST.0 | NavFlags::STAFF.0);
+    for (agent, mut transform) in &mut people {
+        if agent.capabilities.0 & walkers.0 == 0 {
+            continue;
+        }
+        let position = transform.translation.xz();
+        let push = bodies
+            .iter()
+            .flat_map(|(_, segments)| segments)
+            .map(|&(a, b, radius, _)| {
+                wall_push(position, position, agent.radius_m, a, b, radius, position)
+            })
+            .sum::<Vec2>();
+        if push != Vec2::ZERO {
+            transform.translation += Vec3::new(push.x, 0.0, push.y);
+        }
+    }
     for ((animal, _), push) in bodies.into_iter().zip(pushes) {
         if push != Vec2::ZERO {
             if let Ok((_, _, mut transform)) = animals.get_mut(animal) {
