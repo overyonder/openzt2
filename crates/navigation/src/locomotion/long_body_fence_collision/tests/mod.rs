@@ -43,7 +43,7 @@ fn a_long_body_is_pushed_off_a_wall_it_reaches_into() {
 }
 
 #[test]
-fn two_bodies_side_by_side_move_apart_by_half_their_overlap_each() {
+fn only_walking_bodies_move_apart() {
     // Two 4 m bodies of radius 0.6 lying 1 m apart overlap by 0.2 m.
     let left = [(
         Vec2::new(0.0, 0.0),
@@ -63,7 +63,8 @@ fn two_bodies_side_by_side_move_apart_by_half_their_overlap_each() {
         0.6,
         Vec2::new(9.0, 2.0),
     )];
-    let pushes = super::body_pushes([&left[..], &right[..], &far[..]].into_iter());
+    let pushes =
+        super::body_pushes([(&left[..], true), (&right[..], true), (&far[..], true)].into_iter());
     assert!(
         (pushes[0] - Vec2::new(-0.1, 0.0)).length() < 1.0e-4,
         "{pushes:?}"
@@ -73,4 +74,14 @@ fn two_bodies_side_by_side_move_apart_by_half_their_overlap_each() {
         "{pushes:?}"
     );
     assert_eq!(pushes[2], Vec2::ZERO);
+    // One walking into one lying down moves out by all of it; the one lying
+    // down stays put, as do two lying down.
+    let pushes = super::body_pushes([(&left[..], false), (&right[..], true)].into_iter());
+    assert_eq!(pushes[0], Vec2::ZERO);
+    assert!(
+        (pushes[1] - Vec2::new(0.2, 0.0)).length() < 1.0e-4,
+        "{pushes:?}"
+    );
+    let pushes = super::body_pushes([(&left[..], false), (&right[..], false)].into_iter());
+    assert_eq!(pushes, [Vec2::ZERO, Vec2::ZERO]);
 }

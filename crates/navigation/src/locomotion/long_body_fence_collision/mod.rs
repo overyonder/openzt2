@@ -47,11 +47,18 @@ pub(super) fn push_long_animal_bodies_off_fences(
 /// Keeps animals' bodies out of each other. `zt.exe`'s grid collision
 /// (`FUN_006d09fd`) tests a body against every object in the cells around it,
 /// other animals included, so two elephants do not walk into each other's
-/// sides. Each of two touching bodies moves out by half how far they overlap,
-/// as each makes the same test. Runs before fences push, which win.
+/// sides. Only a walking animal moves: of two walking, each moves out by half
+/// how far they overlap; one walking into an animal standing or lying down
+/// moves out by all of it, and two standing still stay put, so a resting
+/// animal is never slid along the ground. Runs before fences push, which win.
 pub(super) fn push_animal_bodies_apart(
     mut animals: Query<
-        (Entity, &GlobalTransform, &mut Transform),
+        (
+            Entity,
+            &GlobalTransform,
+            &mut Transform,
+            Has<openzt2_zoo_state::locomotion::locomotion_types::Destination>,
+        ),
         (
             With<AnimalVariant>,
             With<NavAgent>,
@@ -72,13 +79,21 @@ pub(super) fn push_animal_bodies_apart(
 ) {
     let bodies = animals
         .iter()
-        .map(|(animal, global, transform)| {
+        .map(|(animal, global, transform, walking)| {
             let moved = transform.translation - global.translation();
-            (animal, body_segments(animal, moved, &children, &capsules))
+            (
+                animal,
+                body_segments(animal, moved, &children, &capsules),
+                walking,
+            )
         })
-        .filter(|(_, segments)| !segments.is_empty())
+        .filter(|(_, segments, _)| !segments.is_empty())
         .collect::<Vec<_>>();
-    let pushes = body_pushes(bodies.iter().map(|(_, segments)| segments.as_slice()));
+    let pushes = body_pushes(
+        bodies
+            .iter()
+            .map(|(_, segments, walking)| (segments.as_slice(), *walking)),
+    );
     // A keeper or guest is tested the same way, but walks round an animal
     // rather than shoving it, so only the person moves.
     let walkers = NavFlags(NavFlags::GUEST.0 | NavFlags::STAFF.0);
@@ -89,7 +104,7 @@ pub(super) fn push_animal_bodies_apart(
         let position = transform.translation.xz();
         let push = bodies
             .iter()
-            .flat_map(|(_, segments)| segments)
+            .flat_map(|(_, segments, _)| segments)
             .map(|&(a, b, radius, _)| {
                 wall_push(position, position, agent.radius_m, a, b, radius, position)
             })
@@ -98,27 +113,34 @@ pub(super) fn push_animal_bodies_apart(
             transform.translation += Vec3::new(push.x, 0.0, push.y);
         }
     }
-    for ((animal, _), push) in bodies.into_iter().zip(pushes) {
+    for ((animal, ..), push) in bodies.into_iter().zip(pushes) {
         if push != Vec2::ZERO {
-            if let Ok((_, _, mut transform)) = animals.get_mut(animal) {
+            if let Ok((_, _, mut transform, _)) = animals.get_mut(animal) {
                 transform.translation += Vec3::new(push.x, 0.0, push.y);
             }
         }
     }
 }
 
-/// How far to move each of several bodies, given as capsule segments, out of
-/// the others: half of each overlap, away from the other body.
-fn body_pushes<'a>(bodies: impl Iterator<Item = &'a [BodySegment]> + Clone) -> Vec<Vec2> {
+/// How far to move each of several bodies, given as capsule segments and
+/// whether they walk, out of the others, away from the other body: a walking
+/// body by its share of each overlap, a still one not at all.
+fn body_pushes<'a>(bodies: impl Iterator<Item = (&'a [BodySegment], bool)>) -> Vec<Vec2> {
     let bodies = bodies.collect::<Vec<_>>();
     let mut pushes = vec![Vec2::ZERO; bodies.len()];
-    for (i, own) in bodies.iter().enumerate() {
-        for (j, other) in bodies.iter().enumerate().skip(i + 1) {
+    for (i, (own, own_walking)) in bodies.iter().enumerate() {
+        for (j, (other, other_walking)) in bodies.iter().enumerate().skip(i + 1) {
+            let own_share = match (own_walking, other_walking) {
+                (true, true) => 0.5,
+                (true, false) => 1.0,
+                (false, true) => 0.0,
+                (false, false) => continue,
+            };
             for &(start, end, radius, centre) in *own {
                 for &(a, b, other_radius, _) in *other {
-                    let push = wall_push(start, end, radius, a, b, other_radius, centre) * 0.5;
-                    pushes[i] += push;
-                    pushes[j] -= push;
+                    let push = wall_push(start, end, radius, a, b, other_radius, centre);
+                    pushes[i] += push * own_share;
+                    pushes[j] -= push * (1.0 - own_share);
                 }
             }
         }
