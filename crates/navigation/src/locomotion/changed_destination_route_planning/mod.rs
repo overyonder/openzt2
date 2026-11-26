@@ -5,7 +5,7 @@ use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
 use crate::locomotion::animal_navigation_policy::AnimalNavigationPolicy;
 use crate::locomotion::fence_navigation_policy::FenceNavigationPolicy;
 use crate::locomotion::pathfinding::{
-    ITERATIONS_PER_SLICE, LONG_PATH_ITERATIONS, RouteSearch, advance_route,
+    advance_route, RouteSearch, ITERATIONS_PER_SLICE, LONG_PATH_ITERATIONS,
 };
 use std::collections::{HashSet, VecDeque};
 

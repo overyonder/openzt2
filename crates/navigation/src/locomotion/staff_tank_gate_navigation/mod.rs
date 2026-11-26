@@ -22,7 +22,7 @@ use openzt2_world_state::{
         animation_playback_controller_types::{
             AnimationPlaybackController, AnimationPlaybackRepetitionPolicy,
         },
-        locomotion_root_motion::{ConsumedLocomotionRootMotion, clip_motion_velocity},
+        locomotion_root_motion::{clip_motion_velocity, ConsumedLocomotionRootMotion},
     },
     world_spawn::world_membership_types::WorldMember,
 };

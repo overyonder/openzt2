@@ -16,6 +16,10 @@ pub struct FenceDefinition {
     pub height_cm: u16,
     pub strength: u16,
     pub blocks: FenceTraversalBlockingFlags,
+    /// `BFGCollisionData width`: the thickness an animal's body keeps clear
+    /// of. Zero when unauthored; the original then uses 25 cm.
+    #[serde(default)]
+    pub collision_width_cm: u16,
     pub gate: AssetId,
     pub post_prefab: AssetId,
     pub segments: FenceSegmentPrefabs,

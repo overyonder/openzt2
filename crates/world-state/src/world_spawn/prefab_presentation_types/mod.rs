@@ -50,6 +50,14 @@ pub struct PrefabCausticPolicy {
     pub receives: bool,
 }
 
+/// A model's authored collision capsule along its local Y axis, such as the
+/// one an animal's model authors on `Bip01 Spine1` for its body.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct PrefabBodyCapsule {
+    pub radius_m: f32,
+    pub half_height_m: f32,
+}
+
 /// Authored local-space render bound, independent of mesh upload or material passes.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct PrefabLocalRenderBound(pub openzt2_game_data::scene_prefab::PrefabBoundingSphere);

@@ -75,34 +75,56 @@ pub(super) fn rebuild_spatial_grid(
     }
 }
 
+/// The destination an agent already got stuck short of once.
+#[derive(Component)]
+pub(crate) struct StuckShortOf(Vec3);
+
 pub(crate) fn detect_stuck_agents(
+    mut commands: Commands,
     mut agents: Query<
         (
+            Entity,
             &GlobalTransform,
             &Route,
             &mut Destination,
             &mut MotionProgress,
+            Option<&StuckShortOf>,
+            Has<Docking>,
         ),
         Without<DirectLocomotion>,
     >,
 ) {
-    for (transform, route, mut destination, mut progress) in &mut agents {
+    for (agent, transform, route, mut destination, mut progress, stuck_before, docking) in
+        &mut agents
+    {
         if route.current().is_none() {
             progress.stationary_ticks = 0;
             continue;
         }
+        // Measure from the last position that counted as movement, so a slow
+        // walker covering under a centimetre per tick is not mistaken for stuck.
         let position = transform.translation();
-        let moved = position.distance_squared(progress.last_position) > 0.0001;
-        if moved {
+        if position.distance_squared(progress.last_position) > 0.0001 {
             progress.stationary_ticks = 0;
-        } else {
-            progress.stationary_ticks = progress.stationary_ticks.saturating_add(1);
+            progress.last_position = position;
+            continue;
         }
+        progress.stationary_ticks = progress.stationary_ticks.saturating_add(1);
         if progress.stationary_ticks >= STUCK_TICKS {
-            destination.set_changed();
             progress.stationary_ticks = 0;
+            // A second time short of the same point, as a long animal whose
+            // body a fence keeps from a point its centre could reach, it
+            // stops where it is rather than walking on the spot.
+            if !docking && stuck_before.is_some_and(|stuck| stuck.0 == destination.world) {
+                destination.world = position;
+                commands.entity(agent).remove::<StuckShortOf>();
+            } else {
+                commands
+                    .entity(agent)
+                    .insert(StuckShortOf(destination.world));
+                destination.set_changed();
+            }
         }
-        progress.last_position = position;
     }
 }
 

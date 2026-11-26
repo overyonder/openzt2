@@ -80,9 +80,12 @@ pub(super) fn lower_netimmerse_collision_volume(
             )?;
             builder.collider(
                 entity,
+                // `zt.exe` places the segment's ends at extent minus radius
+                // from the centre (`FUN_0073db51`): the extent reaches the
+                // capsule's tip.
                 PrefabColliderSource::Capsule {
                     radius_m: capsule.radius,
-                    half_height_m: capsule.extent * 0.5,
+                    half_height_m: (capsule.extent - capsule.radius).max(0.0),
                 },
             );
         }

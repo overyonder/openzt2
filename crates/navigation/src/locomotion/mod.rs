@@ -15,6 +15,7 @@ mod entity_pursuit_execution;
 mod fence_navigation_policy;
 mod kinematic_navigation_agent_motion_integration;
 mod local_steering_calculation;
+mod long_body_fence_collision;
 mod navigation_agent_initialization;
 mod navigation_destination_request_execution;
 mod navigation_reachability_testing;
@@ -149,6 +150,11 @@ impl Plugin for LocomotionPlugin {
                     crate::locomotion::direct_locomotion_execution::integrate_non_physics_direct_locomotion,
                     avian_navigation_agent_driving::
                         drive_avian_navigation_agent_velocities_and_complete_routes,
+                    long_body_fence_collision::push_animal_bodies_apart
+                        .after(kinematic_navigation_agent_motion_integration::integrate_non_physics_planned_navigation_motion)
+                        .after(direct_locomotion_execution::integrate_non_physics_direct_locomotion),
+                    long_body_fence_collision::push_long_animal_bodies_off_fences
+                        .after(long_body_fence_collision::push_animal_bodies_apart),
                 )
                     .after(openzt2_world_state::animation_playback::locomotion_root_motion::AnimationLocomotionMotionSampling)
                     .after(openzt2_zoo_state::topology::gate_operation_types::GateOperationSet)
