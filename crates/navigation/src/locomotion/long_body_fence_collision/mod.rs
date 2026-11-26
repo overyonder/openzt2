@@ -27,10 +27,94 @@ pub(super) fn push_long_animal_bodies_off_fences(
         // Capsules carry last frame's placement; move them with the root since.
         let moved = transform.translation - global.translation();
         let mut push = Vec2::ZERO;
-        for descendant in children.iter_descendants(animal) {
-            let Ok((capsule_global, capsule)) = capsules.get(descendant) else {
-                continue;
-            };
+        for (start, end, radius, centre) in body_segments(animal, moved, &children, &capsules) {
+            let (start, end) = (start + push, end + push);
+            for (a, b, width) in fences.blocking_fence_walls(animal, agent.capabilities) {
+                let width = if width > 0.0 {
+                    width
+                } else {
+                    DEFAULT_WALL_WIDTH_M
+                };
+                push += wall_push(start, end, radius, a, b, width * 0.5, centre);
+            }
+        }
+        if push != Vec2::ZERO {
+            transform.translation += Vec3::new(push.x, 0.0, push.y);
+        }
+    }
+}
+
+/// Keeps animals' bodies out of each other. `zt.exe`'s grid collision
+/// (`FUN_006d09fd`) tests a body against every object in the cells around it,
+/// other animals included, so two elephants do not walk into each other's
+/// sides. Each of two touching bodies moves out by half how far they overlap,
+/// as each makes the same test. Runs before fences push, which win.
+pub(super) fn push_animal_bodies_apart(
+    mut animals: Query<
+        (Entity, &GlobalTransform, &mut Transform),
+        (
+            With<AnimalVariant>,
+            With<NavAgent>,
+            // A docked animal, such as a young one nursing, stands where its
+            // dock puts it.
+            Without<openzt2_zoo_state::locomotion::locomotion_types::Docking>,
+        ),
+    >,
+    children: Query<&Children>,
+    capsules: Query<(&GlobalTransform, &PrefabBodyCapsule)>,
+) {
+    let bodies = animals
+        .iter()
+        .map(|(animal, global, transform)| {
+            let moved = transform.translation - global.translation();
+            (animal, body_segments(animal, moved, &children, &capsules))
+        })
+        .filter(|(_, segments)| !segments.is_empty())
+        .collect::<Vec<_>>();
+    let pushes = body_pushes(bodies.iter().map(|(_, segments)| segments.as_slice()));
+    for ((animal, _), push) in bodies.into_iter().zip(pushes) {
+        if push != Vec2::ZERO {
+            if let Ok((_, _, mut transform)) = animals.get_mut(animal) {
+                transform.translation += Vec3::new(push.x, 0.0, push.y);
+            }
+        }
+    }
+}
+
+/// How far to move each of several bodies, given as capsule segments, out of
+/// the others: half of each overlap, away from the other body.
+fn body_pushes<'a>(bodies: impl Iterator<Item = &'a [BodySegment]> + Clone) -> Vec<Vec2> {
+    let bodies = bodies.collect::<Vec<_>>();
+    let mut pushes = vec![Vec2::ZERO; bodies.len()];
+    for (i, own) in bodies.iter().enumerate() {
+        for (j, other) in bodies.iter().enumerate().skip(i + 1) {
+            for &(start, end, radius, centre) in *own {
+                for &(a, b, other_radius, _) in *other {
+                    let push = wall_push(start, end, radius, a, b, other_radius, centre) * 0.5;
+                    pushes[i] += push;
+                    pushes[j] -= push;
+                }
+            }
+        }
+    }
+    pushes
+}
+
+/// A capsule seen from above: its segment's ends, radius and centre.
+type BodySegment = (Vec2, Vec2, f32, Vec2);
+
+/// An animal's body capsules seen from above: each segment's ends, its radius
+/// and its centre, moved by how far the animal moved since they were placed.
+fn body_segments(
+    animal: Entity,
+    moved: Vec3,
+    children: &Query<&Children>,
+    capsules: &Query<(&GlobalTransform, &PrefabBodyCapsule)>,
+) -> Vec<BodySegment> {
+    children
+        .iter_descendants(animal)
+        .filter_map(|descendant| {
+            let (capsule_global, capsule) = capsules.get(descendant).ok()?;
             let scale = capsule_global.scale().y.abs().max(f32::EPSILON);
             let axis = capsule_global
                 .affine()
@@ -39,21 +123,14 @@ pub(super) fn push_long_animal_bodies_off_fences(
                 * capsule.half_height_m
                 * scale;
             let centre = capsule_global.translation() + moved;
-            let (start, end) = ((centre - axis).xz() + push, (centre + axis).xz() + push);
-            let radius = capsule.radius_m * capsule_global.scale().x.abs();
-            for (a, b, width) in fences.blocking_fence_walls(animal, agent.capabilities) {
-                let width = if width > 0.0 {
-                    width
-                } else {
-                    DEFAULT_WALL_WIDTH_M
-                };
-                push += wall_push(start, end, radius, a, b, width * 0.5, centre.xz());
-            }
-        }
-        if push != Vec2::ZERO {
-            transform.translation += Vec3::new(push.x, 0.0, push.y);
-        }
-    }
+            Some((
+                (centre - axis).xz(),
+                (centre + axis).xz(),
+                capsule.radius_m * capsule_global.scale().x.abs(),
+                centre.xz(),
+            ))
+        })
+        .collect()
 }
 
 /// How far to move a capsule from `start` to `end` of `radius` off the wall
