@@ -140,7 +140,7 @@ fn complete_absence_clears_retained_state_and_legacy_absence_preserves_it() {
     for complete in [false, true] {
         let mut saved = economy();
         saved.unlimited_cash = None;
-        saved.entity_economy_records = vec![EntityEconomySnapshotRecord {
+        let record = EntityEconomySnapshotRecord {
             persistent_identifier: PersistentId(42),
             complete_component_state: complete,
             opening_zoo_day: None,
@@ -152,7 +152,13 @@ fn complete_absence_clears_retained_state_and_legacy_absence_preserves_it() {
             service: None,
             inventory: None,
             usage: None,
-        }];
+        };
+        // As the food a guest held, which no section restores.
+        let unrestored = EntityEconomySnapshotRecord {
+            persistent_identifier: PersistentId(2040),
+            ..record
+        };
+        saved.entity_economy_records = vec![record, unrestored];
         {
             let (mut commands, mut cash, mut price, mut admissions, mut history) =
                 state.get_mut(&mut world).unwrap();
