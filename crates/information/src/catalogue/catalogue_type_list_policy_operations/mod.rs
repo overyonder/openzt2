@@ -1,7 +1,7 @@
 use bevy::prelude::Component;
 use openzt2_game_data::{
-    AssetId,
     world_definitions::catalogue_and_progression::catalogue_definition_types::CatalogueEntry,
+    AssetId,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;

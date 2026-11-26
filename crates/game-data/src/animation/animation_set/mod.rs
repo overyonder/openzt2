@@ -24,7 +24,23 @@ pub struct AuthoredAnimationGraphEdge {
     pub source_animation_graph_node_asset_key: String,
     pub target_animation_graph_node_asset_key: String,
     pub transition_animation_clip_asset_keys: Vec<String>,
+    #[serde(default)]
+    pub kfm_transition: Option<AuthoredKfmTransition>,
     pub authored_animation_attributes: Vec<AuthoredAnimationAttribute>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct AuthoredKfmTransition {
+    pub kind: KfmTransitionKind,
+    pub duration: std::time::Duration,
+    pub text_key_pairs: Vec<[Option<String>; 2]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum KfmTransitionKind {
+    Blend,
+    Morph,
+    Chain,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]

@@ -42,8 +42,9 @@ pub(in crate::ui_document) async fn lower(
         plan_selected_ui_source_dependency_winners_and_image_dimensions(&documents, archives);
     let rail_cameras =
         lower_rail_camera_documents_to_scene_prefab_documents(&documents, source_path)?;
+    let source_documents = documents;
     let documents = lower_selected_ui_source_documents_to_canonical_result_documents(
-        &documents,
+        &source_documents,
         dependencies,
         source_path,
     )
@@ -53,8 +54,16 @@ pub(in crate::ui_document) async fn lower(
             format!("{}: {}", gap.virtual_path, gap.message),
         )
     })?;
+    let fame_stars =
+        resolver::gameplay_mode_ui_presentation_source_parsing::load_authored_fame_star_display(
+            &source_documents,
+            &documents,
+            context,
+        )
+        .await?;
     Ok(LoweredUiDocumentAndRailCameraAssets {
         documents,
         rail_cameras,
+        fame_stars,
     })
 }

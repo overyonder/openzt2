@@ -63,6 +63,7 @@ impl SelectedUiSourceResolutionProfile {
                 // The zoo view is the original overhead mode.
                 (UiDocumentRole::InGameHud, "overheadmode".into()),
                 (UiDocumentRole::PhotoMode, "photomode".into()),
+                (UiDocumentRole::InGameHud, "firstpersonmode".into()),
             ],
             role_surfaces: vec![
                 (UiDocumentRole::ProfileSelect, "profile_manager_dialog".into()),

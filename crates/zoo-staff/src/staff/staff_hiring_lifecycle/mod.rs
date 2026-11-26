@@ -1,5 +1,9 @@
 use avian3d::prelude::RigidBody;
 use bevy::{gltf::Gltf, platform::collections::HashSet, prelude::*};
+use openzt2_game_assets::localization::{
+    localization_asset_types::LocalizationAsset,
+    localization_precedence_index::LocalizationPrecedenceIndex,
+};
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -12,7 +16,7 @@ use openzt2_zoo_state::economy::account_transaction_types::{
     Account, TransactionCompleted, TransactionKind, TransactionRejected, TransactionRequest,
 };
 use openzt2_zoo_state::economy::money_types::Money;
-use openzt2_zoo_state::person_name_selection_and_resolution::choose_generated_person_name_rows_from_authored_pool;
+use openzt2_zoo_state::person_name_selection_and_resolution::select_authored_person_name;
 
 use super::{
     staff_employment_types::{Employment, Staff, StaffRole},
@@ -125,6 +129,8 @@ pub(super) fn spawn_paid_employees_from_ready_prefabs(
         ),
         With<HirePaid>,
     >,
+    localization: Option<Res<LocalizationPrecedenceIndex>>,
+    localization_assets: Option<Res<Assets<LocalizationAsset>>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
@@ -137,6 +143,10 @@ pub(super) fn spawn_paid_employees_from_ready_prefabs(
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
+    let localization = localization
+        .as_deref()
+        .zip(localization_assets.as_deref())
+        .and_then(|(index, assets)| index.borrow_loaded_localization_view(assets));
     for (operation, pending, member, identity) in &mut pending {
         let hire = pending.hire;
         let Some(role) = catalogue.find_staff(hire.role) else {
@@ -171,21 +181,16 @@ pub(super) fn spawn_paid_employees_from_ready_prefabs(
         let variant = staff_presentation_variant(role, identifier.0, catalogue)
             .filter(|(_, drawn_body)| drawn_body.id() == pending.body.id())
             .map(|(variant, _)| variant);
-        let name = variant
-            .and_then(|variant| {
-                choose_generated_person_name_rows_from_authored_pool(
-                    catalogue,
-                    variant.name_pool,
-                    identifier.0,
-                )
-            })
-            .or_else(|| {
-                choose_generated_person_name_rows_from_authored_pool(
-                    catalogue,
-                    role.name_pool,
-                    identifier.0,
-                )
-            });
+        let name = localization.and_then(|localization| {
+            select_authored_person_name(
+                localization,
+                variant
+                    .map(|variant| variant.name_pool)
+                    .into_iter()
+                    .chain([role.name_pool]),
+                identifier.0,
+            )
+        });
         let employee = spawn_loaded_scene_prefab_as_world_instance(
             &mut commands,
             prefab,
@@ -224,7 +229,7 @@ pub(super) fn spawn_paid_employees_from_ready_prefabs(
             },
         ));
         if let Some(name) = name {
-            employee_commands.insert(name);
+            employee_commands.insert_if_new(name);
         }
         hired.write(StaffHired {
             staff: employee,

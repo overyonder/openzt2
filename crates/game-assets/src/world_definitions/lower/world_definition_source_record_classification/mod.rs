@@ -155,6 +155,14 @@ pub(super) fn classify_world_definition_source_record(
         ("bflocalemgr", WorldDefinitionSourceRecordKind::Container),
         ("ztmainmode", WorldDefinitionSourceRecordKind::Container),
         (
+            "ztguestviewmode",
+            WorldDefinitionSourceRecordKind::ImmersiveModePolicy,
+        ),
+        (
+            "ztfirstpersonmode",
+            WorldDefinitionSourceRecordKind::ImmersiveModePolicy,
+        ),
+        (
             "ztphotomode",
             WorldDefinitionSourceRecordKind::ImmersiveModePolicy,
         ),

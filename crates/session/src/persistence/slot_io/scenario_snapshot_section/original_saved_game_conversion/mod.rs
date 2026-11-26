@@ -2,10 +2,7 @@ use std::io;
 
 use bevy::prelude::*;
 use openzt2_game_assets::{
-    lua_script::{
-        lua_script_archive_path_index::LuaScriptArchivePathIndex,
-        lua_script_asset_loading::LuaScriptAsset,
-    },
+    lua_script::{lua_script_asset_loading::LuaScriptAsset, lua_script_sources::LuaScriptSources},
     source_document::ordered_source_document_types::OrderedSourceDocumentNode,
     world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
 };
@@ -22,7 +19,7 @@ pub(in crate::persistence::slot_io) fn read_original_saved_scenario_snapshot(
     bindings: &[ScenarioScriptBinding],
     document: bevy::asset::AssetId<WorldScenarioDocumentAsset>,
     scripts: &Assets<LuaScriptAsset>,
-    script_index: &LuaScriptArchivePathIndex,
+    script_sources: &LuaScriptSources,
     activation_tick: u64,
     mut allocate_identifier: impl FnMut() -> io::Result<u64>,
 ) -> io::Result<ScenarioSnapshot> {
@@ -75,7 +72,7 @@ pub(in crate::persistence::slot_io) fn read_original_saved_scenario_snapshot(
         &overlay,
         document,
         scripts,
-        script_index,
+        script_sources,
     )
     .map_err(|error| {
         invalid(format!(

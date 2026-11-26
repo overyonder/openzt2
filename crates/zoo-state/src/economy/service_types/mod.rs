@@ -1,20 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ServiceOperation {
-    pub service: AssetId,
-    pub inventory_units: u16,
-    pub phase: ServicePhase,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ServicePhase {
-    Timing(u32),
-    AwaitingPayment,
-    Completed,
-}
-
 #[derive(Component)]
 #[relationship(relationship_target = ServiceReservation)]
 pub struct ServiceCustomer(pub Entity);

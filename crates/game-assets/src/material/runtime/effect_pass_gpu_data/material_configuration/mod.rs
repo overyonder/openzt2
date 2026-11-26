@@ -1,7 +1,8 @@
 //! Texture, terrain-decal and world-light configuration.
 
 use super::{
-    uniform_buffer_upload::shader_buffer_from_uniform_value, EffectPassMaterial,
+    uniform_buffer_upload::shader_buffer_from_uniform_value, D3d9FixedFunctionWorldLightContexts,
+    D3d9ScopedPrefabLight, EffectPassMaterial, D3D9_MAX_ACTIVE_DIRECTIONAL_LIGHTS,
     FIXED_FUNCTION_SHADER,
 };
 use bevy::{
@@ -16,6 +17,24 @@ use bevy::{
 };
 
 impl EffectPassMaterial {
+    pub fn bind_d3d9_boolean_effect_semantic(&mut self, semantic: &str, value: bool) -> bool {
+        let Some(faces) = self.camera_containment_cull_faces else {
+            return false;
+        };
+        let bit = if semantic.eq_ignore_ascii_case("CameraContainedCCW") {
+            1
+        } else if semantic.eq_ignore_ascii_case("CameraContainedCW") {
+            2
+        } else {
+            return false;
+        };
+        self.camera_containment_flags =
+            (self.camera_containment_flags & !bit) | if value { bit } else { 0 };
+        let next = faces[usize::from(self.camera_containment_flags)];
+        let previous = std::mem::replace(&mut self.pipeline_specialization_key.cull_face, next);
+        previous != next
+    }
+
     /// Installs the opacity lane on a material owned by one fading draw.
     pub fn configure_for_morph_fade(&mut self) {
         let pipeline = &mut self.pipeline_specialization_key;
@@ -483,6 +502,38 @@ impl EffectPassMaterial {
         Some(coloured)
     }
 
+    pub fn bind_scoped_prefab_lighting(
+        &mut self,
+        lights: &[D3d9ScopedPrefabLight],
+        draw_position: Vec3,
+        buffers: &mut Assets<ShaderBuffer>,
+    ) {
+        if self.pipeline_specialization_key.vertex_shader != FIXED_FUNCTION_SHADER {
+            return;
+        }
+        self.fixed_function.values[47].x = 0.0;
+        self.uniform_buffer_assets.fixed_function =
+            buffers.add(shader_buffer_from_uniform_value(&self.fixed_function));
+        self.texture_assets.fixed_function_world_lights = buffers.add(
+            shader_buffer_from_uniform_value(&scoped_lighting_context(lights, draw_position)),
+        );
+    }
+
+    pub fn update_scoped_prefab_lighting(
+        &self,
+        lights: &[D3d9ScopedPrefabLight],
+        draw_position: Vec3,
+        buffers: &mut Assets<ShaderBuffer>,
+    ) {
+        if self.pipeline_specialization_key.vertex_shader != FIXED_FUNCTION_SHADER {
+            return;
+        }
+        if let Some(mut buffer) = buffers.get_mut(&self.texture_assets.fixed_function_world_lights)
+        {
+            scoped_lighting_context(lights, draw_position).write_shader_buffer(&mut buffer);
+        }
+    }
+
     pub fn clone_with_fixed_function_world_lighting_context(
         &self,
         lighting_override: Option<bool>,
@@ -565,4 +616,48 @@ pub(in crate::material::runtime) fn fixed_function_ambient_colour_from_argb(argb
         (argb & 255) as f32,
         (argb >> 24) as f32,
     ) / 255.0
+}
+
+fn scoped_lighting_context(
+    lights: &[D3d9ScopedPrefabLight],
+    draw_position: Vec3,
+) -> D3d9FixedFunctionWorldLightContexts {
+    let mut contexts = D3d9FixedFunctionWorldLightContexts::default();
+    let registers = &mut contexts.values[0];
+    let mut ambient = Vec3::ZERO;
+    let mut count = 0;
+    for &light in lights {
+        let (direction, color) = match light {
+            D3d9ScopedPrefabLight::Ambient { color } => {
+                ambient += color;
+                continue;
+            }
+            D3d9ScopedPrefabLight::Directional {
+                direction_to_light,
+                color,
+            } => (direction_to_light, color),
+            D3d9ScopedPrefabLight::Point {
+                position,
+                color,
+                range,
+                attenuation: [constant, linear, quadratic],
+            } => {
+                let offset = position - draw_position;
+                let distance = offset.length();
+                let denominator = constant + linear * distance + quadratic * distance * distance;
+                if (range > 0.0 && distance > range) || denominator <= 0.0 {
+                    continue;
+                }
+                (offset.normalize_or_zero(), color / denominator)
+            }
+        };
+        if count == D3D9_MAX_ACTIVE_DIRECTIONAL_LIGHTS {
+            continue;
+        }
+        registers.directional_light_directions[count] = direction.extend(0.0);
+        registers.directional_light_colors[count] = color.extend(0.0);
+        count += 1;
+    }
+    registers.ambient_color_and_directional_light_count = ambient.extend(count as f32);
+    contexts
 }

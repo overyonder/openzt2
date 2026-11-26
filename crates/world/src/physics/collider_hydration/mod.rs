@@ -103,6 +103,9 @@ pub fn hydrate_scene_prefab_colliders_into_avian_physics(
                     let points: Vec<_> = points_m.iter().copied().map(Vec3::from_array).collect();
                     Collider::convex_hull(&points)
                 }
+                PrefabColliderSource::HalfSpace { normal } => {
+                    Some(Collider::half_space(Vec3::from_array(*normal)))
+                }
                 PrefabColliderSource::Model { model, index } => {
                     let model = prefab
                         .loaded_model_asset_handle(*model)

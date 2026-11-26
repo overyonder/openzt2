@@ -1,7 +1,9 @@
 //! Construction, placement, terrain, biome, fence, path, track, and tank-editing actions.
 
 use super::UiTrigger;
-use crate::world_definitions::biomes_locations_and_details::BiomeAutomaticPlacementVariationKind;
+use crate::world_definitions::biomes_locations_and_details::{
+    BiomeAutomaticPlacementRange, BiomeAutomaticPlacementVariationKind,
+};
 use crate::AssetId;
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +40,9 @@ pub enum UiConstructionAction {
     },
     SetBiomePaintTrees {
         enabled: bool,
+    },
+    SetBiomeAutomaticPlacementTable {
+        ranges: Vec<BiomeAutomaticPlacementRange>,
     },
     SetBiomeAutomaticPlacementVariation {
         variation: BiomeAutomaticPlacementVariationKind,

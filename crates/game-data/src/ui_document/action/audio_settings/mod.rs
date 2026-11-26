@@ -15,6 +15,7 @@ pub struct UiAudioSettingActionRecord {
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiAudioSettingAction {
+    SetEightBitSound(bool),
     SetMasterVolume,
     SetMusicVolume,
     SetTwoDimensionalVolume,

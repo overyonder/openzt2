@@ -70,6 +70,7 @@ impl AssetLoader for UiDocumentAssetLoader {
                 )
             })?;
         }
+        let mut fame_stars = lowered_ui_assets.fame_stars;
         let mut canonical_ui_documents = lowered_ui_assets.documents.into_iter();
         let root_ui_document = canonical_ui_documents.next().ok_or_else(|| {
             io::Error::new(
@@ -94,9 +95,13 @@ impl AssetLoader for UiDocumentAssetLoader {
             .map(|(label, document)| (document.id, label.clone()))
             .collect::<BTreeMap<_, _>>();
         for (label, document) in labeled_documents {
+            let stars = (document.role == UiDocumentRole::InGameHud)
+                .then(|| fame_stars.take())
+                .flatten();
             load_context.labeled_asset_scope(label, |context| {
                 Ok::<_, io::Error>(create_ui_document_asset_and_load_typed_dependencies(
                     document,
+                    stars,
                     &fragment_labels,
                     context,
                 ))
@@ -104,6 +109,7 @@ impl AssetLoader for UiDocumentAssetLoader {
         }
         Ok(create_ui_document_asset_and_load_typed_dependencies(
             root_ui_document,
+            fame_stars,
             &fragment_labels,
             load_context,
         ))

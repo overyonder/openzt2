@@ -24,9 +24,9 @@ use openzt2_zoo_state::{
 };
 
 use super::show_timing_operations::{
-    RunningShowPhaseTimer, convert_authored_nanoseconds_to_fixed_simulation_ticks,
+    convert_authored_nanoseconds_to_fixed_simulation_ticks, RunningShowPhaseTimer,
 };
-use super::{ShowMixerTimeSlot, ShowMixerWait, scheduled_trick_execution::ShowTrickTokens};
+use super::{scheduled_trick_execution::ShowTrickTokens, ShowMixerTimeSlot, ShowMixerWait};
 
 #[derive(Component)]
 pub(super) struct ShowRunSlotOrder(Vec<Vec<Entity>>);
@@ -156,7 +156,6 @@ pub(super) fn start_next_stage_show_or_break(
                 ShowColumnWait(Timer::new(std::time::Duration::ZERO, TimerMode::Once)),
                 RunningShow {
                     phase,
-                    remaining_ticks: 0,
                     current_slot: 0,
                     trick_score: 0.0,
                     stars: 0.0,

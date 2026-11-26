@@ -4,13 +4,16 @@ use bevy::ecs::system::SystemParam;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use openzt2_game_assets::effect::explicit_particle_emission::ParticleEffectPointEmitter;
+use openzt2_game_assets::effect::explicit_particle_emission::{
+    ParticleAliveCount, ParticleSpawnBatch,
+};
 use openzt2_game_assets::effect::particle_wave_surface::ParticleEffectWaveSurface;
 use openzt2_game_assets::effect::ParticleEffectDocumentAsset;
 use openzt2_game_assets::graphics_settings_types::{FourLevelGraphicsDetail, GraphicsSettings};
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_world_state::simulation_time::native_visual_random_stream::NativeVisualRandomStream;
 use openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::{
-    NativeTerrainWaterGeometricWaveShaderState, WaterSurfaceWakeSample, WaterWakePresentationPath,
+    TerrainWaterWaveRegisters, WaterSurfaceWakeSample, WaterWakePresentationPath,
 };
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
     TerrainWaterMembershipIndex, TerrainWaterRegionQuery, TerrainWaterRegionView,
@@ -32,7 +35,7 @@ pub(in crate::terrain) struct WaterWakeMeshParticle;
 pub(crate) fn update_water_wake_wave_uniforms(
     regions: TerrainWaterRegionQuery,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    waves: Query<&NativeTerrainWaterGeometricWaveShaderState>,
+    waves: Query<&TerrainWaterWaveRegisters>,
     groups: Query<&ChildOf, With<WaterWakeEmission>>,
     mut particles: Query<(&ChildOf, &mut ParticleEffectWaveSurface), With<WaterWakeMeshParticle>>,
 ) {
@@ -87,8 +90,17 @@ pub(in crate::terrain) struct WaterWakePresentation<'w, 's> {
     random: ResMut<'w, NativeVisualRandomStream>,
     region_children: Query<'w, 's, &'static Children>,
     emissions: Query<'w, 's, (&'static WaterWakeEmission, Option<&'static Children>)>,
-    particles: Query<'w, 's, &'static ParticleEffectPointEmitter, With<WaterWakeMeshParticle>>,
-    waves: Query<'w, 's, &'static NativeTerrainWaterGeometricWaveShaderState>,
+    particles: Query<
+        'w,
+        's,
+        (
+            &'static ParticleEffectPointEmitter,
+            &'static ParticleAliveCount,
+            &'static ParticleSpawnBatch,
+        ),
+        With<WaterWakeMeshParticle>,
+    >,
+    waves: Query<'w, 's, &'static TerrainWaterWaveRegisters>,
 }
 
 pub(crate) fn present_water_wake_samples(mut state: WaterWakePresentation) {
@@ -193,10 +205,12 @@ fn present_routed_water_wake_samples<const HIGH: bool>(
                         count.nearby_origins.push(emission.source_position);
                     }
                     if let Some(children) = children {
-                        for particle in particles.iter_many(children.iter()).flatten() {
-                            count.particle_count = count
-                                .particle_count
-                                .saturating_add(particle.sampled_live_count().unwrap_or(1));
+                        for (particle, sample, batch) in
+                            particles.iter_many(children.iter()).flatten()
+                        {
+                            count.particle_count = count.particle_count.saturating_add(
+                                particle.sampled_live_count(sample, batch).unwrap_or(1),
+                            );
                         }
                     }
                 }

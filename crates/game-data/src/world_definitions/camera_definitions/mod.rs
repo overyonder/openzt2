@@ -60,4 +60,33 @@ pub struct CameraTuningDefinition {
     /// Cameras without a first-person ground fit leave this at zero.
     #[serde(default)]
     pub ground_acceleration_mps2: f32,
+    #[serde(default)]
+    pub first_person_motion: Option<FirstPersonCameraMotion>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct FirstPersonCameraMotion {
+    pub stand_height_m: f32,
+    pub crouch_height_m: f32,
+    pub jump_velocity_mps: f32,
+    pub gravity_mps2: f32,
+    pub push_force: f32,
+    pub dive_angle_radians: f32,
+    pub height_offset_m: f32,
+    pub fit_radius_m: f32,
+    pub water_offset_m: f32,
+    pub underwater_offset_m: f32,
+    pub no_underwater_gravity: bool,
+    pub float_on_water: bool,
+    pub can_go_underwater: bool,
+    pub land: FirstPersonSurfaceMotion,
+    pub on_water: FirstPersonSurfaceMotion,
+    pub underwater: FirstPersonSurfaceMotion,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct FirstPersonSurfaceMotion {
+    pub speed_multiplier: f32,
+    pub damping_per_second: f32,
+    pub max_acceleration_mps2: f32,
 }

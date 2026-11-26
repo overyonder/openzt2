@@ -140,7 +140,7 @@ fn edited_water_world() -> (World, Entity, Handle<TerrainAsset>) {
             WorldMember { root },
             TerrainChunk {
                 source_coord: IVec2::ZERO,
-                coord: IVec2::ZERO,
+                coord: IVec2::NEG_Y,
                 asset: handle.clone(),
                 origin: Vec2::new(0.0, -16.0),
                 spacing_m: 1.0,
@@ -158,8 +158,8 @@ fn edited_water_world() -> (World, Entity, Handle<TerrainAsset>) {
         ))
         .id();
     world.entity_mut(root).insert(TerrainIndex {
-        chunks: [(IVec2::ZERO, chunk)].into(),
-        origin: Vec2::new(0.0, -16.0),
+        chunks: [(IVec2::NEG_Y, chunk)].into(),
+        origin: Vec2::ZERO,
         chunk_span_m: 16.0,
     });
     (world, chunk, handle)
@@ -193,6 +193,18 @@ fn set_affiliations(
         .unwrap()
         .water_affiliations
         .fill(affiliation);
+    send_terrain_change(world, chunk, false);
+}
+
+fn send_terrain_change(world: &mut World, chunk: Entity, ground_height_changed: bool) {
+    let max = UVec2::splat(u32::from(world.get::<TerrainChunk>(chunk).unwrap().side) - 1);
+    world.write_message(TerrainChanged {
+        transaction: chunk,
+        chunk,
+        min: UVec2::ZERO,
+        max,
+        ground_height_changed,
+    });
 }
 
 #[test]
@@ -213,12 +225,14 @@ fn live_water_and_ground_edits_supersede_saved_region_membership() {
         .unwrap()
         .heights_cm
         .fill(200);
+    send_terrain_change(&mut world, chunk, true);
     assert_eq!(on_land(&mut world, point), Some(true));
     world
         .get_mut::<EditedTerrainSamples>(chunk)
         .unwrap()
         .heights_cm
         .fill(0);
+    send_terrain_change(&mut world, chunk, true);
     assert_eq!(on_land(&mut world, point), Some(false));
     set_affiliations(&mut world, chunk, None);
     assert_eq!(on_land(&mut world, point), Some(true));
@@ -305,6 +319,7 @@ fn scene_caustic_target_follows_water_height_and_reparented_bounds() {
     let terrain = assets.add(saved_water_asset());
     app.insert_resource(assets)
         .add_message::<AssetEvent<TerrainAsset>>()
+        .add_message::<crate::terrain::water_regions::authored_membership::TerrainWaterMembershipChanged>()
         .add_systems(Update, project_scene_caustic_targets);
     let owner = app
         .world_mut()

@@ -12,10 +12,10 @@ use crate::source_document::ordered_source_document_types::OrderedSourceDocument
 use crate::source_document::resolved_source_record_index::{BindError, RecordView};
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use openzt2_game_data::world_definitions::camera_definitions::{
-    CameraProjectionKind, CameraTuningDefinition,
+    CameraProjectionKind, CameraTuningDefinition, FirstPersonCameraMotion, FirstPersonSurfaceMotion,
 };
 use openzt2_game_data::world_definitions::immersive_mode_policy::{
-    ImmersiveModeActionFlags, ImmersiveModeKind, ImmersiveModePolicy,
+    FirstPersonModeMovement, ImmersiveModeActionFlags, ImmersiveModeKind, ImmersiveModePolicy,
 };
 use openzt2_game_data::AssetId;
 
@@ -23,10 +23,8 @@ pub(super) fn bind_immersive_mode_policy(
     record: &RecordView<'_, '_>,
     output: &mut WorldDefinitionLoweringTables,
 ) -> Result<(), BindError> {
-    if matches!(
-        canonicalize_source_document_record_key(&record.semantic_type()).as_str(),
-        "ztphotomode" | "ztsuperstaffmode"
-    ) {
+    let source_kind = canonicalize_source_document_record_key(&record.semantic_type());
+    if matches!(source_kind.as_str(), "ztphotomode" | "ztsuperstaffmode") {
         return bind_nested_authored_first_person_child_policy(record, output);
     }
 
@@ -35,6 +33,14 @@ pub(super) fn bind_immersive_mode_policy(
     const LOCK_SUBJECT: u8 = 1 << 2;
     const RETURN_CAMERA_ON_EXIT: u8 = 1 << 3;
 
+    let mode = match source_kind.as_str() {
+        "ztguestviewmode" => ImmersiveModeKind::GuestView,
+        "ztfirstpersonmode" => ImmersiveModeKind::FirstPerson,
+        _ => immersive_mode_kind(required(record, &["mode", "modeKind"])?)?,
+    };
+    let first_person_movement = (mode == ImmersiveModeKind::FirstPerson)
+        .then(|| first_person_movement(record, record))
+        .transpose()?;
     let lifecycle_flags = flags(
         record.value(&["flags", "modeFlags"]),
         immersive_mode_lifecycle_flag,
@@ -44,18 +50,36 @@ pub(super) fn bind_immersive_mode_policy(
         .immersive_mode_policies
         .push(ImmersiveModePolicy {
             id: id(record.key),
-            mode: immersive_mode_kind(required(record, &["mode", "modeKind"])?)?,
-            allowed_actions: ImmersiveModeActionFlags::from_raw_flag_bits(flags(
-                record.value(&["allowedActions", "actions"]),
-                immersive_mode_action,
-            )? as u32)
-            .ok_or_else(|| {
-                BindError::record(record, "immersive-mode actions contain unknown flag bits")
-            })?,
+            mode,
+            allowed_actions: if source_kind == "ztguestviewmode" {
+                ImmersiveModeActionFlags::LOOK
+                    .with_additional_flags(ImmersiveModeActionFlags::CANCEL)
+            } else if source_kind == "ztfirstpersonmode" {
+                ImmersiveModeActionFlags::LOOK
+                    .with_additional_flags(ImmersiveModeActionFlags::MOVE_FORWARD)
+                    .with_additional_flags(ImmersiveModeActionFlags::MOVE_BACK)
+                    .with_additional_flags(ImmersiveModeActionFlags::STRAFE_LEFT)
+                    .with_additional_flags(ImmersiveModeActionFlags::STRAFE_RIGHT)
+                    .with_additional_flags(ImmersiveModeActionFlags::CANCEL)
+            } else {
+                ImmersiveModeActionFlags::from_raw_flag_bits(flags(
+                    record.value(&["allowedActions", "actions"]),
+                    immersive_mode_action,
+                )? as u32)
+                .ok_or_else(|| {
+                    BindError::record(record, "immersive-mode actions contain unknown flag bits")
+                })?
+            },
             interaction_cursor: asset(record, &["cursor"]),
             interaction_prefab: asset(record, &["prefab", "toolPrefab"]),
+            guest_navigation_marker: asset(record, &["tagFile"]),
+            guest_ground_cursor: asset(record, &["groundCursor"]),
+            first_person_movement,
             camera: asset(record, &["camera"]),
-            restore_camera_on_exit: lifecycle_flags & RETURN_CAMERA_ON_EXIT != 0,
+            restore_camera_on_exit: matches!(
+                source_kind.as_str(),
+                "ztguestviewmode" | "ztfirstpersonmode"
+            ) || lifecycle_flags & RETURN_CAMERA_ON_EXIT != 0,
             pause_simulation: lifecycle_flags & PAUSE_SIMULATION != 0,
             hide_hud: lifecycle_flags & HIDE_HUD != 0,
             lock_subject: lifecycle_flags & LOCK_SUBJECT != 0,
@@ -107,6 +131,9 @@ fn bind_nested_authored_first_person_child_policy(
             // neither names a world cursor or interaction prefab.
             interaction_cursor: AssetId::default(),
             interaction_prefab: AssetId::default(),
+            guest_navigation_marker: AssetId::default(),
+            guest_ground_cursor: AssetId::default(),
+            first_person_movement: Some(first_person_movement(record, &first_person_parent_mode)?),
             camera: asset(&first_person_parent_mode, &["camera"]),
             // Both children share the first-person camera parent. The overhead
             // camera-set toggle returns to the previously captured overhead pose.
@@ -126,6 +153,37 @@ fn bind_nested_authored_first_person_child_policy(
             },
         });
     Ok(())
+}
+
+fn first_person_movement(
+    mode: &RecordView<'_, '_>,
+    parent: &RecordView<'_, '_>,
+) -> Result<FirstPersonModeMovement, BindError> {
+    let turn = number_or(parent, &["turnSpeed"], 0.4)?;
+    let forward_pan = mode.descendant_named("ZTFirstPersonPan");
+    let primary_pointer_pan = forward_pan.and_then(|pan| {
+        let number = |name| {
+            pan.attribute(name).and_then(|value| {
+                parse_blue_fang_source_numeric_lexeme::<f32>(value.trim_end_matches(['f', 'F']))
+            })
+        };
+        Some([number("x")?, number("y")?])
+    });
+    Ok(FirstPersonModeMovement {
+        move_speed_mps: number_or(
+            mode,
+            &["moveSpeed"],
+            number_or(parent, &["moveSpeed"], 5.0)?,
+        )?,
+        keyboard_rotate_speed_rps: number_or(
+            mode,
+            &["keyboardRotateSpeed"],
+            number_or(parent, &["keyboardRotateSpeed"], 3.0)?,
+        )?,
+        turn_speed_out_rps: number_or(mode, &["turnSpeedOut", "turnSpeed"], turn)?,
+        turn_speed_in_rps: number_or(mode, &["turnSpeedIn", "turnSpeed"], turn)?,
+        primary_pointer_pan,
+    })
 }
 
 pub(super) fn bind_camera(
@@ -220,6 +278,7 @@ pub(super) fn bind_camera(
         zoom_speed_sample_count: 0,
         sub_zero_zoom_multiplier: 1.0,
         ground_acceleration_mps2: 0.0,
+        first_person_motion: None,
     });
     Ok(())
 }
@@ -305,6 +364,54 @@ fn bind_perspective_camera(
         })
         .map(|metres| (metres * 100.0).round() as u16)
         .unwrap_or(0);
+    let first_person_motion = if first_person_camera.is_some() {
+        let flag = |element: Option<&OrderedSourceDocumentNode>, name| {
+            element.and_then(|element| element.attribute_named_any(&[name]))
+                .and_then(crate::source_document::ui::parser::source_scalar_and_attribute_reading::parse_source_bool)
+                .unwrap_or(false)
+        };
+        let surface = |speed,
+                       damping,
+                       acceleration,
+                       default_acceleration|
+         -> Result<FirstPersonSurfaceMotion, BindError> {
+            Ok(FirstPersonSurfaceMotion {
+                speed_multiplier: number_or(ground_fit, speed, 1.0)?,
+                damping_per_second: number_or(ground_fit, damping, -50.0)?,
+                max_acceleration_mps2: number_or(ground_fit, acceleration, default_acceleration)?,
+            })
+        };
+        Some(FirstPersonCameraMotion {
+            stand_height_m: stand_height,
+            crouch_height_m: number_or(first_person_camera, "crouchHeight", 0.7)?,
+            jump_velocity_mps: number_or(controls, "jumpVelocity", 0.0)?,
+            gravity_mps2: number_or(controls, "gravitySpeed", 20.0)?,
+            push_force: number_or(controls, "pushForce", 0.0)?,
+            dive_angle_radians: number_or(controls, "diveAngle", 0.6)?,
+            no_underwater_gravity: flag(controls, "noUnderwaterGravity"),
+            height_offset_m: number_or(ground_fit, "heightOffset", stand_height)?,
+            fit_radius_m: number_or(ground_fit, "fitRadius", 0.0)?,
+            float_on_water: flag(ground_fit, "floatOnWater"),
+            can_go_underwater: flag(ground_fit, "canGoUnderwater"),
+            water_offset_m: number_or(ground_fit, "waterOffset", 0.0)?,
+            underwater_offset_m: number_or(ground_fit, "underwaterOffset", 0.0)?,
+            land: surface("landMoveMod", "landDampeningRate", "landMaxAccel", 150.0)?,
+            on_water: surface(
+                "waterMoveMod",
+                "onWaterDampeningRate",
+                "onWaterMaxAccel",
+                17.0,
+            )?,
+            underwater: surface(
+                "underWaterMoveMod",
+                "underWaterDampeningRate",
+                "underWaterMaxAccel",
+                2.0,
+            )?,
+        })
+    } else {
+        None
+    };
     output.document.cameras.push(CameraTuningDefinition {
         id: id(record.key),
         projection: CameraProjectionKind::Perspective,
@@ -356,6 +463,7 @@ fn bind_perspective_camera(
         zoom_speed_sample_count: 0,
         sub_zero_zoom_multiplier: 1.0,
         ground_acceleration_mps2: number_or(ground_fit, "landMaxAccel", 0.0)?,
+        first_person_motion,
     });
     Ok(())
 }
@@ -466,6 +574,7 @@ pub(super) fn bind_overhead_camera(
         zoom_speed_sample_count,
         sub_zero_zoom_multiplier: number(camera, "subZeroZoomMultiplier")?,
         ground_acceleration_mps2: 0.0,
+        first_person_motion: None,
     });
     Ok(())
 }

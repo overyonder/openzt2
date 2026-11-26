@@ -267,7 +267,7 @@ impl Plugin for GameUiPlugin {
                         slider::apply_slider_bounds,
                         slider::apply_authored_slider_pointer_events
                             .after(active_authored_ui_context::resolve_authored_focus_scope)
-                            .run_if(on_message::<PointerPress>.or(on_message::<PointerDrag>)),
+                            .run_if(on_message::<PointerPress>.or_eager(on_message::<PointerDrag>)),
                         slider::adjust_focused_sliders
                             .run_if(on_message::<ActionRequest>)
                             .after(authored_ui_focus_navigation_and_activation::update_active_authored_focus)
@@ -319,6 +319,7 @@ impl Plugin for GameUiPlugin {
                 Update,
                 (
                     animation::tick_authored_ui_animations,
+                    authored_text_edit_bevy_adaptation::update_authored_text_edit_watchers,
                     authored_ui_presentation_action_application::presentation_batch::apply_ordered_presentation_batches
                         .after(animation::tick_authored_ui_animations),
                     projection::ui_document_opening::apply_authored_ui_document_opening_operations

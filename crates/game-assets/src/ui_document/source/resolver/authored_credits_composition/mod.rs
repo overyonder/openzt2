@@ -149,6 +149,7 @@ mod tests {
             image_selections: Vec::new(),
             interaction_cursors: None,
             placement_preview: None,
+            edge_pan_source_child: None,
             role_targets: BTreeMap::new(),
             resolved_dependencies: Default::default(),
         })?;

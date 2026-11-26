@@ -124,8 +124,15 @@ pub(super) fn select_idle_guest_tasks(
     ),
     (paths, viewable_animals, presentations, controllers, stations, circuits): (
         Query<(Entity, &GlobalTransform, &WorldMember, &PathTile)>,
-        Query<(&GlobalTransform, &Visibility, &WorldMember,
-            &openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle), (With<Animal>, With<HabitatMember>)>,
+        Query<
+            (
+                &GlobalTransform,
+                &Visibility,
+                &WorldMember,
+                &openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle,
+            ),
+            (With<Animal>, With<HabitatMember>),
+        >,
         Query<&AnimationPresentations>,
         Query<
             (),
@@ -134,11 +141,19 @@ pub(super) fn select_idle_guest_tasks(
                 With<AnimationGraphPlaybackState>,
             ),
         >,
-        Query<(Entity, &GlobalTransform, &WorldMember,
-            &openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember),
-            With<openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation>>,
-        Query<(&openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit,
-            Option<&openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitRunning>)>,
+        Query<
+            (
+                Entity,
+                &GlobalTransform,
+                &WorldMember,
+                &openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember,
+            ),
+            With<openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation>,
+        >,
+        Query<(
+            &openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit,
+            Option<&openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitRunning>,
+        )>,
     ),
     mut commands: Commands,
 ) {
@@ -197,14 +212,22 @@ pub(super) fn select_idle_guest_tasks(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let mut viewable_species = bevy::ecs::entity::EntityHashMap::<bevy::platform::collections::HashSet<AssetId>>::default();
+    let mut viewable_species = bevy::ecs::entity::EntityHashMap::<
+        bevy::platform::collections::HashSet<AssetId>,
+    >::default();
     if let Some(viewing) = definitions.guest_viewing() {
         for (animal, visibility, member, species) in &viewable_animals {
-            if *visibility != Visibility::Hidden && viewing_paths.iter().any(|(_, point, root, _)| {
-                *root == member.root && point.xz().distance_squared(animal.translation().xz())
-                    <= viewing.ground_range_m.powi(2)
-            }) {
-                viewable_species.entry(member.root).or_default().insert(species.species);
+            if *visibility != Visibility::Hidden
+                && viewing_paths.iter().any(|(_, point, root, _)| {
+                    *root == member.root
+                        && point.xz().distance_squared(animal.translation().xz())
+                            <= viewing.ground_range_m.powi(2)
+                })
+            {
+                viewable_species
+                    .entry(member.root)
+                    .or_default()
+                    .insert(species.species);
             }
         }
     }
@@ -340,13 +363,21 @@ pub(super) fn select_idle_guest_tasks(
             else {
                 continue;
             };
-            let leaves_zoo = task.scores.iter().any(|score| matches!(
-                score, openzt2_game_data::behavior::score::BehaviorScore::LeaveZooPressure
-            ));
+            let leaves_zoo = task.scores.iter().any(|score| {
+                matches!(
+                    score,
+                    openzt2_game_data::behavior::score::BehaviorScore::LeaveZooPressure
+                )
+            });
             if leaves_zoo && departure_points.is_some_and(|points| points.0 > 0) && {
-                let observed = species_seen.map_or(0, |views| views.0.iter().filter(|(_, count)| *count != 0).count());
-                let required = viewable_species.get(&world.root).map_or(0, |species| species.len());
-                observed < required || (required != 0 && tour_gate.is_some_and(|tour| tour.threshold < tour.need))
+                let observed = species_seen.map_or(0, |views| {
+                    views.0.iter().filter(|(_, count)| *count != 0).count()
+                });
+                let required = viewable_species
+                    .get(&world.root)
+                    .map_or(0, |species| species.len());
+                observed < required
+                    || (required != 0 && tour_gate.is_some_and(|tour| tour.threshold < tour.need))
             } {
                 continue;
             }
@@ -463,18 +494,22 @@ pub(super) fn select_idle_guest_tasks(
                     }
                     return;
                 }
-                let score = if leaves_zoo { Some(1_000_000_000.0) } else { score_supported_behavior_task(
-                    task,
-                    policy.outside_range_need_value,
-                    transform.translation().distance(target_position),
-                    || biomes.at(world.root, target_position),
-                    source_need,
-                    |value| {
-                        price_effect.sample(value, Some(target), |upper| {
-                            random.0.range_u32(upper).unwrap_or_default()
-                        })
-                    },
-                ) };
+                let score = if leaves_zoo {
+                    Some(1_000_000_000.0)
+                } else {
+                    score_supported_behavior_task(
+                        task,
+                        policy.outside_range_need_value,
+                        transform.translation().distance(target_position),
+                        || biomes.at(world.root, target_position),
+                        source_need,
+                        |value| {
+                            price_effect.sample(value, Some(target), |upper| {
+                                random.0.range_u32(upper).unwrap_or_default()
+                            })
+                        },
+                    )
+                };
                 if diagnostics && target_definition.is_some() {
                     let needs = task
                         .scores
@@ -603,10 +638,14 @@ pub(super) fn select_idle_guest_tasks(
                 };
             if task.sensor_tag == Some(tour_attribute) {
                 for (station, pose, member, circuit) in &stations {
-                    if member.root == world.root && circuits.get(circuit.0)
-                        .is_ok_and(|(route, running)| !route.closed && running.is_none_or(|running| running.0))
+                    if member.root == world.root
+                        && circuits.get(circuit.0).is_ok_and(|(route, running)| {
+                            !route.closed && running.is_none_or(|running| running.0)
+                        })
                     {
-                        let object = targets.get(station).ok()
+                        let object = targets
+                            .get(station)
+                            .ok()
                             .and_then(|(_, name, ..)| definitions.find_object(name.0));
                         consider_with_held_items(station, object, None, None, pose.translation());
                     }
@@ -737,7 +776,8 @@ pub(super) fn select_idle_guest_tasks(
                 }
             }
         }
-        let Some(((document, declaration, task, target, object), score)) = ranking.finish(|| random.0.next_u32())
+        let Some(((document, declaration, task, target, object), score)) =
+            ranking.finish(|| random.0.next_u32())
         else {
             debug!(?guest, "idle guest found no task scoring above the minimum");
             continue;

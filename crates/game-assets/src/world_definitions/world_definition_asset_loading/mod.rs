@@ -3,14 +3,14 @@ use super::{
     world_definition_source_document_lowering::lower_resolved_world_definition_source_document_closure_to_canonical_document,
 };
 use crate::asset_source::{
+    archive_entry_asset_path::{archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION},
     AssetArchives,
-    archive_entry_asset_path::{ARCHIVE_ENTRY_ASSET_EXTENSION, archive_entry_asset_source_path},
 };
 use crate::source_document::{
     blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
 };
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
 use std::{io, path::Path, sync::Arc};

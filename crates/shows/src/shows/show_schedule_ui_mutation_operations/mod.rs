@@ -64,7 +64,7 @@ impl ShowScheduleEdits {
                 .flatten()
                 .into_iter()
                 .flat_map(RelationshipTarget::iter)
-                .filter_map(|row| Some((schedules.rows.get(row).ok()?.1.0, row)))
+                .filter_map(|row| Some((schedules.rows.get(row).ok()?.1 .0, row)))
                 .collect::<Vec<_>>();
             order.sort_unstable();
             order

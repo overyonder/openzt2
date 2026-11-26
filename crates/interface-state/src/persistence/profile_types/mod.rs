@@ -18,11 +18,12 @@ pub struct ProfileIndex {
 /// Settings loaded for `ProfileIndex::selected_profile_identifier`.
 ///
 /// `profile_identifier` identifies the profile for save-path and snapshot checks.
-#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Resource, Debug, Clone, PartialEq, Eq, Default)]
 pub struct ProfileOptions {
     pub profile_identifier: AssetId,
     pub locale_identifier: AssetId,
     pub controller_input_enabled: bool,
+    pub attributes: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]

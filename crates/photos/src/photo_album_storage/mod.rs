@@ -1,9 +1,9 @@
 //! Creation of default photo storage and deletion of stored photo entities.
 
-use openzt2_interface_state::photos::photo_album_types::DEFAULT_PHOTO_ALBUM_NAME_KEY;
 use openzt2_interface_state::photos::photo_album_types::DefaultPhotoAlbum;
 use openzt2_interface_state::photos::photo_album_types::DefaultPhotoAlbumStorageInitializedForWorld;
 use openzt2_interface_state::photos::photo_album_types::PhotoAlbum;
+use openzt2_interface_state::photos::photo_album_types::DEFAULT_PHOTO_ALBUM_NAME_KEY;
 use openzt2_interface_state::photos::photo_capture_types::Photo;
 
 use bevy::prelude::*;
@@ -22,8 +22,8 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use super::{
     photo_album_types::{
-        ActivePhotoAlbum, DeletePhotoRequest, INITIAL_PHOTO_ALBUM_SPREADS, PhotoAlbumCapacityPages,
-        PhotoAlbumPage, PhotoCameraRoll, WorldPhotoCameraRoll,
+        ActivePhotoAlbum, DeletePhotoRequest, PhotoAlbumCapacityPages, PhotoAlbumPage,
+        PhotoCameraRoll, WorldPhotoCameraRoll, INITIAL_PHOTO_ALBUM_SPREADS,
     },
     photo_capture_types::{PhotoCaptureFailed, PhotoFailure},
     photo_configuration::{PhotoConfiguration, PhotoConfigurationSource},

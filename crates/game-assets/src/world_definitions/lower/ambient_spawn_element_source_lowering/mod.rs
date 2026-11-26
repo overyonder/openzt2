@@ -15,9 +15,18 @@ pub(super) fn bind_ambient_element(
     output: &mut WorldDefinitionLoweringTables,
 ) -> Result<(), BindError> {
     let radius_cm = element_array(element, &["minimumRadiusCm", "maximumRadiusCm"], [0_u32; 2])?;
-    if radius_cm != [0, 0] {
-        return Err(simple_error("ambient spawn radius requires an origin"));
-    }
+    let spawn_origin_cm = if element
+        .attribute_named_any(&["originXCm", "originZCm"])
+        .is_some()
+    {
+        Some(element_array(
+            element,
+            &["originXCm", "originZCm"],
+            [0_i32; 2],
+        )?)
+    } else {
+        None
+    };
     let effect = element_asset(element, &["effect", "particle"]);
     if effect != AssetId::default() {
         return Err(simple_error(
@@ -58,6 +67,7 @@ pub(super) fn bind_ambient_element(
             [0_u32; 2],
         )?,
         radius_cm,
+        spawn_origin_cm,
         lifetime_ticks: element_array(
             element,
             &["minimumLifetimeTicks", "maximumLifetimeTicks"],

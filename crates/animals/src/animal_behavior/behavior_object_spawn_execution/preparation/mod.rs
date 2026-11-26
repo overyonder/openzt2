@@ -96,6 +96,7 @@ pub(super) fn prepare_behavior_object_spawns(
                     blend_duration_milliseconds: 0,
                     playback_speed_permille: 1000,
                     playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
+                    action_settings: None,
                 })
                 .id
         });

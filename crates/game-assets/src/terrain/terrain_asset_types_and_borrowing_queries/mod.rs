@@ -1,8 +1,8 @@
 //! Loaded canonical terrain data and its typed Bevy dependency handles.
 
-use std::{collections::HashMap, io};
+use std::io;
 
-use bevy::{audio::AudioSource, gltf::Gltf, prelude::*};
+use bevy::{audio::AudioSource, platform::collections::HashMap, prelude::*};
 use openzt2_game_data::terrain::{TerrainBiome, TerrainGrid, TerrainShorelineRippleTiming};
 
 use crate::effect::ParticleEffectDocumentAsset;
@@ -14,20 +14,35 @@ pub struct TerrainAsset {
     pub(in crate::terrain) canonical_terrain_grid: TerrainGrid,
     /// Immutable source-membership index, not settled live water-side ownership.
     pub(in crate::terrain) authored_water_region_membership: Box<[u32]>,
-    pub(in crate::terrain) lowered_terrain_model: Handle<Gltf>,
+    pub(in crate::terrain) water_biomes_by_material:
+        std::collections::BTreeMap<openzt2_game_data::AssetId, usize>,
+    #[dependency]
+    pub(in crate::terrain) chunk_meshes: Vec<Handle<Mesh>>,
+    #[dependency]
     pub(in crate::terrain) terrain_effect_material: Handle<MaterialAsset>,
+    #[dependency]
     pub(in crate::terrain) water_bump_combination_effect_material: Handle<MaterialAsset>,
+    #[dependency]
     pub(in crate::terrain) water_surface_effect_material: Handle<MaterialAsset>,
-    pub(in crate::terrain) water_low_detail_materials: Box<[Option<Handle<MaterialAsset>>]>,
-    pub(in crate::terrain) water_medium_detail_materials: Box<[Option<Handle<MaterialAsset>>]>,
+    #[dependency]
+    pub(in crate::terrain) water_low_detail_materials: Vec<Option<Handle<MaterialAsset>>>,
+    #[dependency]
+    pub(in crate::terrain) water_medium_detail_materials: Vec<Option<Handle<MaterialAsset>>>,
+    #[dependency]
     pub(in crate::terrain) waterfall_decal_effect_material: Handle<MaterialAsset>,
+    #[dependency]
     pub(in crate::terrain) texture_images_by_normalized_source_path: HashMap<String, Handle<Image>>,
+    #[dependency]
     pub(in crate::terrain) waterfall_scene_prefab: Option<Handle<ScenePrefabAsset>>,
+    #[dependency]
     pub(in crate::terrain) waterfall_audio: Option<Handle<AudioSource>>,
+    #[dependency]
     pub(in crate::terrain) water_scene_prefabs_by_normalized_system:
         HashMap<String, Handle<ScenePrefabAsset>>,
+    #[dependency]
     pub(in crate::terrain) water_materials_by_normalized_source_path:
         HashMap<String, Handle<MaterialAsset>>,
+    #[dependency]
     pub(in crate::terrain) water_particle_effects_by_normalized_system:
         HashMap<String, Handle<ParticleEffectDocumentAsset>>,
 }
@@ -66,6 +81,28 @@ impl TerrainAsset {
             .iter()
             .position(|candidate| std::ptr::eq(candidate, biome))?;
         self.water_medium_detail_materials.get(index)?.as_ref()
+    }
+
+    pub fn tank_water_material_presentation(
+        &self,
+        id: openzt2_game_data::AssetId,
+    ) -> Option<(
+        &openzt2_game_data::terrain::TerrainBiomeWaterPresentation,
+        &Handle<MaterialAsset>,
+        &Handle<MaterialAsset>,
+        &Handle<MaterialAsset>,
+    )> {
+        let index = *self.water_biomes_by_material.get(&id)?;
+        Some((
+            self.canonical_terrain_grid
+                .biomes
+                .get(index)?
+                .water_presentation
+                .as_ref()?,
+            self.water_low_detail_materials.get(index)?.as_ref()?,
+            self.water_medium_detail_materials.get(index)?.as_ref()?,
+            &self.water_surface_effect_material,
+        ))
     }
 
     pub fn water_scene_prefab(&self, system: &str) -> Option<&Handle<ScenePrefabAsset>> {
@@ -157,8 +194,16 @@ impl TerrainAsset {
         &self.canonical_terrain_grid
     }
 
-    pub fn lowered_terrain_model(&self) -> &Handle<Gltf> {
-        &self.lowered_terrain_model
+    pub fn chunk_mesh(&self, x: u32, z: u32) -> Option<&Handle<Mesh>> {
+        let grid = self.canonical_terrain_grid();
+        if x >= grid.sector_columns || z >= grid.sector_rows {
+            return None;
+        }
+        let index = usize::try_from(z)
+            .ok()?
+            .checked_mul(grid.sector_columns as usize)?
+            .checked_add(x as usize)?;
+        self.chunk_meshes.get(index)
     }
 
     pub fn terrain_effect_material(&self) -> &Handle<MaterialAsset> {

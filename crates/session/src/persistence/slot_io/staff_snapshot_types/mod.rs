@@ -17,7 +17,9 @@ pub(super) struct StaffSnapshotRecord {
     pub wage_cents_per_month: i64,
     pub hired_tick: u64,
     pub hired_month_ordinal: u32,
-    /// `b_CaffeineMode` (`true`) or `b_DeCaffeineMode` (`false`).
+    /// Older records use a single value for the two caffeine flags.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caffeinated: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decaffeinated: Option<bool>,
 }

@@ -1,39 +1,30 @@
 //! Shared dependency construction for canonical terrain assets.
 use super::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use crate::{
-    asset_source::AssetArchives,
+    asset_source::{generated_asset_publication::GeneratedAssetPublication, AssetArchives},
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
     },
     terrain::source::blue_fang_terrain_presentation_source_lowering::normalize_particle_source_document_name,
 };
-use bevy::{
-    asset::LoadContext,
-    gltf::{GltfLoader, GltfLoaderSettings},
-    image::ImageLoaderSettings,
-    prelude::*,
-};
+use bevy::platform::collections::HashMap;
+use bevy::prelude::*;
 use openzt2_game_data::terrain::TerrainGrid;
-use std::{collections::HashMap, io};
+use std::io;
 
 pub(super) async fn build_terrain_asset_dependencies(
     canonical_terrain_grid: TerrainGrid,
-    glb: &[u8],
-    gltf_loader: &GltfLoader,
     asset_archives: &AssetArchives,
-    load_context: &mut LoadContext<'_>,
+    load_context: &mut GeneratedAssetPublication<'_, '_>,
 ) -> io::Result<TerrainAsset> {
     let authored_water_region_membership =
         TerrainAsset::index_authored_water_region_membership(&canonical_terrain_grid)?;
-    let lowered_terrain_model = GltfLoader::load_gltf(
-        gltf_loader,
-        glb,
-        load_context,
-        &GltfLoaderSettings::default(),
-    )
-    .await
-    .map_err(io::Error::other)?;
-    let lowered_terrain_model = load_context.add_labeled_asset("model", lowered_terrain_model);
+    let chunk_meshes = super::source::canonical_terrain_grid_mesh_construction::construct_canonical_terrain_chunk_meshes(&canonical_terrain_grid)
+        .map_err(io::Error::other)?
+        .into_iter()
+        .enumerate()
+        .map(|(index, mesh)| load_context.publish(format!("terrain-chunk-{index}"), mesh))
+        .collect();
     let terrain_effect_material = load_context.load("Materials/terrain.bfmat");
     let water_bump_combination_effect_material = load_context.load("Materials/waterblit.bfmat");
     let water_surface_effect_material = load_context.load("Materials/waterflat.bfmat");
@@ -112,10 +103,7 @@ pub(super) async fn build_terrain_asset_dependencies(
                         .is_some_and(|name| normalize_particle_source_document_name(name) == key)
             })
             .ok_or_else(|| missing_terrain_reference("shore ripple scene", system))?;
-        let bytes = load_context
-            .read_asset_bytes(source.clone())
-            .await
-            .map_err(|error| io::Error::other(format!("{}: {error}", source.display())))?;
+        let bytes = load_context.read_source(asset_archives, source).await?;
         let declaration =
             parse_blue_fang_source_document(AssetPath::new(&source.to_string_lossy()), &bytes)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -183,7 +171,7 @@ pub(super) async fn build_terrain_asset_dependencies(
             .chain(["Materials/waterlayout", "Materials/watermask", "Materials/CausticTest"])
             .map(|source_path| {
                 asset_archives
-                    .resolve_ui_reference(load_context.path().path(), source_path)
+                    .resolve_ui_reference(load_context.source_path(), source_path)
                     .or_else(|| canonical_terrain_grid.biomes.iter()
                         .filter_map(|biome| biome.water_presentation.as_ref())
                         .filter_map(|water| water.surface_material.configuration.shore.as_ref())
@@ -194,25 +182,21 @@ pub(super) async fn build_terrain_asset_dependencies(
                                 || shore.ripple_bottom.as_deref() == Some(source_path) {
                                 "Materials/waterlayout"
                             } else { return None; };
-                            asset_archives.resolve_ui_reference(load_context.path().path(), fallback)
+                            asset_archives.resolve_ui_reference(load_context.source_path(), fallback)
                         }))
                     .or_else(|| canonical_terrain_grid.biomes.iter()
                         .filter_map(|biome| biome.water_presentation.as_ref())
                         .find(|water| {
                             let caustics = &water.surface_material.configuration.caustics;
                             caustics.bottom_map == source_path || caustics.top_map == source_path
-                        }).and_then(|_| asset_archives.resolve_ui_reference(load_context.path().path(), "Materials/CausticTest")))
+                        }).and_then(|_| asset_archives.resolve_ui_reference(load_context.source_path(), "Materials/CausticTest")))
                     .map(|resolved_source_path| {
                         (
                             source_path.to_ascii_lowercase(),
-                            load_context
-                                .load_builder()
-                                .with_settings(|settings: &mut ImageLoaderSettings| {
-                                    settings.is_srgb = false;
-                                })
-                                .load(crate::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(
-                                    &resolved_source_path.to_string_lossy(),
-                                )),
+                            load_context.load_image(
+                                crate::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(&resolved_source_path.to_string_lossy()),
+                                false,
+                            ),
                         )
                     })
                     .map(Some)
@@ -242,11 +226,11 @@ pub(super) async fn build_terrain_asset_dependencies(
         .filter_map(|scum| scum.image.as_ref())
     {
         if let Some(resolved) =
-            asset_archives.resolve_ui_reference(load_context.path().path(), source_path)
+            asset_archives.resolve_ui_reference(load_context.source_path(), source_path)
         {
-            let image = load_context.load_builder().with_settings(|settings: &mut ImageLoaderSettings| {
-                    settings.is_srgb = false;
-                }).load(crate::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(&resolved.to_string_lossy()));
+            let image = load_context.load_image(
+                crate::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(&resolved.to_string_lossy()), false,
+            );
             texture_images_by_normalized_source_path
                 .insert(source_path.to_ascii_lowercase(), image);
         }
@@ -261,7 +245,7 @@ pub(super) async fn build_terrain_asset_dependencies(
         .and_then(|waterfall| waterfall.sound.as_ref())
         .map(|source_path| {
             asset_archives
-                .resolve_audio_reference(load_context.path().path(), source_path)
+                .resolve_audio_reference(load_context.source_path(), source_path)
                 .map(|resolved_source_path| load_context.load(resolved_source_path))
                 .ok_or_else(|| missing_terrain_reference("waterfall sound", source_path))
         })
@@ -272,10 +256,40 @@ pub(super) async fn build_terrain_asset_dependencies(
     let water_medium_detail_materials = super::terrain_water_low_detail_material_construction::create_terrain_water_medium_detail_materials(
             &canonical_terrain_grid, asset_archives, load_context,
         )?;
+    let mut water_biomes_by_material = std::collections::BTreeMap::new();
+    for (index, biome) in canonical_terrain_grid.biomes.iter().enumerate() {
+        if biome.water_presentation.is_none() {
+            continue;
+        }
+        let path =
+            std::path::PathBuf::from(format!("biomes/{}.xml", biome.name.to_ascii_lowercase()));
+        let Ok(bytes) = load_context.read_source(asset_archives, &path).await else {
+            continue;
+        };
+        let Ok(document) =
+            parse_blue_fang_source_document(AssetPath::new(&path.to_string_lossy()), &bytes)
+        else {
+            continue;
+        };
+        let Some(water) = document
+            .root
+            .element_children()
+            .find(|node| node.name.eq_ignore_ascii_case("water"))
+        else {
+            continue;
+        };
+        let material = water
+            .attribute("waterXML")
+            .filter(|path| !path.is_empty())
+            .unwrap_or("Materials/waterflat.xml");
+        let id = openzt2_game_data::AssetId::from_virtual_path(&AssetPath::new(material).key());
+        water_biomes_by_material.entry(id).or_insert(index);
+    }
     Ok(TerrainAsset {
         canonical_terrain_grid,
         authored_water_region_membership,
-        lowered_terrain_model,
+        water_biomes_by_material,
+        chunk_meshes,
         terrain_effect_material,
         water_bump_combination_effect_material,
         water_surface_effect_material,

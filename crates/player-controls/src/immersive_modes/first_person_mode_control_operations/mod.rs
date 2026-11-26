@@ -30,7 +30,7 @@ pub(super) fn apply_allowed_navigation_axes_to_directly_controlled_subject(
     let Some(subject_entity) = subject else {
         return;
     };
-    let Ok((ownership, mut direct_locomotion)) = controlled_subjects.get_mut(subject_entity) else {
+    let Ok((ownership, direct_locomotion)) = controlled_subjects.get_mut(subject_entity) else {
         return;
     };
     if ownership.controller != controller_entity {

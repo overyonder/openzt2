@@ -30,6 +30,8 @@ pub struct UiNodeDefinition {
     pub text: String,
     pub cursor: AssetId,
     pub text_format: AssetId,
+    #[serde(default)]
+    pub money_text_format: Option<MoneyTextFormat>,
     pub help: UiNodeHelpDefinition,
     pub cacheable_from_lua: bool,
     pub field_definitions: Vec<UiNodeFieldDefinition>,
@@ -45,6 +47,14 @@ pub struct UiNodeDefinition {
     pub flags: UiNodeFlags,
     pub z: i16,
     pub tab_order: i16,
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MoneyTextFormat {
+    pub positive: AssetId,
+    pub negative: AssetId,
+    pub omit_cents: bool,
+    pub omit_minus: bool,
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, PartialEq, Eq)]

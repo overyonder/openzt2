@@ -5,7 +5,7 @@ use openzt2_game_assets::world_definitions::{
 };
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::{
-    world_entity_crating::WorldEntityIsCrated, world_membership_types::WorldMember,
+    world_entity_crating::UncratedWorldEntity, world_membership_types::WorldMember,
 };
 use openzt2_zoo_state::guests::{
     guest_simulation_types::*,
@@ -55,7 +55,7 @@ pub(super) fn sample_current_guest_need_observations(
             Without<Dead>,
             Without<Frozen>,
             Without<Tranquilized>,
-            Without<WorldEntityIsCrated>,
+            UncratedWorldEntity,
             Without<SynchronizedBehaviorParticipant>,
             Without<PendingBehaviorSet>,
         ),

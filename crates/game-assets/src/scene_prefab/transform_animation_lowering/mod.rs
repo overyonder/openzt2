@@ -1,7 +1,9 @@
 use bevy::{
     animation::{
-        animated_field, animation_curves::AnimatableCurve, graph::AnimationNodeIndex,
-        morph::WeightsCurve, AnimationTargetId,
+        animated_field,
+        animation_curves::{AnimatableCurve, WeightsCurve},
+        graph::AnimationNodeIndex,
+        AnimationTargetId,
     },
     asset::{LoadContext, VisitAssetDependencies},
     curve::{cubic_splines::CubicSegment, iterable::IterableCurve, FunctionCurve, Interval},

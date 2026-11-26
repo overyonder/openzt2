@@ -1,7 +1,7 @@
 use std::{io, time::Duration};
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     ecs::schedule::common_conditions::on_message,
     platform::collections::HashMap,
     prelude::*,

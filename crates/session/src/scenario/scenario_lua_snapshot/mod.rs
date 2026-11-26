@@ -6,12 +6,11 @@ use bevy::prelude::*;
 use mlua::{Lua, Value};
 use openzt2_game_assets::{
     lua_script::{
-        lua_script_archive_path_index::LuaScriptArchivePathIndex,
         lua_script_asset_loading::LuaScriptAsset,
         lua_script_module_execution::{
-            execute_lua_script_module_once_per_virtual_machine,
-            install_lua_script_dependency_loading_functions,
+            install_lua_script_dependency_loading_functions, restore_lua_script_module,
         },
+        lua_script_sources::LuaScriptSources,
     },
     world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
 };
@@ -183,7 +182,7 @@ fn prepare_runtime(
     saved: &ScenarioLuaSavedState,
     document: bevy::asset::AssetId<WorldScenarioDocumentAsset>,
     scripts: &Assets<LuaScriptAsset>,
-    index: &LuaScriptArchivePathIndex,
+    index: &LuaScriptSources,
     replace_initialized_globals: bool,
 ) -> mlua::Result<ScenarioLuaVirtualMachine> {
     let lua = Lua::new();
@@ -197,12 +196,7 @@ fn prepare_runtime(
             &lua, scope, scripts, index, &loaded, &stack,
         )?;
         for module in &saved.modules {
-            let (path, handle) = index
-                .resolve(module, module)
-                .ok_or_else(|| mlua::Error::runtime("saved scenario module is unavailable"))?;
-            execute_lua_script_module_once_per_virtual_machine(
-                &lua, path, handle, scripts, &loaded, &stack,
-            )?;
+            restore_lua_script_module(&lua, module, scripts, index, &loaded, &stack)?;
         }
         Ok(())
     })?;
@@ -258,7 +252,7 @@ pub(crate) fn normalize_original_saved_scenario_lua_state(
     saved_arguments: &ScenarioLuaSavedState,
     document: bevy::asset::AssetId<WorldScenarioDocumentAsset>,
     scripts: &Assets<LuaScriptAsset>,
-    index: &LuaScriptArchivePathIndex,
+    index: &LuaScriptSources,
 ) -> mlua::Result<ScenarioLuaSavedState> {
     let runtime = prepare_runtime(saved_arguments, document, scripts, index, false)?;
     capture_runtime(&runtime)
@@ -273,7 +267,7 @@ impl ScenarioLuaContext {
         saved: &ScenarioLuaSavedState,
         document: bevy::asset::AssetId<WorldScenarioDocumentAsset>,
         scripts: &Assets<LuaScriptAsset>,
-        index: &LuaScriptArchivePathIndex,
+        index: &LuaScriptSources,
     ) -> mlua::Result<Self> {
         prepare_runtime(saved, document, scripts, index, true).map(|vm| Self(Some(vm)))
     }

@@ -1,10 +1,9 @@
-use bevy::{picking::hover::DirectlyHovered, prelude::Entity};
+use bevy::picking::hover::DirectlyHovered;
 use openzt2_game_data::AssetId;
 use std::collections::BTreeSet;
 
 use mlua::Lua;
 
-use openzt2_game_assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
@@ -174,7 +173,7 @@ pub(super) struct ScenarioLuaVirtualMachine {
     pub(super) lua_virtual_machine: Lua,
     pub(super) scenario_document_asset_identifier:
         Option<bevy::asset::AssetId<WorldScenarioDocumentAsset>>,
-    pub(super) loaded_lua_script_asset_identifiers: BTreeSet<bevy::asset::AssetId<LuaScriptAsset>>,
+    pub(super) loaded_lua_script_asset_identifiers: BTreeSet<AssetId>,
 }
 
 /// The photo challenge set selected by `ZT_PHOTOEVENT_SET_CURRENT_CHALLENGE`.

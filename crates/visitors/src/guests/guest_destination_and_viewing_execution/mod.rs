@@ -90,9 +90,11 @@ pub(crate) fn choose_guest_destination(
             &GuestAmusement,
             &GuestFavouriteAnimal,
             &mut GuestRng,
-            &GuestPhase,
-            Option<&openzt2_zoo_state::guests::guest_simulation_types::GuestDeparturePoints>,
-            &WorldMember,
+            (
+                &GuestPhase,
+                Option<&openzt2_zoo_state::guests::guest_simulation_types::GuestDeparturePoints>,
+                &WorldMember,
+            ),
         ),
         (
             With<Guest>,
@@ -137,9 +139,7 @@ pub(crate) fn choose_guest_destination(
         amusement,
         favourite,
         mut rng,
-        phase,
-        departure_points,
-        world,
+        (phase, departure_points, world),
     ) in &mut guests
     {
         // Admission and departure own navigation until the guest is visiting.

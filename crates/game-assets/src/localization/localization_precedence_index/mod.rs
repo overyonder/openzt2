@@ -10,18 +10,18 @@ use bevy::{
 use openzt2_game_data::AssetId;
 
 use crate::asset_source::{
-    ArchiveOverlayChanged, AssetArchives, archive_entry_asset_path::archive_entry_asset_path,
+    archive_entry_asset_path::archive_entry_asset_path, ArchiveOverlayChanged, AssetArchives,
 };
 
 use super::{
     blue_fang_localization_date_format_tokenization::{
-        LocalizationDateTimeFormat, LocalizationDateTimeToken,
-        tokenize_blue_fang_localization_date_format,
+        tokenize_blue_fang_localization_date_format, LocalizationDateTimeFormat,
+        LocalizationDateTimeToken,
     },
     loaded_localization_queries::LoadedLocalizationView,
     localization_asset_loading::LocalizationTableSettings,
     localization_asset_types::LocalizationAsset,
-    localization_configuration::{LOCALE_CONFIGURATION_PATH, LocalizationConfiguration},
+    localization_configuration::{LocalizationConfiguration, LOCALE_CONFIGURATION_PATH},
 };
 
 #[derive(Resource, Default)]
@@ -305,7 +305,7 @@ mod tests {
     };
     use bevy::{
         app::TaskPoolPlugin,
-        asset::{AssetPlugin, io::AssetSourceId},
+        asset::{io::AssetSourceId, AssetPlugin},
     };
     use std::{
         io,

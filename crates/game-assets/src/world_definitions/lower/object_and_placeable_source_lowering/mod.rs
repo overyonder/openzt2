@@ -185,7 +185,9 @@ pub(crate) fn lower_authored_world_object_runtime(
             if let Some(value) = portal.attribute_named_any(&[name]) {
                 let value = parse_blue_fang_source_numeric_lexeme::<f32>(value)
                     .filter(|value| value.is_finite())
-                    .ok_or_else(|| BindError::record(record, format!("invalid tank portal {name}")))?;
+                    .ok_or_else(|| {
+                        BindError::record(record, format!("invalid tank portal {name}"))
+                    })?;
                 numeric_behavior_properties.entry(id(name)).or_insert(value);
             }
         }
@@ -193,8 +195,12 @@ pub(crate) fn lower_authored_world_object_runtime(
     for group in authored_type_family_elements_named(record, "BFAIEntityDataInstance") {
         for attribute in &group.attributes {
             let name = attribute.name();
-            if name.eq_ignore_ascii_case("f_ConstructionLevel") || name.eq_ignore_ascii_case("f_Damage") {
-                if let Some(value) = parse_blue_fang_source_numeric_lexeme::<f32>(attribute.value()).filter(|value| value.is_finite()) {
+            if name.eq_ignore_ascii_case("f_ConstructionLevel")
+                || name.eq_ignore_ascii_case("f_Damage")
+            {
+                if let Some(value) = parse_blue_fang_source_numeric_lexeme::<f32>(attribute.value())
+                    .filter(|value| value.is_finite())
+                {
                     numeric_behavior_properties.entry(id(name)).or_insert(value);
                 }
             }
@@ -211,8 +217,13 @@ pub(crate) fn lower_authored_world_object_runtime(
                     .entry(id(name))
                     .or_insert_with(|| id(attribute.value()));
             }
-            if name.get(..2).is_some_and(|prefix| prefix.eq_ignore_ascii_case("f_")) {
-                if let Some(value) = parse_blue_fang_source_numeric_lexeme::<f32>(attribute.value()).filter(|value| value.is_finite()) {
+            if name
+                .get(..2)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("f_"))
+            {
+                if let Some(value) = parse_blue_fang_source_numeric_lexeme::<f32>(attribute.value())
+                    .filter(|value| value.is_finite())
+                {
                     numeric_behavior_properties.entry(id(name)).or_insert(value);
                 }
             }
@@ -409,6 +420,7 @@ pub(super) fn bind_object(
     output.document.objects.push(WorldObjectDefinition {
         authored_runtime: lower_authored_world_object_runtime(record)?,
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
+        audio_stage_volumes: Vec::new(),
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),
         detach_actions: super::object_detach_action_source_lowering::lower_object_detach_actions(record),

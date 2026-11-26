@@ -1,5 +1,8 @@
 use bevy::prelude::*;
 
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TerrainWaterCameraContactProjection;
+
 /// Current pose of the active zoo camera, sampled before water presentation.
 #[derive(Component, Clone, Copy, Default, PartialEq)]
 pub struct TerrainWaterCameraPose(pub Option<GlobalTransform>);

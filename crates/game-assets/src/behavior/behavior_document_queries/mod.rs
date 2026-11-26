@@ -2,8 +2,8 @@
 
 use bevy::prelude::*;
 use openzt2_game_data::{
-    AssetId,
     behavior::document::{BehaviorDocument, BehaviorSet, BehaviorTask},
+    AssetId,
 };
 
 use super::behavior_asset_types::{

@@ -10,6 +10,9 @@ pub struct StartBehaviorSet {
     pub target: Option<Entity>,
 }
 
+#[derive(Component)]
+pub struct AmbientBehaviorSubject;
+
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PendingBehaviorSet {
     pub program: AssetId,

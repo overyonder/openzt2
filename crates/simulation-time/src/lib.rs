@@ -123,8 +123,10 @@ impl Plugin for SimulationTimePlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    zoo_clock_advancement::advance_authoritative_zoo_clock_and_calendar,
-                    timekeeper_cadence::advance_slow_tick,
+                    zoo_clock_advancement::advance_authoritative_zoo_clock_and_calendar
+                        .in_set(openzt2_world_state::simulation_time::simulation_clock_types::ZooClockAdvance),
+                    timekeeper_cadence::advance_slow_tick
+                        .after(openzt2_world_state::simulation_time::simulation_clock_types::ZooClockAdvance),
                 )
                     .in_set(FixedGameSet::Clock)
                     .run_if(in_state(GamePhase::InGame))

@@ -153,12 +153,10 @@ fn closed_admissions_turn_gate_arrival_away_without_payment() {
             .0,
         Money(1_000)
     );
-    assert!(
-        application
-            .world()
-            .resource::<Messages<GuestArrived>>()
-            .is_empty()
-    );
+    assert!(application
+        .world()
+        .resource::<Messages<GuestArrived>>()
+        .is_empty());
 }
 
 #[test]
@@ -187,10 +185,8 @@ fn unaffordable_admission_preserves_balances_and_routes_guest_out() {
             .0,
         Money(1_000)
     );
-    assert!(
-        application
-            .world()
-            .resource::<Messages<GuestArrived>>()
-            .is_empty()
-    );
+    assert!(application
+        .world()
+        .resource::<Messages<GuestArrived>>()
+        .is_empty());
 }

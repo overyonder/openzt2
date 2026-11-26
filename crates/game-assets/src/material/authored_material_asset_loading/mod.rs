@@ -99,28 +99,76 @@ impl AssetLoader for MaterialAssetLoader {
             .collect::<Vec<_>>();
         let mut include_source_collector =
             LiveD3d9EffectIncludeSourceCollector::new(&self.asset_archives);
+        use d3d9_effects::{
+            effect_compilation::compile_d3d9_effect_source_to_fx2_bytecode,
+            effect_evaluation::evaluate_compiled_d3d9_effect,
+            effect_types::{D3d9EffectParameterAssignment, D3d9EffectParameterValue},
+        };
+        let compiled = compile_d3d9_effect_source_to_fx2_bytecode(
+            &effect_source_path,
+            &repaired_effect_source_bytes,
+            &mut include_source_collector,
+        )
+        .map_err(io::Error::other)?;
         let evaluated_d3d9_effect =
-            d3d9_effects::effect_evaluation::compile_and_evaluate_d3d9_effect_source(
-                &effect_source_path,
-                &repaired_effect_source_bytes,
-                &mut include_source_collector,
-                &borrowed_parameter_assignments,
-            )
-            .map_err(io::Error::other)?;
+            evaluate_compiled_d3d9_effect(&compiled, &borrowed_parameter_assignments)
+                .map_err(io::Error::other)?;
+        let containment_parameters = ["CameraContainedCCW", "CameraContainedCW"].map(|name| {
+            evaluated_d3d9_effect
+                .parameter_descriptions
+                .iter()
+                .any(|description| {
+                    description.parameter_name.eq_ignore_ascii_case(name)
+                        || description
+                            .semantic_name
+                            .as_deref()
+                            .is_some_and(|semantic| semantic.eq_ignore_ascii_case(name))
+                })
+                .then_some(name)
+        });
+        let containment_variants = if containment_parameters.iter().any(Option::is_some) {
+            (0..4)
+                .map(|flags| {
+                    let mut assignments = borrowed_parameter_assignments.clone();
+                    for (bit, name) in containment_parameters.iter().enumerate() {
+                        if let Some(name) = name {
+                            assignments.push(D3d9EffectParameterAssignment {
+                                parameter_name: name,
+                                parameter_value: D3d9EffectParameterValue::Boolean {
+                                    boolean_value: flags & (1 << bit) != 0,
+                                },
+                            });
+                        }
+                    }
+                    evaluate_compiled_d3d9_effect(&compiled, &assignments).map_err(io::Error::other)
+                })
+                .collect::<io::Result<Vec<_>>>()?
+        } else {
+            Vec::new()
+        };
         let evaluated_technique_pass_material_assets = evaluated_d3d9_effect
             .evaluated_techniques
             .iter()
             .enumerate()
             .filter(|(_, technique)| technique.is_valid)
             .map(|(technique_index, technique)| {
+                let containment_passes = containment_variants.iter().map(|effect| {
+                    super::runtime::evaluated_d3d9_pass_state::collect_evaluated_d3d9_pass_states(&effect.evaluated_techniques[technique_index])
+                }).collect::<io::Result<Vec<_>>>()?;
+                let containment_cull_faces = (!containment_passes.is_empty()).then(|| {
+                    (0..technique.evaluated_passes.len()).map(|index| {
+                        std::array::from_fn(|flags| containment_passes[flags][index].cull)
+                    }).collect::<Vec<_>>()
+                });
                 create_effect_pass_material_assets_from_evaluated_technique(
                     technique,
                     &evaluated_d3d9_effect.parameter_descriptions,
                     &material_effect_parameters,
-                    load_context,
+                    &mut crate::asset_source::generated_asset_publication::GeneratedAssetPublication::Labeled(load_context),
                     &format!("technique-{technique_index}-effect-pass"),
                     &std::sync::Arc::default(),
                     &[],
+                    containment_cull_faces.as_deref(),
                 )
                 .map(
                     |pass_material_assets| EvaluatedTechniquePassMaterialAssets {
@@ -164,6 +212,7 @@ impl AssetLoader for MaterialAssetLoader {
             })
             .collect();
         Ok(MaterialAsset {
+            netimmerse_material_animations: Default::default(),
             netimmerse_texture_binding: None,
             evaluated_d3d9_effect,
             _source_dependencies: source_dependencies,

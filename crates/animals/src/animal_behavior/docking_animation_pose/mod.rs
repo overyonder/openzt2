@@ -1,5 +1,5 @@
 use bevy::{
-    animation::{AnimationTargetId, animated_field},
+    animation::{animated_field, AnimationTargetId},
     ecs::system::SystemParam,
     math::Affine3A,
     prelude::*,

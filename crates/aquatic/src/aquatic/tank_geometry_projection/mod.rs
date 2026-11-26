@@ -76,10 +76,8 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
     boundaries: HabitatBoundaryQueries,
     fences: Query<(FenceSegment, Option<&TankWallTopHeight>)>,
     changed_wall_tops: Query<Entity, Changed<TankWallTopHeight>>,
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
-    nodes: Query<&TopologyNode>,
-    ground: TankWallGroundSampling,
+    (definitions, active_definitions): (Res<Assets<WorldDefinitionAsset>>, Res<WorldDefinitions>),
+    (nodes, ground): (Query<&TopologyNode>, TankWallGroundSampling),
 ) {
     let surface = active_definitions
         .get(&definitions)

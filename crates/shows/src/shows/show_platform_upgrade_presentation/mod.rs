@@ -8,7 +8,6 @@ use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_quer
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
-use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
@@ -44,7 +43,6 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
         &UiDocumentOwner,
         Option<&mut UiSelected>,
         Option<&mut UiInteractionEnabled>,
-        Option<&mut UiFocusable>,
     )>,
 ) {
     let selection_changed = selection_changes.read().count() != 0;
@@ -71,7 +69,7 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
     if !projection_inputs_changed {
         return;
     }
-    for (range, owner, mut selected, mut interaction_enabled, mut focusable) in &mut nodes {
+    for (range, owner, mut selected, mut interaction_enabled) in &mut nodes {
         let Ok((root, parent)) = roots.get(owner.0) else {
             continue;
         };
@@ -128,11 +126,6 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
                     if let Some(interaction_enabled) = interaction_enabled.as_deref_mut() {
                         if interaction_enabled.0 != enabled {
                             interaction_enabled.0 = enabled;
-                        }
-                    }
-                    if let Some(focusable) = focusable.as_deref_mut() {
-                        if focusable.enabled != enabled {
-                            focusable.enabled = enabled;
                         }
                     }
                 }

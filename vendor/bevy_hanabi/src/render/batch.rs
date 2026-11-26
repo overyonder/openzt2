@@ -6,7 +6,6 @@ use bevy::{
     render::{
         render_resource::{Buffer, BufferVec, CachedComputePipelineId},
         renderer::{RenderDevice, RenderQueue},
-        sync_world::MainEntity,
     },
 };
 use fixedbitset::FixedBitSet;
@@ -120,8 +119,6 @@ impl BatchSpawnInfo {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BatchEffectData {
-    /// Main [`Entity`] this effect instance was extracted from.
-    pub entity: u32,
     /// Offset into the GPU buffer where the particles for this effect instance
     /// are located. This is uploaded to GPU as [`GpuBatchInfo::base_particle`].
     pub slab_offset: u32,
@@ -745,7 +742,6 @@ pub(crate) struct EffectDrawBatch {
 impl EffectBatch {
     /// Create a new batch from a single input.
     pub fn from_input(
-        main_entity: Entity,
         extracted_effect: &ExtractedEffect,
         extracted_spawner: &ExtractedSpawner,
         cached_mesh: &ExtractedEffectMesh,
@@ -790,7 +786,6 @@ impl EffectBatch {
             property_key,
             spawner_base: spawner_index,
             effect_data: vec![BatchEffectData {
-                entity: main_entity.index_u32(),
                 slab_offset: input.effect_slice.slice.start,
                 draw_indirect_buffer_row_index,
                 metadata_table_id,

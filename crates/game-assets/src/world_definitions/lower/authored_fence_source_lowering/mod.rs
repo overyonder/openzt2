@@ -257,19 +257,30 @@ pub(super) fn bind_authored_fence(
         // Each wall segment type closes a tank. It authors no depth bound or
         // filtration: depth follows the tank manager and fence mode policies,
         // and filtration comes from placed filter objects.
+        let (wall_materials, wall_materials_low) =
+            super::aquatic_habitat_source_lowering::tank_wall_materials(
+                tank_segment.and_then(|segment| segment.attribute_named_any(&["opaqueMat"])),
+            );
         output.document.tanks.push(TankDefinition {
             id: object_id,
             wall: object_id,
-            floor_material: AssetId::default(),
-            water_material: AssetId::default(),
+            floor_material: AssetId::from_virtual_path(
+                &super::aquatic_habitat_source_lowering::tank_floor_material_path(
+                    tank_segment.and_then(|segment| {
+                        segment.attribute_named_any(&["floorMaterial", "floor"])
+                    }),
+                ),
+            ),
+            water_material: super::aquatic_habitat_source_lowering::tank_water_material_id(
+                tank_segment
+                    .and_then(|segment| segment.attribute_named_any(&["waterMaterial", "water"])),
+            ),
             min_depth_cm: 0,
             max_depth_cm: u16::MAX,
             capacity_litres_per_cell: 0,
             filtration_per_day: 0,
-            opaque_wall_material: tank_segment
-                .and_then(|segment| segment.attribute_named_any(&["opaqueMat"]))
-                .filter(|material| !material.trim().is_empty())
-                .map(super::aquatic_habitat_source_lowering::tank_wall_material_asset_path),
+            wall_materials,
+            wall_materials_low,
         });
     }
     let (presentation_caustic_policies, surface_effect_strength, traversal_animation_manifests) =
@@ -287,6 +298,7 @@ pub(super) fn bind_authored_fence(
     output.document.objects.push(WorldObjectDefinition {
         authored_runtime: super::object_and_placeable_source_lowering::lower_authored_world_object_runtime(record)?,
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
+        audio_stage_volumes: Vec::new(),
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),
         detach_actions: super::object_detach_action_source_lowering::lower_object_detach_actions(

@@ -125,6 +125,7 @@ mod tests {
             None,
             Some(WorldScenarioDocumentSource {
                 document: WorldScenarioDocument::default(),
+                authored: Default::default(),
                 starting_zoos: Box::new([]),
                 terrains: Box::new([]),
                 scenes: Box::new([]),

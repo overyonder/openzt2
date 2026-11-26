@@ -105,6 +105,7 @@ fn a_tank_floor_is_dug_into_the_terrain_and_filled_back_when_the_tank_goes() {
     .init_resource::<Assets<WorldDefinitionAsset>>()
     .init_resource::<WorldDefinitions>()
     .add_message::<TerrainChanged>()
+    .add_message::<openzt2_zoo_state::terrain::terrain_edit_types::CommitTerrainEdit>()
     .add_message::<HabitatChanged>()
     .add_message::<TankFloorTerrainDisturbed>()
     .add_message::<RestoreTankFloorTerrain>()

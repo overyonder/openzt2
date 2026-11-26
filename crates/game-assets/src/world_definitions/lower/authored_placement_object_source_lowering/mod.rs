@@ -493,6 +493,7 @@ pub(super) fn bind_authored_placement_object(
     output.document.objects.push(WorldObjectDefinition {
         authored_runtime: super::object_and_placeable_source_lowering::lower_authored_world_object_runtime(record)?,
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
+        audio_stage_volumes: Vec::new(),
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),
         detach_actions: super::object_detach_action_source_lowering::lower_object_detach_actions(
@@ -505,6 +506,8 @@ pub(super) fn bind_authored_placement_object(
                     cleanup_interval_seconds: element_number(filter, &["cleanupInterval"], 0.0)?,
                     cleanup_rate: element_number(filter, &["cleanupRate"], 0.0)?,
                     maximum_dirt_capacity: element_number(filter, &["maximumDirtCapacity"], 0.0)?,
+                    full_filter_message: filter.attribute_named_any(&["fullFilterMessage", "filterFullMessage"])
+                        .map(id),
                     maintenance_thresholds: filter
                         .element_children()
                         .find(|child| child.name.as_str() == "maintenanceThresholds")

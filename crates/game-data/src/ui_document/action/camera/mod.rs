@@ -1,6 +1,7 @@
 //! Camera following, panning, focusing, mouse-look, zoom, rotation, and view actions.
 
 use super::UiTrigger;
+use crate::AssetId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
@@ -25,8 +26,8 @@ pub enum UiCameraAction {
     },
     ToggleCameraMouseLookEnabled,
     EnterFirstPersonCameraForSelectedEntity,
-    SetPhotoZoomCommandState {
-        direction: UiCameraSignedAxisDirection,
+    SetCommandState {
+        command: AssetId,
         pressed: bool,
     },
     SetCameraZoomDirection {

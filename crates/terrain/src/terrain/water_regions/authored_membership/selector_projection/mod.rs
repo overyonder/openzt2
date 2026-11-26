@@ -283,7 +283,7 @@ impl TerrainWaterSelectorProjection {
                 dirty_edges.insert(edge);
             }
         }
-        let mut tiles = bevy::platform::collections::HashSet::default();
+        let mut tiles = bevy::platform::collections::HashSet::<UVec2>::default();
         for ((ax, az), (bx, bz)) in dirty_edges {
             let minimum = IVec2::new(ax.min(bx), az.min(bz));
             for y in -1..=0 {

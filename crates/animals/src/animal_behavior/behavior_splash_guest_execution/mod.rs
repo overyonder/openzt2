@@ -7,16 +7,16 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
-    AssetId,
     animation::animation_text_key::{
         AuthoredAnimationSurfaceEffectKind, AuthoredAnimationTextAction,
     },
     behavior::action::token::BehaviorTokenRecipient,
+    AssetId,
 };
 use openzt2_world_state::{
     animation_graph::{
         animation_graph_playback_message_types::{
-            AnimationClipActionOptions, AnimationClipPlaybackRequest,
+            AnimationClipActionSettings, AnimationClipPlaybackRequest,
             AnimationClipPlaybackRequestRejected,
         },
         animation_presentation_relationship_types::AnimationPresentationOwner,
@@ -38,11 +38,11 @@ use openzt2_zoo_state::{
     aquatic::aquatic_simulation_types::TankGeometry,
     audio::audio_playback_message_types::PlayPositionedAudioCue,
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
         running_actions::{
             RestoredSplashAnimation, RunBehaviorSplashGuest, RunningBehaviorInstruction,
             SplashAnimation, SplashAnimationSeek, WhenBehaviorAction,
         },
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     guests::guest_simulation_types::Guest,
     habitat::habitat_types::HabitatMember,
@@ -104,7 +104,6 @@ fn start_splash(
         Option<&RestoredSplashAnimation>,
     )>,
     mut playback: MessageWriter<AnimationClipPlaybackRequest>,
-    mut options: MessageWriter<AnimationClipActionOptions>,
     mut effects: SplashEffects,
     mut commands: Commands,
 ) {
@@ -120,15 +119,14 @@ fn start_splash(
                 blend_duration_milliseconds: 0,
                 playback_speed_permille: 1000,
                 playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
+                action_settings: Some(AnimationClipActionSettings {
+                    binder: None,
+                    ground_fit: action.0.ground_fit,
+                    interrupts_current_animation: action.0.interrupts_animation,
+                    interruptible: false,
+                }),
             })
             .id;
-        options.write(AnimationClipActionOptions {
-            request_id: request,
-            binder: None,
-            ground_fit: action.0.ground_fit,
-            interrupts_current_animation: action.0.interrupts_animation,
-            interruptible: false,
-        });
         let mut actor_commands = commands.entity(actor);
         actor_commands.insert(SplashAnimation {
             step: step.id(),

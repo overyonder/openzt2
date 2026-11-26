@@ -16,7 +16,7 @@ use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::{
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::UncratedWorldEntity;
 use openzt2_zoo_state::animal_health::types::{Dead, Frozen, Tranquilized};
 use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::PendingBehaviorSet;
 use openzt2_zoo_state::behavior_task_execution_types::SynchronizedBehaviorParticipant;
@@ -55,7 +55,7 @@ pub(super) fn advance_behavior_target_retry_clocks(
             Without<Dead>,
             Without<Frozen>,
             Without<Tranquilized>,
-            Without<WorldEntityIsCrated>,
+            UncratedWorldEntity,
             Without<SynchronizedBehaviorParticipant>,
             Without<PendingBehaviorSet>,
             Without<PendingBehaviorTaskFailure>,

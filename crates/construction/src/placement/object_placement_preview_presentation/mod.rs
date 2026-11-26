@@ -276,7 +276,7 @@ pub(super) fn pulse_object_placement_entrance_arrows(
     time: Res<Time>,
     mut arrows: Query<(&mut Transform, &mut EntranceArrow)>,
 ) {
-    for (mut transform, mut arrow) in &mut arrows {
+    for (transform, mut arrow) in &mut arrows {
         arrow.phase += time.delta_secs() * ENTRANCE_ARROW_RADIANS_PER_SECOND;
         if arrow.phase > core::f32::consts::TAU {
             arrow.phase = 0.0;
@@ -304,6 +304,7 @@ type PlacedDecal<'w, 's> = Query<
         &'static mut Transform,
         Option<&'static mut EntranceArrow>,
     ),
+    Without<ConstructionPreview>,
 >;
 
 pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
@@ -581,10 +582,10 @@ pub(super) fn project_object_placement_validity_onto_preview_model_tint(
             (materials.model_invalid, &materials.footprint_invalid)
         };
         for descendant in children.iter_descendants_depth_first::<Children>(entity) {
-            if let Ok(mut tint) = renderables.get_mut(descendant) {
+            if let Ok(tint) = renderables.get_mut(descendant) {
                 tint.map_unchanged(|tint| &mut tint.0).set_if_neq(model);
             }
-            if let Ok((PlacementDecalRole::Footprint, mut material)) = decals.get_mut(descendant) {
+            if let Ok((PlacementDecalRole::Footprint, material)) = decals.get_mut(descendant) {
                 material
                     .map_unchanged(|material| &mut material.0)
                     .set_if_neq(footprint.clone());
@@ -698,7 +699,7 @@ impl PreviewDecals<'_> {
                 match fitted {
                     Some(next) => {
                         if mesh.0 != *self.plane && meshes.contains(mesh.0.id()) {
-                            if let Some(existing_mesh) = meshes.get_mut(&mesh.0) {
+                            if let Some(mut existing_mesh) = meshes.get_mut(&mesh.0) {
                                 *existing_mesh = next;
                             }
                         } else {

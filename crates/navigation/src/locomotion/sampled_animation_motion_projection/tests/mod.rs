@@ -24,7 +24,8 @@ fn a_rotated_scaled_model_follows_the_requested_world_direction(
         Vec3::ZERO,
     );
     let mut motion = ConsumedLocomotionRootMotion::new(1, parent);
-    motion.sample_interval(&clip, "root", 0.0..0.25, 0, 0.0..1.0);
+    let cycle = openzt2_world_state::animation_playback::locomotion_root_motion::LocomotionRootMotionCycle::from_clip(&clip, "root", 0.0..1.0);
+    motion.sample_interval(&clip, &cycle, 0.0..0.25, 0);
     let controller = AnimationPlaybackController {
         preserve_seek_on_restart: false,
         playback_generation: 0,

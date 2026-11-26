@@ -288,6 +288,41 @@ pub struct ActiveTerrainDerivedNavigationGraph {
 }
 
 impl ActiveTerrainDerivedNavigationGraph {
+    pub fn guest_view_marker_positions<'a>(
+        &'a self,
+        position_cm: [i32; 3],
+        tank_water: Option<&'a crate::aquatic::tank_navigation_water::TankNavigationWater>,
+    ) -> impl Iterator<Item = [i32; 3]> + 'a {
+        let graph = self.terrain_derived_navigation_graph();
+        let position = IVec3::from_array(position_cm).as_vec3() * 0.01;
+        let node = graph
+            .navigation_surface_at_world_position(position)
+            .filter(|node| {
+                graph
+                    .effective_navigation_node(*node, tank_water)
+                    .is_some_and(|node| {
+                        node.eligibility_flags.contains(NavFlags::GUEST)
+                            && !node
+                                .eligibility_flags
+                                .contains(NavFlags::DISABLED_BY_DEFAULT)
+                    })
+            });
+        node.into_iter().flat_map(move |node| {
+            graph.iterate_outgoing_navigation_graph_edges(node, tank_water).filter_map(move |edge| {
+                use crate::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraphEdgeFlags;
+                if edge.edge_flags.0 & TerrainDerivedNavigationGraphEdgeFlags::DISABLED_BY_DEFAULT.0 != 0 {
+                    return None;
+                }
+                let from = graph.calculate_navigation_node_world_position_centimetres(node)?;
+                let to = graph.calculate_navigation_node_world_position_centimetres(edge.destination_node)?;
+                let destination = graph.effective_navigation_node(edge.destination_node, tank_water)?;
+                (destination.eligibility_flags.contains(NavFlags::GUEST)
+                    && !destination.eligibility_flags.contains(NavFlags::WATER))
+                    .then(|| std::array::from_fn(|axis| from[axis].midpoint(to[axis])))
+            })
+        })
+    }
+
     /// Eligible dry node centres sampled from a habitat's topology cells,
     /// nearest the recipient first. Route reachability remains the planner's job.
     pub fn collect_dry_ground_candidates(

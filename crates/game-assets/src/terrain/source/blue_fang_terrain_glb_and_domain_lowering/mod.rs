@@ -1,5 +1,5 @@
 use crate::model_source::conversion_error::ConversionError;
-// Lowering of parsed Blue Fang terrain into the grid and GLB mesh.
+// Lowering of parsed Blue Fang terrain into the canonical grid.
 
 use openzt2_game_data::terrain::{
     TerrainBiome, TerrainGrid, TerrainPresentation, TerrainSample, TerrainUnits, TerrainWaterDepth,
@@ -12,22 +12,15 @@ use super::{
     blue_fang_terrain_source_types::{ParsedBlueFangTerrain, ParsedBlueFangTerrainSourceData},
 };
 
-pub struct LoweredBlueFangTerrain {
-    pub grid: TerrainGrid,
-    pub glb: Vec<u8>,
-}
-
-/// Lowers one original terrain grid into an ordinary indexed GLB mesh.
-/// `heights` are the authored BFTerrain values resolved from the map's XML
-/// documents.
+/// Lowers source samples using the resolved map elevation and biome policy.
 #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
-pub fn lower_blue_fang_terrain_to_domain_grid_and_glb(
+pub fn lower_blue_fang_terrain_to_canonical_grid(
     terrain: ParsedBlueFangTerrain,
     heights: AuthoredTerrainHeights,
     presentation: TerrainPresentation,
     biomes: Vec<TerrainBiome>,
     waterfall: Option<TerrainWaterfall>,
-) -> anyhow::Result<LoweredBlueFangTerrain> {
+) -> anyhow::Result<TerrainGrid> {
     let cell_size_metres = blue_fang_terrain_cell_size_metres(terrain.0.header)?;
     lower_blue_fang_terrain_with_validated_units(
         terrain.0,
@@ -47,7 +40,7 @@ fn lower_blue_fang_terrain_with_validated_units(
     presentation: TerrainPresentation,
     biomes: Vec<TerrainBiome>,
     waterfall: Option<TerrainWaterfall>,
-) -> Result<LoweredBlueFangTerrain, ConversionError> {
+) -> Result<TerrainGrid, ConversionError> {
     let base_height_metres = heights.base_height_metres;
     if !cell_size_metres.is_finite()
         || cell_size_metres <= 0.0
@@ -146,7 +139,5 @@ fn lower_blue_fang_terrain_with_validated_units(
         waterfall,
         slope_tiles: terrain.slope_tiles,
     };
-    let glb =
-        super::canonical_terrain_grid_mesh_construction::create_canonical_terrain_grid_glb(&grid)?;
-    Ok(LoweredBlueFangTerrain { grid, glb })
+    Ok(grid)
 }

@@ -3,8 +3,8 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::{
-    AssetId, ui_document::overview_map_presentation::UiOverviewCanvas,
-    world_definitions::transportation_and_tours::TransportationTrackKind,
+    ui_document::overview_map_presentation::UiOverviewCanvas,
+    world_definitions::transportation_and_tours::TransportationTrackKind, AssetId,
 };
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -19,9 +19,8 @@ use openzt2_zoo_state::{
 
 use super::canvas_hydration_operations::OverviewCanvasPolicy;
 use super::topology_rasterization_operations::{
-    OverviewTopologyRaster, rasterize_fence_edges_into_overview_map_pixels,
-    rasterize_path_tiles_into_overview_map_pixels,
-    rasterize_transport_track_segments_into_overview_map_pixels,
+    rasterize_fence_edges_into_overview_map_pixels, rasterize_path_tiles_into_overview_map_pixels,
+    rasterize_transport_track_segments_into_overview_map_pixels, OverviewTopologyRaster,
 };
 
 pub(super) const OVERVIEW_MAP_IMAGE_EXTENT: u32 = 512;

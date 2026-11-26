@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, io};
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
 use openzt2_game_assets::source_document::{

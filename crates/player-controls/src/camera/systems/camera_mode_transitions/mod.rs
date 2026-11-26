@@ -467,7 +467,7 @@ pub(super) fn mode_target(
 }
 
 pub(in crate::camera) fn restore_camera_on_standalone_subject_loss(
-    removal: On<Remove, StandaloneCameraSubject>,
+    removal: On<Remove<StandaloneCameraSubject>>,
     cameras: Query<
         (
             &StandaloneCameraSubject,

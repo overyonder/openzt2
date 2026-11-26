@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::{AnimalCrate, ScriptedCrating};
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::habitat::habitat_types::Containment;
 use openzt2_zoo_state::habitat::habitat_types::ContainmentChanged;
@@ -42,7 +42,14 @@ pub(super) fn detect_animal_containment_breaches_and_mark_newly_escaped_animals(
 /// Crating is a containment outcome, so a crated animal cannot remain escaped.
 pub(super) fn clear_animal_escape_state_after_crating(
     mut commands: Commands,
-    animals: Query<Entity, (With<Animal>, With<Escaped>, Added<WorldEntityIsCrated>)>,
+    animals: Query<
+        Entity,
+        (
+            With<Animal>,
+            With<Escaped>,
+            Or<(Added<AnimalCrate>, Added<ScriptedCrating>)>,
+        ),
+    >,
 ) {
     for animal in &animals {
         commands.entity(animal).remove::<Escaped>();

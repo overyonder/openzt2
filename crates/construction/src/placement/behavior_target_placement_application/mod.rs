@@ -57,7 +57,7 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::UncratedWorldEntity;
 use openzt2_zoo_state::animal_health::types::Dead;
 use bevy::asset::LoadState;
 use bevy::ecs::system::SystemParam;
@@ -117,7 +117,7 @@ pub(super) struct BehaviorTargetPlacementWorld<'w, 's> {
             &'static GlobalTransform,
             Option<&'static HabitatMember>,
         ),
-        (Without<Dead>, Without<WorldEntityIsCrated>),
+        (Without<Dead>, UncratedWorldEntity),
     >,
     actor_transforms: Query<'w, 's, &'static GlobalTransform>,
     agents: Query<'w, 's, &'static NavAgent>,

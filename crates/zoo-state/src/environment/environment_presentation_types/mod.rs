@@ -18,5 +18,5 @@ pub struct EnvironmentSpecularLightColor(pub Color);
 
 /// The authored terrain ambient term. Objects and terrain have separate light
 /// programs, and Bevy's ambient light carries the objects'.
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct EnvironmentTerrainAmbientLight(pub Option<Vec3>);

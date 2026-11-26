@@ -19,7 +19,9 @@ use openzt2_interface_state::{
         authored_ui_node_projection_components::{UiDocumentMembers, UiNodeId},
     },
 };
-use openzt2_ui::animation::UiShowHideAnimation;
+use openzt2_ui::animation::{
+    UiAnimationPlaybackOperation, UiAnimationPlaybackRequest, UiShowHideAnimation,
+};
 use openzt2_world_state::world_spawn::{
     world_load_completion_marker::WorldLoadCompleted,
     world_membership_types::{WorldMember, WorldRoot},
@@ -83,10 +85,11 @@ pub(super) fn project_selected_photo_challenge_goals(
         Without<PhotoChallengeGoals>,
     >,
     mut goals: Query<
-        (&mut Visibility, Option<&mut UiShowHideAnimation>),
+        (Entity, &mut Visibility, Has<UiShowHideAnimation>),
         With<PhotoChallengeGoals>,
     >,
     mut commands: Commands,
+    mut animations: MessageWriter<UiAnimationPlaybackRequest>,
 ) {
     if goals.is_empty() && lists.is_empty() {
         return;
@@ -218,15 +221,18 @@ pub(super) fn project_selected_photo_challenge_goals(
             }
         }
     }
-    for (mut visibility, animation) in &mut goals {
+    for (entity, mut visibility, animates) in &mut goals {
         let visible = count > 0 && populated;
         if visibility.set_if_neq(if visible {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         }) {
-            if let Some(mut animation) = animation {
-                animation.start_authored_visibility_transition(visible);
+            if animates {
+                animations.write(UiAnimationPlaybackRequest {
+                    entity,
+                    operation: UiAnimationPlaybackOperation::Transition(visible),
+                });
             }
         }
     }

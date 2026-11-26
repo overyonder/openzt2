@@ -210,6 +210,7 @@ impl Plugin for TerrainPlugin {
                             .after(terrain_water_view_selection::sample_terrain_water_camera_pose)
                             .after(openzt2_zoo_state::terrain::terrain_water_wave_register_projection::publish_terrain_water_wave_registers),
                         terrain_water_view_selection::update_camera_terrain_water_membership
+                            .in_set(openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterCameraContactProjection)
                             .after(terrain_water_view_selection::sample_terrain_water_camera_pose)
                             .after(water_regions::authored_membership::project_terrain_water_membership),
                         terrain_water_view_selection::update_terrain_water_capture_hits

@@ -4,7 +4,7 @@ use std::{io, path::Path};
 
 use bevy::asset::{Handle, LoadContext};
 use openzt2_game_data::world_scenario::ScenarioScriptPhase;
-use openzt2_game_data::{AssetId, world_scenario::WorldScenarioDocument};
+use openzt2_game_data::{world_scenario::WorldScenarioDocument, AssetId};
 
 use crate::{
     asset_source::AssetArchives,

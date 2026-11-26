@@ -158,15 +158,21 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                 continue;
             }
             if modification.modified_fact == BehaviorFact::Tour {
-                tour_needs.get_mut(subject).expect("validated guest tour need")
+                tour_needs
+                    .get_mut(subject)
+                    .expect("validated guest tour need")
                     .adjust(authored_delta as f32 / 65_536.0);
                 continue;
             }
             if modification.modified_fact == BehaviorFact::EducationDonationBonus {
                 if authored_delta == 0 {
-                    commands.entity(subject).try_remove::<EducationDonationBonus>();
+                    commands
+                        .entity(subject)
+                        .try_remove::<EducationDonationBonus>();
                 } else {
-                    commands.entity(subject).insert_if_new(EducationDonationBonus);
+                    commands
+                        .entity(subject)
+                        .insert_if_new(EducationDonationBonus);
                 }
                 continue;
             }

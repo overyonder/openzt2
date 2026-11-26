@@ -35,19 +35,22 @@ pub(super) fn normalize_authored_money_text_widget(
         )
     });
     let mut normalized_children = children.items().to_vec();
-    normalized_children.push(OrderedSourceDocumentChild::Element(Box::new(
-        OrderedSourceDocumentNode::new_synthetic_ordered_source_document_node(
-            "text".into(),
-            vec![
-                OrderedSourceDocumentAttribute::new_synthetic_ordered_source_document_attribute(
-                    "format",
-                    canonical_money_format,
-                ),
-            ],
-            OrderedSourceDocumentChildren::default(),
-            span,
-        ),
-    )));
+    normalized_children.insert(
+        0,
+        OrderedSourceDocumentChild::Element(Box::new(
+            OrderedSourceDocumentNode::new_synthetic_ordered_source_document_node(
+                "text".into(),
+                vec![
+                    OrderedSourceDocumentAttribute::new_synthetic_ordered_source_document_attribute(
+                        "format",
+                        canonical_money_format,
+                    ),
+                ],
+                OrderedSourceDocumentChildren::default(),
+                span,
+            ),
+        )),
+    );
     *children = OrderedSourceDocumentChildren::from_ordered_source_document_child_items(
         normalized_children,
     );

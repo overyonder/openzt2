@@ -71,3 +71,15 @@ pub struct FirstPersonLocomotionTuning {
     pub damping_per_second: f32,
     pub acceleration_mps2: f32,
 }
+
+impl FirstPersonLocomotionTuning {
+    pub fn advance_horizontal_velocity(self, velocity: Vec2, desired: Vec2, seconds: f32) -> Vec2 {
+        let limit = self.maximum_speed_mps.max(0.0);
+        if limit == 0.0 {
+            return Vec2::ZERO;
+        }
+        let acceleration = (desired / limit).clamp_length_max(1.0) * self.acceleration_mps2;
+        let damping = (1.0 + self.damping_per_second * seconds).max(0.0);
+        (velocity * damping + acceleration * seconds).clamp_length_max(limit)
+    }
+}

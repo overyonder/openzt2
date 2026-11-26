@@ -7,12 +7,20 @@ pub enum ThreeLevelGraphicsDetail {
     High,
 }
 
+impl ThreeLevelGraphicsDetail {
+    pub(crate) const VALUES: [Self; 3] = [Self::Low, Self::Medium, Self::High];
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FourLevelGraphicsDetail {
     Low,
     Medium,
     High,
     Ultra,
+}
+
+impl FourLevelGraphicsDetail {
+    pub(crate) const VALUES: [Self; 4] = [Self::Low, Self::Medium, Self::High, Self::Ultra];
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,11 +31,19 @@ pub enum ShadowDetail {
     Ultra,
 }
 
+impl ShadowDetail {
+    pub(crate) const VALUES: [Self; 4] = [Self::Off, Self::Medium, Self::High, Self::Ultra];
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnvironmentalDetailObjectDensity {
     Off,
     Medium,
     High,
+}
+
+impl EnvironmentalDetailObjectDensity {
+    pub(crate) const VALUES: [Self; 3] = [Self::Off, Self::Medium, Self::High];
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]

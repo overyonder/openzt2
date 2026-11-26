@@ -8,7 +8,6 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::AssetId;
 use openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay;
 use openzt2_world_state::world_spawn::{
     persistent_id_types::PersistentId,
@@ -54,7 +53,7 @@ pub(super) fn project_guest_view_cursor_and_navigation_markers(
     mut commands: Commands,
 ) {
     let (world, tank_water) = world.into_inner();
-    let (session_entity, subject, mut count, existing) = session.into_inner();
+    let (session_entity, subject, count, existing) = session.into_inner();
     let definitions = definitions.get(&definition_assets);
     let policy = definitions.and_then(|definitions| {
         find_authored_immersive_mode_policy(definitions, ImmersiveMode::GuestView)
@@ -124,7 +123,7 @@ pub(super) fn project_guest_view_cursor_and_navigation_markers(
                 .is_ok_and(|(marker, _)| marker.slot == slot && marker.prefab == handle)
         }) {
             let entity = unused.swap_remove(index);
-            if let Ok((_, mut transform)) = visuals.get_mut(entity) {
+            if let Ok((_, transform)) = visuals.get_mut(entity) {
                 transform
                     .map_unchanged(|transform| &mut transform.translation)
                     .set_if_neq(position);

@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use openzt2_animals::animal_lifecycle::animal_entity_spawning::spawn_animal_entity_from_resolved_components;
 use openzt2_animals::animal_lifecycle::animal_spawn_resolution::lower_species_and_variant_to_animal_spawn_components;
 use openzt2_animals::animal_lifecycle::animal_spawn_resolution_types::ResolvedAnimalSpawnComponents;
+use openzt2_animals::animal_welfare::need_timing_types::NeedAdjustmentCadence;
 use openzt2_game_assets::species::species_asset_types::SpeciesView;
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_world_state::simulation_time::deterministic_random_stream::RngDomain;
@@ -13,7 +14,7 @@ use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
 use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::ScriptedCrating;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::animal_lineage::{
     insert_animal_parentage, AnimalMate, PregnancyFather,
@@ -23,7 +24,7 @@ use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_health::types::DeathCause;
 use openzt2_zoo_state::animal_lifecycle::types::*;
 use openzt2_zoo_state::animal_welfare::types::*;
-use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
+use openzt2_zoo_state::locomotion::locomotion_types::CaffeineFlags;
 
 pub(super) fn resolve_saved_animal_components(
     records: &[AnimalSnapshotRecord],
@@ -98,17 +99,18 @@ pub(super) fn spawn_saved_animals(
         if let Some(name) = &record.name {
             entity.insert(Name::new(name.clone()));
         }
-        if record.crated {
-            entity.insert(WorldEntityIsCrated);
+        if record.crated && record.crate_identifier.is_none() {
+            entity.insert(ScriptedCrating);
         }
         if record.release_restricted {
             entity.insert(ReleaseRestricted);
         }
-        if let Some(caffeinated) = record.caffeinated {
-            entity.insert(if caffeinated {
-                CaffeineMode::Caffeinated
-            } else {
-                CaffeineMode::Decaffeinated
+        if record.caffeinated.is_some() || record.decaffeinated.is_some() {
+            entity.insert(CaffeineFlags {
+                caffeinated: record.caffeinated.unwrap_or(false),
+                decaffeinated: record
+                    .decaffeinated
+                    .unwrap_or(record.caffeinated == Some(false)),
             });
         }
         if record.crating_restricted {
@@ -129,10 +131,10 @@ pub(super) fn spawn_saved_animals(
         }
         if let Some(welfare) = &record.welfare {
             if let Some((remaining_ns, random)) = welfare.need_adjustment_timer {
-                entity.insert(AnimalNeedAdjustmentTimer {
+                entity.insert(NeedAdjustmentCadence::from_saved_remaining(
                     remaining_ns,
-                    random: openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng::from_raw(random),
-                });
+                    openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng::from_raw(random),
+                ));
             }
             if welfare.environment_habitat_assessed {
                 entity.insert(EnvironmentHabitatAssessed);

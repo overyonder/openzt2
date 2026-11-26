@@ -10,25 +10,25 @@ use bevy::{
     asset::{AssetLoadFailedEvent, LoadState},
     prelude::*,
 };
-use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
+use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
 
 use crate::asset_source::{
-    ArchiveOverlayChanged, AssetArchives,
     archive_entry_asset_path::{
         archive_entry_asset_path, archive_entry_asset_source_path,
         definition_archive_entry_asset_path,
     },
+    ArchiveOverlayChanged, AssetArchives,
 };
 
 use super::{
     ground_path_surface_images::GROUND_PATH_SURFACE_IMAGE_EXTENSION,
     world_definition_asset_set_state_and_borrowing_queries::{
-        DefinitionKind, DefinitionRow, SingletonKind, WorldDefinitions, kind_range,
+        kind_range, DefinitionKind, DefinitionRow, SingletonKind, WorldDefinitions,
     },
     world_definition_document_asset_and_demand_loaded_dependency_paths::{
-        AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS, WorldDefinitionAsset,
+        WorldDefinitionAsset, AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS,
     },
-    world_definition_load_queue::{WorldDefinitionLoadCompletion, request_world_definition_loads},
+    world_definition_load_queue::{request_world_definition_loads, WorldDefinitionLoadCompletion},
 };
 
 pub(crate) fn world_definition_source_path(
@@ -366,6 +366,22 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
             &mut singletons,
         );
     }
+    let mut animation_binder_rigs = BTreeMap::new();
+    for handle in &definitions.handles {
+        let Some(asset) = assets.get(handle) else {
+            continue;
+        };
+        for (index, rig) in asset.animation_binder_rigs().iter().enumerate() {
+            animation_binder_rigs.insert(
+                (rig.definition, rig.binder),
+                DefinitionRow {
+                    handle: handle.clone(),
+                    first: index,
+                    end: index + 1,
+                },
+            );
+        }
+    }
     let retained = records
         .values()
         .map(|row| row.handle.id())
@@ -383,6 +399,7 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
         };
         for (kind, dependencies) in [
             (DefinitionKind::TextureDependency, &asset.textures),
+            (DefinitionKind::MaterialDependency, &asset.materials),
             (DefinitionKind::ModelDependency, &asset.models),
             (DefinitionKind::EffectDependency, &asset.effects),
             (DefinitionKind::SceneDependency, &asset.scenes),
@@ -511,6 +528,7 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
         .collect();
     definitions.records = records;
     definitions.show_stages_by_object = show_stages_by_object;
+    definitions.animation_binder_rigs = animation_binder_rigs;
     definitions.vehicle_seats_by_index = vehicle_seats_by_index;
     definitions.catalogue_by_definition.take();
     definitions.research_by_definition.take();

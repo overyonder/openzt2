@@ -1,6 +1,7 @@
 use bevy::prelude::{Component, Entity, Handle};
 use openzt2_game_assets::{
     behavior::behavior_asset_types::BehaviorDocumentAsset, scene_prefab::ScenePrefabAsset,
+    terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
     world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
 };
 use openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource;
@@ -14,6 +15,9 @@ pub(crate) struct PendingSnapshotApplication {
     pub(in crate::persistence) source: SavedGameSource,
     pub(super) saved_world_document: Option<Handle<WorldScenarioDocumentAsset>>,
 }
+
+#[derive(Component)]
+pub(super) struct SnapshotTerrainAsset(pub(super) Handle<TerrainAsset>);
 
 #[derive(Component)]
 pub(super) struct SnapshotBytes(pub(super) Vec<u8>);

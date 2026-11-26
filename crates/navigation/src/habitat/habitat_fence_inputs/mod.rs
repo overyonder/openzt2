@@ -11,6 +11,7 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::world_definitions::fences_and_gates::FenceTraversalBlockingFlags;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::{
     habitat::habitat_types::RebuildHabitatRegionsWithinTopologyBounds,
     topology::{
@@ -40,7 +41,7 @@ pub(super) struct HabitatFenceLatticePoint {
 
 #[derive(Component)]
 #[relationship(relationship_target = IncidencesAtRasterPoint)]
-struct AtRasterPoint(Entity);
+pub(super) struct AtRasterPoint(Entity);
 
 #[derive(Component)]
 #[relationship_target(relationship = AtRasterPoint, linked_spawn)]
@@ -48,7 +49,7 @@ pub(super) struct IncidencesAtRasterPoint(Vec<Entity>);
 
 #[derive(Component)]
 #[relationship(relationship_target = FenceRasterIncidences)]
-struct RasterIncidenceOfFence(Entity);
+pub(super) struct RasterIncidenceOfFence(Entity);
 
 #[derive(Component)]
 #[relationship_target(relationship = RasterIncidenceOfFence, linked_spawn)]

@@ -1,7 +1,7 @@
 use std::{io, path::PathBuf};
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     platform::collections::{HashMap, HashSet},
     prelude::*,
 };
@@ -17,7 +17,7 @@ use openzt2_game_assets::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
     },
 };
-use openzt2_game_data::{AssetId, animation::animation_text_key::AuthoredAnimationTextAction};
+use openzt2_game_data::{animation::animation_text_key::AuthoredAnimationTextAction, AssetId};
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::BehaviorTargetBiome;
 use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
@@ -79,7 +79,7 @@ impl AssetLoader for ScriptParticleDictionaryLoader {
                 .filter_map(|entry| entry.attribute("directory"))
                 .map(|directory| PathBuf::from(directory.replace('\\', "/").to_ascii_lowercase()))
                 .collect::<Vec<_>>();
-            let mut visited = HashSet::default();
+            let mut visited = HashSet::<PathBuf>::default();
             let mut next = 0;
             while let Some(directory) = directories.get(next).cloned() {
                 next += 1;

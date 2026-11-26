@@ -159,7 +159,7 @@ pub(super) fn project_tank_surface_meshes(
         let mut missing_floor = floor.is_some();
         if let Some(children) = meshes_for_tank {
             for entity in children.iter() {
-                let Ok((_, mesh, mut transform, mut visible, material)) = surfaces.get_mut(entity)
+                let Ok((_, mesh, transform, mut visible, material)) = surfaces.get_mut(entity)
                 else {
                     continue;
                 };

@@ -6,8 +6,8 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::AssetId;
 use openzt2_game_data::behavior::action::token::BehaviorTokenRecipient;
+use openzt2_game_data::AssetId;
 use openzt2_world_state::{
     application_schedule::FixedGameSet, simulation_time::simulation_clock_types::ZooClock,
 };
@@ -20,8 +20,8 @@ use openzt2_zoo_state::{
     animal_health::types::Dead,
     animal_lifecycle::types::{Animal, SpeciesHandle},
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, BehaviorTaskFailed, PendingBehaviorTaskFailure,
-        abandon_behavior_task_for_reconsideration,
+        abandon_behavior_task_for_reconsideration, BehaviorTaskExecutionState, BehaviorTaskFailed,
+        PendingBehaviorTaskFailure,
     },
     guests::guest_simulation_types::GuestRng,
     staff::staff_job_types::CurrentJob,

@@ -140,10 +140,7 @@ pub(super) fn project_launchable_world_choices_into_authored_list_rows(
                     .spawn((
                         Name::new(format!("map choice {index}")),
                         bevy::ui_widgets::Button,
-                        UiFocusable {
-                            order: index as u32,
-                            enabled: true,
-                        },
+                        UiFocusable,
                         bevy::input_focus::tab_navigation::TabIndex(
                             i32::try_from(index).unwrap_or(i32::MAX),
                         ),

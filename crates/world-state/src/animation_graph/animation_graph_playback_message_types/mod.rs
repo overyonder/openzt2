@@ -49,11 +49,11 @@ pub struct AnimationClipPlaybackRequest {
     pub blend_duration_milliseconds: u32,
     pub playback_speed_permille: i16,
     pub playback_repetition_policy: AnimationPlaybackRepetitionPolicy,
+    pub action_settings: Option<AnimationClipActionSettings>,
 }
 
-#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AnimationClipActionOptions {
-    pub request_id: usize,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnimationClipActionSettings {
     pub binder: Option<openzt2_game_data::AssetId>,
     pub ground_fit: Option<bool>,
     pub interrupts_current_animation: bool,
@@ -61,7 +61,10 @@ pub struct AnimationClipActionOptions {
 }
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ActiveAnimationClipOptions(pub AnimationClipActionOptions);
+pub struct ActiveAnimationClipOptions {
+    pub request_id: usize,
+    pub settings: AnimationClipActionSettings,
+}
 
 #[derive(Message, Clone, Debug, PartialEq, Eq)]
 pub struct AnimationGraphNodePlaybackRequestRejected {

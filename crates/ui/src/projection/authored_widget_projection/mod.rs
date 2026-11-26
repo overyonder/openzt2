@@ -446,24 +446,15 @@ pub(super) fn project_widget(
                     ))
                     .id();
                 steps.push(proxy);
-                use openzt2_game_data::ui_document::timed_presentation::UiTimedEventAction;
-                match &event.action {
-                    UiTimedEventAction::Ui(action) => {
-                        super::authored_node_action_routing_projection::insert_authored_action_proxy_route(
-                            commands,
-                            proxy,
-                            UiActionSource::TimedEvent { node: node_index, event: index as u32 },
-                            action,
-                        );
-                    }
-                    UiTimedEventAction::ScenarioScript(command) => {
-                        commands.entity(proxy).insert(
-                            crate::authored_timed_action_sequence::TimedScenarioScript(
-                                command.as_str().into(),
-                            ),
-                        );
-                    }
-                }
+                super::authored_node_action_routing_projection::insert_authored_action_proxy_route(
+                    commands,
+                    proxy,
+                    UiActionSource::TimedEvent {
+                        node: node_index,
+                        event: index as u32,
+                    },
+                    &event.action,
+                );
             }
             commands
                 .entity(entity)

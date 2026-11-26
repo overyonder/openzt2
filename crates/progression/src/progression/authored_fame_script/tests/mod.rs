@@ -7,13 +7,13 @@ use std::{
 use bevy::{
     app::TaskPoolPlugin,
     asset::{
+        io::{memory::MemoryAssetReader, AssetSourceBuilder, AssetSourceId},
         AssetApp, AssetPlugin,
-        io::{AssetSourceBuilder, AssetSourceId, memory::MemoryAssetReader},
     },
     ecs::message::Messages,
 };
 use openzt2_game_assets::{
-    asset_source::{ArchiveOverlayChanged, create_bevy_asset_source_for_enabled_z2f_archives},
+    asset_source::{create_bevy_asset_source_for_enabled_z2f_archives, ArchiveOverlayChanged},
     lua_script::LuaScriptAssetLoadingPlugin,
     world_definitions::{
         world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,

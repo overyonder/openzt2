@@ -147,6 +147,7 @@ mod tests;
 #[cfg(any(test, feature = "testing"))]
 pub fn add_animal_waste_cleanup_test_systems(app: &mut App) {
     app.register_required_components::<maintenance_types::AnimalHabitatWaste, WasteConsumptionClaim>()
+        .add_observer(activated_behavior_actor::<RunBehaviorTermination>.pipe(apply_staff_waste_termination))
         .add_systems(
         Update,
         (
@@ -159,7 +160,6 @@ pub fn add_animal_waste_cleanup_test_systems(app: &mut App) {
     .add_systems(
         Update,
         (
-            update_waiting_behavior_actors.pipe(apply_staff_waste_termination),
             settle_consumed_staff_waste_jobs,
         )
             .chain()

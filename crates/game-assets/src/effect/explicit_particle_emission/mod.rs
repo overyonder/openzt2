@@ -1,8 +1,6 @@
 use bevy::{diagnostic::FrameCount, prelude::*};
-use bevy_hanabi::{
-    EffectParticleSizeScale, EffectSpawner, ParticleAliveCount, ParticleSpawnBatch,
-    ParticleSpawnPoint,
-};
+pub use bevy_hanabi::{EffectParticleSizeScale, ParticleAliveCount, ParticleSpawnBatch};
+use bevy_hanabi::{EffectSpawner, ParticleSpawnPoint};
 use openzt2_game_data::{particle::particle_emission_point::ParticleEmissionPoint, AssetId};
 
 use super::{
@@ -61,10 +59,10 @@ pub struct AppendParticleEffectPoints {
 }
 
 #[derive(Component)]
-struct ParticlePointsAwaitingUpload;
+pub(super) struct ParticlePointsAwaitingUpload;
 
 #[derive(Component)]
-struct ParticleSpawnAwaitingClear;
+pub(super) struct ParticleSpawnAwaitingClear;
 
 pub(crate) fn prepare_explicit_particle_emitters(
     mut commands: Commands,

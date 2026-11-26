@@ -1,8 +1,8 @@
 //! Direct UI document camera controls for the one live Bevy camera.
 
+use openzt2_game_data::ui_document::action::camera::UiCameraAction;
 use openzt2_game_data::ui_document::action::camera::UiCameraPanDirection;
 use openzt2_game_data::ui_document::action::camera::UiCameraSignedAxisDirection;
-use openzt2_game_data::ui_document::action::camera::{UiCameraAction, UiFirstPersonCommand};
 
 use bevy::picking::pointer::{PointerId, PointerLocation};
 use bevy::prelude::*;
@@ -44,9 +44,11 @@ pub(super) fn route_camera_ui_actions(
         Query<(&CameraMode, &CameraTuning), With<ZooCamera>>,
     ),
     action_nodes: Query<(&UiCameraActions, &UiDocumentOwner)>,
-    action_geometry: Query<(&ComputedNode, &UiGlobalTransform)>,
-    pointers: Query<(&PointerId, &PointerLocation)>,
-    world_bounds: Query<&WorldTerrainHorizontalBounds>,
+    (action_geometry, pointers, world_bounds): (
+        Query<(&ComputedNode, &UiGlobalTransform)>,
+        Query<(&PointerId, &PointerLocation)>,
+        Query<&WorldTerrainHorizontalBounds>,
+    ),
     roots: Query<&UiDocumentRoot>,
     selected: WorldUiSelection,
     selected_transforms: Query<&GlobalTransform>,
@@ -118,28 +120,7 @@ pub(super) fn route_camera_ui_actions(
                         }
                     }
                 }
-                UiCameraAction::SetFirstPersonCommandState { command, pressed } => {
-                    for (_, _, mut intent, _) in &mut cameras {
-                        intent
-                            .reborrow()
-                            .map_unchanged(|intent| {
-                                let commands = &mut intent.first_person_commands;
-                                match command {
-                                    UiFirstPersonCommand::Forward => &mut commands.forward,
-                                    UiFirstPersonCommand::Backward => &mut commands.backward,
-                                    UiFirstPersonCommand::TurnLeft => &mut commands.turn_left,
-                                    UiFirstPersonCommand::TurnRight => &mut commands.turn_right,
-                                    UiFirstPersonCommand::Up => &mut commands.up,
-                                    UiFirstPersonCommand::Down => &mut commands.down,
-                                    UiFirstPersonCommand::Crouch => &mut commands.crouch,
-                                    UiFirstPersonCommand::FreeMouseLook => {
-                                        &mut commands.free_mouse_look
-                                    }
-                                }
-                            })
-                            .set_if_neq(*pressed);
-                    }
-                }
+                UiCameraAction::SetCommandState { .. } => {}
                 UiCameraAction::SetCameraPanDirection { direction } => {
                     let axis = match direction {
                         UiCameraPanDirection::North => Vec2::Y,
@@ -234,18 +215,6 @@ pub(super) fn route_camera_ui_actions(
                                 definition: definition.0,
                                 transition_seconds: None,
                             });
-                        }
-                    }
-                }
-                UiCameraAction::SetPhotoZoomCommandState { direction, pressed } => {
-                    for (_, _, mut intent, _) in &mut cameras {
-                        match direction {
-                            UiCameraSignedAxisDirection::Positive => {
-                                intent.photo_zoom_in_command = *pressed
-                            }
-                            UiCameraSignedAxisDirection::Negative => {
-                                intent.photo_zoom_out_command = *pressed
-                            }
                         }
                     }
                 }

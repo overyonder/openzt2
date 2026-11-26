@@ -22,7 +22,6 @@ use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
 use openzt2_zoo_state::progression::adoption_and_content_availability_types::ScenarioContentAvailability;
 use openzt2_zoo_state::progression::catalogue_entry_availability::catalogue_entry_is_available;
 use openzt2_zoo_state::progression::unlock_types::UnlockedCatalogueDefinitionSet;
-use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable;
 use openzt2_ui::authored_ui_image_content_binding::UiImageBinding;
 use openzt2_ui::authored_ui_interaction_enabled_binding::UiEnabledBinding;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
@@ -123,7 +122,6 @@ pub(crate) fn project_catalogue_page(
         &UiDocumentOwner,
         &UiEnabledBinding,
         &mut UiInteractionEnabled,
-        Option<&mut UiFocusable>,
         &mut Pickable,
     )>,
 ) {
@@ -298,8 +296,7 @@ pub(crate) fn project_catalogue_page(
                 Visibility::Hidden
             };
         }
-        for (owner, binding, mut interaction_enabled, focusable, mut pickable) in &mut enabled_nodes
-        {
+        for (owner, binding, mut interaction_enabled, mut pickable) in &mut enabled_nodes {
             if owner.0 != panel_entity {
                 continue;
             }
@@ -327,9 +324,6 @@ pub(crate) fn project_catalogue_page(
                 _ => continue,
             };
             interaction_enabled.0 = enabled;
-            if let Some(mut focusable) = focusable {
-                focusable.enabled = enabled;
-            }
             *pickable = if enabled {
                 Pickable::default()
             } else {

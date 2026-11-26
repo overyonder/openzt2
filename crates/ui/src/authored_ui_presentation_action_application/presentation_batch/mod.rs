@@ -80,6 +80,7 @@ impl AuthoredPresentationWrites<'_, '_> {
             }
             ActivateTargetNodeWithPress { .. }
             | SetTargetNodeInteractionEnabled { .. }
+            | WatchTextEdit { .. }
             | SetTargetNodeExpanded { .. }
             | SetTargetNodeModal { .. }
             | SetTargetNodeTooltip { .. }

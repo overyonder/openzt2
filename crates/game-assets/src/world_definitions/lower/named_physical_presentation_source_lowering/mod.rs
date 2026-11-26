@@ -10,10 +10,10 @@ use crate::source_document::{
     },
 };
 use openzt2_game_data::{
-    AssetId,
     world_definitions::world_objects::{
         WorldObjectFadeRange, WorldObjectNamedPhysicalPresentationDefinition,
     },
+    AssetId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -267,7 +267,11 @@ pub(super) fn lower_fade_controller_states(
     presentations: &mut Vec<WorldObjectNamedPhysicalPresentationDefinition>,
 ) -> Result<(), BindError> {
     let binders = authored_type_family_elements_named(record, "BFNamedBinder");
-    for controller in authored_type_family_elements_named(record, "BFAIFadeController") {
+    for (controller_ordinal, controller) in
+        authored_type_family_elements_named(record, "BFAIFadeController")
+            .into_iter()
+            .enumerate()
+    {
         let (Some(attribute), Some(states)) = (
             controller.attribute_named_any(&["attribName"]),
             find_descendant(controller, "stateList"),
@@ -276,7 +280,7 @@ pub(super) fn lower_fade_controller_states(
         };
         let attribute = AssetId::from_key(&attribute.trim().to_ascii_lowercase());
         let current = controller.attribute_named_any(&["currState"]);
-        for state in states.element_children() {
+        for (state_ordinal, state) in states.element_children().enumerate() {
             let Some(binder_name) = state.attribute_named_any(&["physObj"]) else {
                 continue;
             };
@@ -292,7 +296,28 @@ pub(super) fn lower_fade_controller_states(
                         )
                     })
             };
+            let number = |node: &OrderedSourceDocumentNode, key, default| {
+                node.attribute_named_any(&[key])
+                    .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
+                    .filter(|value| value.is_finite())
+                    .unwrap_or(default)
+            };
+            let flag = |key| {
+                controller
+                    .attribute_named_any(&[key])
+                    .is_some_and(|value| value.eq_ignore_ascii_case("true") || value == "1")
+            };
             let fade = WorldObjectFadeRange {
+                controller_ordinal: controller_ordinal as u32,
+                state_ordinal: state_ordinal as u32,
+                fade_period_seconds: number(
+                    state,
+                    "fadePeriod",
+                    number(controller, "fadePeriod", 0.0),
+                ),
+                max_alpha: number(state, "maxAlpha", number(controller, "maxAlpha", 1.0)),
+                fade_hold: flag("fadeHold"),
+                wrap_value: flag("wrapValue"),
                 attribute,
                 minimum: bound("minRange")?,
                 maximum: bound("maxRange")?,
@@ -481,8 +506,8 @@ mod tests {
     }
 
     #[test]
-    fn event_marker_shows_only_its_unfinished_binder_initially()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn event_marker_shows_only_its_unfinished_binder_initially(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let marker = parse_blue_fang_source_document(
             AssetPath::new("event_marker.xml"),
             br#"<BFTypedBinder binderType="gesture_event_marker">
@@ -580,8 +605,8 @@ mod tests {
     }
 
     #[test]
-    fn feeder_fade_states_spawn_and_show_only_the_current_state()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn feeder_fade_states_spawn_and_show_only_the_current_state(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let object = lower_object(
             br#"<BFTypedBinder binderType="insects">
             <types><entity><food><insects/></food></entity></types>
@@ -610,8 +635,8 @@ mod tests {
     }
 
     #[test]
-    fn fade_states_beside_a_main_model_spawn_at_the_origin()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn fade_states_beside_a_main_model_spawn_at_the_origin(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let object = lower_object(
             br#"<BFTypedBinder binderType="bin">
             <types><entity><building><bin/></building></entity></types>
@@ -636,12 +661,10 @@ mod tests {
                 (AssetId::from_key("empty"), true, true, Some([-1.0, 1.0])),
             ]
         );
-        assert!(
-            object
-                .named_physical_presentations
-                .iter()
-                .all(|presentation| presentation.attach_node.is_none())
-        );
+        assert!(object
+            .named_physical_presentations
+            .iter()
+            .all(|presentation| presentation.attach_node.is_none()));
         Ok(())
     }
 }

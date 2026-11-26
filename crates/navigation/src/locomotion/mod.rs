@@ -124,6 +124,13 @@ impl Plugin for LocomotionPlugin {
             )
             .add_systems(
                 Update,
+                openzt2_zoo_state::locomotion::navigation_path_geometry_projection::project_navigation_path_geometry
+                    .before(path_surface_navigation_projection::project_path_surfaces_into_navigation_graph)
+                    .in_set(openzt2_world_state::application_schedule::GameSet::Intent)
+                    .run_if(in_state(GamePhase::Loading)),
+            )
+            .add_systems(
+                Update,
                 path_surface_navigation_projection::project_path_surfaces_into_navigation_graph
                     .after(world_navigation_installation::install_terrain_derived_navigation_graph_for_loaded_world)
                     .in_set(openzt2_world_state::application_schedule::GameSet::Intent)
@@ -153,6 +160,8 @@ impl Plugin for LocomotionPlugin {
                     path_surface_navigation_projection::project_elevated_path_colliders,
                     terrain_edit_navigation_refresh::invalidate_routes_after_navigation_geometry_changes
                         .after_ignore_deferred(tank_water_navigation_overlay::project_tank_water_onto_navigation_cells),
+                    openzt2_zoo_state::locomotion::navigation_path_geometry_projection::project_navigation_path_geometry
+                        .before(path_surface_navigation_projection::project_path_surfaces_into_navigation_graph),
                     path_surface_navigation_projection::project_path_surfaces_into_navigation_graph
                         .after(terrain_edit_navigation_refresh::refresh_navigation_graph_after_terrain_edits),
                     fence_navigation_crossing_types::prune_empty_route_edges.before(topology_navigation_edge_invalidation::synchronize_fence_navigation_crossings),

@@ -2,13 +2,13 @@
 
 mod authored_disease_exposure;
 pub(crate) mod autonomous_task_selection;
+mod behavior_exit_and_escape;
 mod behavior_follow_entity_execution;
 mod behavior_special_docking;
-mod behavior_trick_teleport;
-mod behavior_exit_and_escape;
-mod docking_animation_pose;
 mod behavior_splash_guest_execution;
 mod behavior_staff_training_execution;
+mod behavior_trick_teleport;
+mod docking_animation_pose;
 
 /// Whether an escaped animal can reach a point: outside every habitat, or in
 /// one whose fence is breached, rather than behind another habitat's intact
@@ -56,7 +56,7 @@ mod behavior_target_morph_execution;
 mod placed_object_virtual_nodes;
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state;
 mod behavior_script_execution;
-pub use behavior_script_execution::{BreedingCenterEndangeredBirths, ScriptFloatAttributes};
+pub use behavior_script_execution::BreedingCenterEndangeredBirths;
 mod behavior_set_start_request_handling;
 use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types;
 mod behavior_show_event_execution;
@@ -177,8 +177,10 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
                 .run_if(any_with_component::<ZooSeed>)
                 .run_if(authored_disease_exposure::disease_exposure_is_due),
         );
-        application.add_observer(authored_disease_exposure::evaluation_request
-            .pipe(authored_disease_exposure::expose_animals_to_authored_diseases));
+        application.add_observer(
+            authored_disease_exposure::evaluation_request
+                .pipe(authored_disease_exposure::expose_animals_to_authored_diseases),
+        );
         application
             .add_observer(authored_disease_exposure::clear_authored_disease_tokens_when_cured);
         application

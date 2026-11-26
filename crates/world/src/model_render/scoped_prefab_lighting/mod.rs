@@ -8,14 +8,14 @@ use super::world_entity_model_suppression::ModelRenderVisibilityGate;
 
 #[derive(Component)]
 #[relationship(relationship_target = ScopedPrefabLights)]
-struct ScopedPrefabLightOf(Entity);
+pub(super) struct ScopedPrefabLightOf(Entity);
 
 #[derive(Component)]
 #[relationship_target(relationship = ScopedPrefabLightOf, linked_spawn)]
-struct ScopedPrefabLights(Vec<Entity>);
+pub(super) struct ScopedPrefabLights(Vec<Entity>);
 
 #[derive(Component)]
-struct ScopedPrefabLight(PrefabLight);
+pub(super) struct ScopedPrefabLight(PrefabLight);
 
 #[derive(Component, PartialEq)]
 pub(super) struct ScopedPrefabLightInputs(pub(super) Vec<D3d9ScopedPrefabLight>);

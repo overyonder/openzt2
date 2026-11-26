@@ -20,7 +20,7 @@ use openzt2_zoo_state::animal_welfare::types::HygieneNeed;
 use openzt2_zoo_state::animal_welfare::types::StimulationNeed;
 use openzt2_zoo_state::animal_welfare::types::Thirst;
 use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::{AnimalCrate, ScriptedCrating, UncratedWorldEntity};
 use openzt2_zoo_state::staff::staff_job_types::authored_staff_request_urgency;
 use openzt2_zoo_state::staff::staff_job_types::StaffJob;
 use openzt2_zoo_state::staff::staff_job_types::StaffJobRouting;
@@ -319,7 +319,8 @@ pub(super) struct RemovedStaffRequestFacts<'w, 's> {
     escaped: RemovedComponents<'w, 's, Escaped>,
     disease: RemovedComponents<'w, 's, Disease>,
     dead: RemovedComponents<'w, 's, Dead>,
-    crated: RemovedComponents<'w, 's, WorldEntityIsCrated>,
+    crated: RemovedComponents<'w, 's, AnimalCrate>,
+    script_crated: RemovedComponents<'w, 's, ScriptedCrating>,
     disabled: RemovedComponents<'w, 's, Disabled>,
 }
 
@@ -342,7 +343,7 @@ impl RemovedStaffRequestFacts<'_, '_> {
             .chain(self.escaped.read())
             .chain(self.disease.read())
             .chain(self.dead.read())
-            .chain(self.crated.read())
+            .chain(self.crated.read().chain(self.script_crated.read()))
             .chain(self.disabled.read())
     }
 }
@@ -376,7 +377,7 @@ pub(super) fn evaluate_staff_request_rows(
                     Added<Escaped>,
                     Added<Disease>,
                     Added<Dead>,
-                    Added<WorldEntityIsCrated>,
+                    Or<(Added<AnimalCrate>, Added<ScriptedCrating>)>,
                 )>,
             )>,
         ),
@@ -394,10 +395,7 @@ pub(super) fn evaluate_staff_request_rows(
         Option<&WaterFilter>,
         Option<&MaintenanceScheduleIndex>,
     )>,
-    animal_needs: Query<
-        AnimalRequestFacts,
-        (With<Animal>, Without<Dead>, Without<WorldEntityIsCrated>),
-    >,
+    animal_needs: Query<AnimalRequestFacts, (With<Animal>, Without<Dead>, UncratedWorldEntity)>,
     jobs: Query<(Entity, &StaffJob, Option<&StaffJobRouting>)>,
     mut requests: MessageWriter<StaffJobRequest>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,

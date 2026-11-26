@@ -22,12 +22,12 @@ use openzt2_zoo_state::{
     animal_health::types::Dead,
     animal_lifecycle::types::SpeciesHandle,
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, BehaviorTaskReturnFrame, PendingBehaviorTaskFailure,
         running_actions::{
+            activated_behavior_actor, behavior_action_actors, update_waiting_behavior_actors,
             BehaviorStepFixedSet, BehaviorTaskReplaced, RunBehaviorStaffTrainAnimal,
             RunningBehaviorInstruction, SelectedBehaviorSet, TrainerEnabledTricks,
-            activated_behavior_actor, behavior_action_actors, update_waiting_behavior_actors,
         },
+        BehaviorTaskExecutionState, BehaviorTaskReturnFrame, PendingBehaviorTaskFailure,
     },
     shows::performer_training::PerformerTraining,
     staff::{

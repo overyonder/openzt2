@@ -2,9 +2,13 @@ pub(super) mod original_saved_game_conversion;
 use bevy::{ecs::system::SystemParam, prelude::*};
 
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
-use openzt2_world_state::simulation_time::simulation_clock_types::{ZooCalendar, ZooDay, ZooMonth};
+use openzt2_world_state::simulation_time::simulation_clock_types::{
+    ZooCalendar, ZooDay, ZooDayCadence, ZooMonth,
+};
 use openzt2_world_state::simulation_time::simulation_clock_types::{ZooClock, ZooClockFraction};
-use openzt2_world_state::simulation_time::simulation_control_types::SimulationControl;
+use openzt2_world_state::simulation_time::simulation_control_types::{
+    SimulationControl, SimulationPaused, SimulationSpeedTier,
+};
 
 use super::persistence_failure_types::WorldSnapshotPersistenceFailure;
 
@@ -20,6 +24,7 @@ pub(super) struct SimulationTimeSnapshotCapture<'w, 's> {
             &'static ZooClock,
             &'static ZooCalendar,
             &'static SimulationControl,
+            &'static SimulationSpeedTier,
             &'static ZooSeed,
         ),
     >,
@@ -34,6 +39,8 @@ pub(super) struct SimulationTimeSnapshotRestore<'w, 's> {
             &'static mut ZooClock,
             &'static mut ZooCalendar,
             &'static mut SimulationControl,
+            &'static mut SimulationSpeedTier,
+            &'static mut SimulationPaused,
             &'static mut ZooSeed,
             &'static mut ZooDay,
             &'static mut ZooMonth,
@@ -51,7 +58,8 @@ impl SimulationTimeSnapshotRestore<'_, '_> {
 pub(super) struct SimulationTimeSnapshotRecord {
     clock: ZooClock,
     calendar: ZooCalendar,
-    control: SimulationControl,
+    speed: SimulationSpeedTier,
+    requested_pause: bool,
     seed: ZooSeed,
 }
 
@@ -60,14 +68,15 @@ impl SimulationTimeSnapshotCapture<'_, '_> {
         &self,
         root: Entity,
     ) -> Result<SimulationTimeSnapshotRecord, WorldSnapshotPersistenceFailure> {
-        let (clock, calendar, control, seed) = self
+        let (clock, calendar, control, speed, seed) = self
             .roots
             .get(root)
             .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
         SimulationTimeSnapshotRecord {
             clock: *clock,
             calendar: *calendar,
-            control: *control,
+            speed: *speed,
+            requested_pause: control.requested_pause_state(),
             seed: *seed,
         }
         .validate_simulation_time_snapshot_record()
@@ -78,10 +87,16 @@ impl SimulationTimeSnapshotRecord {
     pub(super) fn validate_against_timing(
         self,
         timing: &openzt2_game_data::world_definitions::simulation_time::SimulationTimingDefinition,
+        cadence: ZooDayCadence,
+        day_offset: Option<i64>,
     ) -> Result<Self, WorldSnapshotPersistenceFailure> {
-        if timing.ticks_per_day == 0
-            || self.clock.tick / u64::from(timing.ticks_per_day) != u64::from(self.clock.absolute_day)
-            || self.clock.tick % u64::from(timing.ticks_per_day) != u64::from(self.clock.tick_in_day)
+        let expected = cadence
+            .clock_at(self.clock.tick, self.clock.fractional_tick)
+            .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
+        if expected.tick_in_day != self.clock.tick_in_day
+            || day_offset.is_some_and(|offset| {
+                i64::from(self.clock.absolute_day) != i64::from(expected.absolute_day) + offset
+            })
             || openzt2_world_state::simulation_time::zoo_calendar_calculation::calculate_zoo_calendar_for_absolute_day(&timing.calendar, self.clock.absolute_day) != self.calendar
         {
             return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
@@ -96,9 +111,9 @@ impl SimulationTimeSnapshotRecord {
         bytes.extend_from_slice(&self.calendar.year.to_le_bytes());
         bytes.push(self.calendar.month);
         bytes.push(self.calendar.day);
-        bytes.push(self.control.speed_tier);
+        bytes.push(self.speed.0);
         // A save made from a dialog must not keep that dialog's temporary pause.
-        bytes.push(u8::from(self.control.requested_pause_state()));
+        bytes.push(u8::from(self.requested_pause));
         bytes.extend_from_slice(&self.seed.0.to_le_bytes());
         bytes.extend_from_slice(&self.clock.fractional_tick.numerator().to_le_bytes());
         bytes.extend_from_slice(&self.clock.fractional_tick.denominator().to_le_bytes());
@@ -109,13 +124,24 @@ impl SimulationTimeSnapshotRecord {
         root: Entity,
         time: &mut SimulationTimeSnapshotRestore,
     ) -> Result<(), WorldSnapshotPersistenceFailure> {
-        let (mut clock, mut calendar, mut control, mut seed, mut day, mut month) = time
+        let (
+            mut clock,
+            mut calendar,
+            mut control,
+            mut speed,
+            mut paused,
+            mut seed,
+            mut day,
+            mut month,
+        ) = time
             .roots
             .get_mut(root)
             .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
         clock.set_if_neq(self.clock);
         calendar.set_if_neq(self.calendar);
-        control.set_if_neq(self.control);
+        control.set_if_neq(SimulationControl::new(self.requested_pause));
+        speed.set_if_neq(self.speed);
+        paused.set_if_neq(control.effective_pause());
         seed.set_if_neq(self.seed);
         day.set_if_neq(ZooDay(self.clock.absolute_day));
         month.set_if_neq(ZooMonth::from(self.calendar));
@@ -128,7 +154,7 @@ impl SimulationTimeSnapshotRecord {
         (self.calendar.year != 0
             && (1..=12).contains(&self.calendar.month)
             && (1..=31).contains(&self.calendar.day)
-            && self.control.speed_tier <= 3)
+            && self.speed.0 <= 3)
             .then_some(self)
             .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)
     }
@@ -189,7 +215,8 @@ pub(super) fn decode_simulation_time_snapshot_record(
             month: bytes[18],
             day: bytes[19],
         },
-        control: SimulationControl::new(bytes[20], paused),
+        speed: SimulationSpeedTier(bytes[20]),
+        requested_pause: paused,
         seed: ZooSeed(u64_at(22)?),
     }
     .validate_simulation_time_snapshot_record()
@@ -222,7 +249,8 @@ mod tests {
                 month: 1,
                 day: 1,
             },
-            control: SimulationControl::new(2, true),
+            speed: SimulationSpeedTier(2),
+            requested_pause: true,
             seed: ZooSeed(99),
         };
         let mut bytes = Vec::new();
@@ -236,19 +264,31 @@ mod tests {
                 leap: openzt2_game_data::world_definitions::simulation_time::SimulationCalendarLeapPolicy::Gregorian,
             },
         };
-        assert_eq!(saved.validate_against_timing(&timing), Ok(saved));
+        let cadence = ZooDayCadence::from_ticks_per_day(
+            std::num::NonZeroU32::new(timing.ticks_per_day).unwrap(),
+        );
+        assert_eq!(
+            saved.validate_against_timing(&timing, cadence, Some(0)),
+            Ok(saved)
+        );
         let mut inconsistent = saved;
         inconsistent.clock.absolute_day = 1;
-        assert!(inconsistent.validate_against_timing(&timing).is_err());
+        assert!(inconsistent
+            .validate_against_timing(&timing, cadence, Some(0))
+            .is_err());
         inconsistent = saved;
         inconsistent.calendar.day = 2;
-        assert!(inconsistent.validate_against_timing(&timing).is_err());
+        assert!(inconsistent
+            .validate_against_timing(&timing, cadence, Some(0))
+            .is_err());
         let mut world = World::new();
         let root = world
             .spawn((
                 legacy_time_clock(),
                 saved.calendar,
-                SimulationControl::new(0, false),
+                SimulationControl::new(false),
+                SimulationSpeedTier(0),
+                SimulationPaused(false),
                 ZooSeed(0),
                 ZooDay(0),
                 ZooMonth(0),

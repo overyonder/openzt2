@@ -1,21 +1,18 @@
 use super::world_prefab_record_hydration::ApplyStartingAnimalHiddenVisibility;
 use bevy::prelude::*;
 use openzt2_world_state::world_spawn::world_entity_crating::{
-    AnimalCrate, ContainedCratedAnimal, RemoveWorldEntityFromCrate, WorldEntityIsCrated,
+    AnimalCrate, ContainedCratedAnimal, CratedWorldEntity, RemoveWorldEntityFromCrate,
+    ScriptedCrating, UncratedWorldEntity,
 };
 
 pub(super) fn remove_requested_world_entities_from_crates(
     mut commands: Commands,
     mut requests: MessageReader<RemoveWorldEntityFromCrate>,
     mut animals: Query<
-        (
-            Option<&AnimalCrate>,
-            Option<&mut Transform>,
-            Option<&mut Visibility>,
-        ),
-        (With<WorldEntityIsCrated>, Without<ContainedCratedAnimal>),
+        (Option<&AnimalCrate>, Option<&mut Transform>),
+        (CratedWorldEntity, Without<ContainedCratedAnimal>),
     >,
-    crates: Query<(&ContainedCratedAnimal, &Transform), Without<WorldEntityIsCrated>>,
+    crates: Query<(&ContainedCratedAnimal, &Transform), UncratedWorldEntity>,
 ) {
     let mut released = bevy::ecs::entity::EntityHashSet::new();
     for request in requests.read() {
@@ -25,7 +22,7 @@ pub(super) fn remove_requested_world_entities_from_crates(
         if !released.insert(animal) {
             continue;
         }
-        let Ok((crate_link, transform, visibility)) = animals.get_mut(animal) else {
+        let Ok((crate_link, transform)) = animals.get_mut(animal) else {
             continue;
         };
         if let Some(crate_link) = crate_link {
@@ -43,11 +40,9 @@ pub(super) fn remove_requested_world_entities_from_crates(
             commands
                 .entity(animal)
                 .remove::<(AnimalCrate, ApplyStartingAnimalHiddenVisibility)>();
-            if let Some(mut visibility) = visibility {
-                visibility.set_if_neq(Visibility::Inherited);
-            }
+        } else {
+            commands.entity(animal).remove::<ScriptedCrating>();
         }
-        commands.entity(animal).remove::<WorldEntityIsCrated>();
     }
 }
 
@@ -90,11 +85,7 @@ mod tests {
         );
         let animal = app
             .world_mut()
-            .spawn((
-                Transform::from_scale(Vec3::splat(0.8)),
-                Visibility::Hidden,
-                WorldEntityIsCrated,
-            ))
+            .spawn(Transform::from_scale(Vec3::splat(0.8)))
             .id();
         let crate_entity = app
             .world_mut()
@@ -122,7 +113,6 @@ mod tests {
             Some(&Visibility::Inherited)
         );
         assert!(app.world().get::<AnimalCrate>(animal).is_none());
-        assert!(app.world().get::<WorldEntityIsCrated>(animal).is_none());
         assert!(app.world().get_entity(crate_entity).is_err());
     }
 }

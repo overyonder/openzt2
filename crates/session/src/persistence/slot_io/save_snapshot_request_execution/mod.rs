@@ -306,7 +306,9 @@ fn capture_simulation_time(
             let definitions = definitions
                 .get(&assets)
                 .ok_or(Failure::UnknownAssetIdentifier)?;
-            record.validate_against_timing(definitions.timing())
+            let cadence = openzt2_simulation_time::simulation_time_world_lifecycle::zoo_day_cadence_from_world_definitions(definitions)
+                .ok_or(Failure::CorruptSnapshotSection)?;
+            record.validate_against_timing(definitions.timing(), cadence, None)
         });
     commands.entity(operation).insert(Captured::new(capture));
 }

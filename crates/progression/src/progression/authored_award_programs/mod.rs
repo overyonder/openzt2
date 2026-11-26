@@ -341,7 +341,7 @@ pub(super) fn process_authored_award_programs(
             }
             let host = AwardFacts {
                 mode: identity.mode,
-                cash_dollars: cash.0.0 as f64 / 100.0,
+                cash_dollars: cash.0 .0 as f64 / 100.0,
                 total_visitors: history
                     .filter(|history| history.has_initialized_month())
                     .map_or(0, |history| {

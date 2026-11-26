@@ -96,7 +96,10 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
     mut commands: Commands,
     ui_values: Query<&UiValue>,
     editable_text_nodes: Query<(&EditableText, &UiDocumentOwner, Option<&UiTextEditPolicy>)>,
-    profile_index: Res<ProfileIndex>,
+    (profile_index, mut profile_options): (
+        Res<ProfileIndex>,
+        ResMut<openzt2_interface_state::persistence::profile_types::ProfileOptions>,
+    ),
     live_world_roots: Query<
         Entity,
         With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
@@ -133,6 +136,16 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                 continue;
             }
             match &authored_persistence_action.action {
+                UiPersistenceAction::SetProfileAttribute { key, value } => {
+                    if profile_index.selected_profile_identifier
+                        == Some(profile_options.profile_identifier)
+                        && profile_options.attributes.get(key) != Some(value)
+                    {
+                        profile_options
+                            .attributes
+                            .insert(key.clone(), value.clone());
+                    }
+                }
                 UiPersistenceAction::SaveWorldSnapshotToSlot { save_slot } => {
                     persistence_action_messages
                         .save_world_snapshot_requests

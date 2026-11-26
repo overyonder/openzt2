@@ -4,8 +4,8 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::{
-    AssetId,
     world_definitions::animal_shows_and_training::{TrickDefinition, TrickLevel},
+    AssetId,
 };
 use openzt2_world_state::{
     simulation_time::simulation_clock_types::ZooClock,

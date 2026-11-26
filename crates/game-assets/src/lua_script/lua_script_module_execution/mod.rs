@@ -153,6 +153,27 @@ pub fn execute_lua_script_module_once_per_virtual_machine(
     execute_lua_module_once(function, path, included_assets, active_paths)
 }
 
+pub fn restore_lua_script_module(
+    lua: &Lua,
+    saved_path: &str,
+    assets: &Assets<LuaScriptAsset>,
+    sources: &LuaScriptSources,
+    included_assets: &RefCell<BTreeSet<AssetId>>,
+    active_paths: &RefCell<Vec<String>>,
+) -> mlua::Result<()> {
+    let path = sources.resolve("", saved_path).ok_or_else(|| {
+        mlua::Error::runtime(format!("saved Lua module {saved_path} is unavailable"))
+    })?;
+    if included_assets
+        .borrow()
+        .contains(&AssetId::from_virtual_path(&path))
+    {
+        return Ok(());
+    }
+    let function = compile_resolved_lua_source(lua, sources, assets, &path)?;
+    execute_lua_module_once(function, &path, included_assets, active_paths)
+}
+
 fn execute_lua_module_once(
     function: Function,
     path: &str,

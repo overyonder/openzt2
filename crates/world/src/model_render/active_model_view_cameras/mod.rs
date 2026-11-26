@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 pub struct PrefabLodCameraViewFactor(pub f32);
 
 #[derive(Component, Clone, PartialEq)]
-struct ModelCameraViewInput {
+pub(super) struct ModelCameraViewInput {
     pose: GlobalTransform,
     order: isize,
     layers: RenderLayers,

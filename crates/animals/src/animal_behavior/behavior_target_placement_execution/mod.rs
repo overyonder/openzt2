@@ -14,7 +14,7 @@ use openzt2_game_assets::{
 use openzt2_game_data::behavior::action::place_target::BehaviorPlacedTargetType;
 use openzt2_world_state::{
     simulation_time::simulation_clock_types::ZooClock,
-    world_spawn::{world_entity_crating::WorldEntityIsCrated, world_membership_types::WorldMember},
+    world_spawn::{world_entity_crating::UncratedWorldEntity, world_membership_types::WorldMember},
 };
 use openzt2_zoo_state::{
     animal_health::types::Dead,
@@ -33,8 +33,8 @@ use openzt2_zoo_state::{
 use super::behavior_target_placement_types::{
     BehaviorPlacementDelivering, BehaviorPlacementOf, BehaviorPlacementPutDown,
     BehaviorPlacementRecipient, BehaviorPlacementResult, BehaviorPlacementSiting,
-    BehaviorPlacements, BehaviorTargetPlacement, BehaviorTravelPointOf,
-    BehaviorTargetPlacementSite,
+    BehaviorPlacements, BehaviorTargetPlacement, BehaviorTargetPlacementSite,
+    BehaviorTravelPointOf,
 };
 
 pub(super) fn invalidate_obsolete_behavior_target_placement_sites(
@@ -136,10 +136,7 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
         Query<&BehaviorPlacementResult>,
     ),
     frames: openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationFrames,
-    recipients: Query<
-        (&WorldMember, &SpeciesHandle),
-        (Without<Dead>, Without<WorldEntityIsCrated>),
-    >,
+    recipients: Query<(&WorldMember, &SpeciesHandle), (Without<Dead>, UncratedWorldEntity)>,
 ) {
     let mut all_placements = activation.0.is_none().then(|| placements.iter());
     let mut selected_placements = activation
@@ -220,7 +217,9 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
                 ChildOf(operation),
                 BehaviorTravelPointOf(operation),
             ));
-            commands.entity(operation).insert(BehaviorPlacementDelivering);
+            commands
+                .entity(operation)
+                .insert(BehaviorPlacementDelivering);
             task.interaction_slot = None;
             instruction.enter_set(
                 actor,

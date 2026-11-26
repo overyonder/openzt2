@@ -7,10 +7,10 @@ use crate::source_document::ordered_source_document_types::OrderedSourceDocument
 use crate::source_document::resolved_source_record_index::BindError;
 use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::species::NeedKind;
 use openzt2_game_data::species::NeedPreference;
 use openzt2_game_data::species::SpeciesNeed;
+use openzt2_game_data::AssetId;
 
 #[derive(Default)]
 struct EffectiveAuthoredAnimalNeedState {

@@ -32,11 +32,11 @@ use super::album_operations::{
     select_photo_in_album_display_slot,
 };
 use super::photo_album_types::{
-    ActivePhotoAlbum, DeletePhotoRequest, EnlargedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS,
-    MAX_PHOTO_ALBUM_SPREADS, PHOTO_ALBUM_PAGE_SIZE, PhotoAlbumCapacityPages, PhotoAlbumChoiceRow,
-    PhotoAlbumPage, PhotoCameraRoll, PhotoCameraRollRow, PhotoHelpShown, PhotoMove,
+    ActivePhotoAlbum, DeletePhotoRequest, EnlargedAlbumPhoto, PhotoAlbumCapacityPages,
+    PhotoAlbumChoiceRow, PhotoAlbumPage, PhotoCameraRoll, PhotoCameraRollRow, PhotoMove,
     PhotoMoveTarget, PhotoPointerDrag, SelectedAlbumPhoto, WorldActivePhotoAlbum,
-    WorldPhotoCameraRoll,
+    WorldPhotoCameraRoll, INITIAL_PHOTO_ALBUM_SPREADS, MAX_PHOTO_ALBUM_SPREADS,
+    PHOTO_ALBUM_PAGE_SIZE,
 };
 use super::photo_configuration::{PhotoConfiguration, PhotoConfigurationSource};
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPhotoActions;
@@ -261,11 +261,6 @@ pub(super) fn route_photo_ui_actions(
                                     .insert(PhotoAlbumCapacityPages(default_album_spreads));
                             }
                         }
-                    }
-                }
-                UiPhotoAction::MarkPhotoAlbumHelpAsShown => {
-                    if let Some(album) = active {
-                        commands.entity(album).insert(PhotoHelpShown);
                     }
                 }
                 UiPhotoAction::DeleteActivePhotoAlbumAndContainedPhotos => {

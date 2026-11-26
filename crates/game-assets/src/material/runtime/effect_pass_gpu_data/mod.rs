@@ -77,6 +77,23 @@ pub(super) struct D3d9FixedFunctionTransforms {
 pub const D3D9_MAX_ACTIVE_DIRECTIONAL_LIGHTS: usize = 8;
 pub const FIXED_FUNCTION_WORLD_LIGHT_CONTEXT_COUNT: usize = 32;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum D3d9ScopedPrefabLight {
+    Ambient {
+        color: Vec3,
+    },
+    Directional {
+        direction_to_light: Vec3,
+        color: Vec3,
+    },
+    Point {
+        position: Vec3,
+        color: Vec3,
+        range: f32,
+        attenuation: [f32; 3],
+    },
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, ShaderType)]
 pub struct D3d9FixedFunctionWorldLightRegisters {
     pub ambient_color_and_directional_light_count: Vec4,
@@ -155,6 +172,9 @@ pub struct EffectPassMaterial {
     pub(super) texture_assets: EffectPassTextureAssets,
     pub(super) evaluated_sampler_states: [EvaluatedD3d9SamplerState; 8],
     pub(super) particle_alpha_test: Option<bevy_hanabi::EffectAlphaTest>,
+    pub(super) camera_containment_cull_faces:
+        Option<[Option<bevy::render::render_resource::Face>; 4]>,
+    pub(super) camera_containment_flags: u8,
     pub(super) pipeline_specialization_key: EffectPassPipelineSpecializationKey,
     pub(super) dynamic_parameter_register_bindings:
         std::sync::Arc<[DynamicEffectParameterRegisterBinding]>,

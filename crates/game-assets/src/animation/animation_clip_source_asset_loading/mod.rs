@@ -18,6 +18,7 @@ use crate::{
 
 use super::animation_set_asset_types::{
     AnimationClipSourceAsset, AnimationTimelineCommand, AnimationTimelineKey,
+    AuthoredAnimationKeyframeEvent,
 };
 
 #[derive(Default, TypePath)]
@@ -96,7 +97,7 @@ impl AssetLoader for AnimationClipSourceAssetLoader {
 }
 
 fn prepare_animation_clip_source(
-    clip: AnimationClip,
+    mut clip: AnimationClip,
     mut authored_animation_clip_metadata: AuthoredAnimationClipMetadata,
     label_prefix: &str,
     animation_clip_load_context: &mut LoadContext<'_>,
@@ -112,11 +113,6 @@ fn prepare_animation_clip_source(
         .zip(marker_time("loop_end"))
         .filter(|(start, end)| start < end && *end <= clip.duration())
         .map(|(start, end)| start..end);
-    let animation_clip_handle =
-        animation_clip_load_context.add_labeled_asset(format!("{label_prefix}Clip"), clip);
-    let (graph, animation_node) = AnimationGraph::from_clip(animation_clip_handle.clone());
-    let animation_graph =
-        animation_clip_load_context.add_labeled_asset(format!("{label_prefix}Graph"), graph);
     let duration = authored_animation_clip_metadata
         .duration_milliseconds
         .max(1);
@@ -140,9 +136,34 @@ fn prepare_animation_clip_source(
             })
             .collect::<Vec<_>>();
     timeline.sort_by_key(|key| key.milliseconds);
+    let timeline: Arc<[_]> = timeline.into();
+    let mut first_key = 0;
+    while first_key < timeline.len() {
+        let milliseconds = timeline[first_key].milliseconds;
+        let end_key = first_key
+            + timeline[first_key..].partition_point(|key| key.milliseconds == milliseconds);
+        let keys = timeline.clone();
+        clip.add_event_fn(
+            milliseconds as f32 / 1000.0,
+            move |commands, entity, _, _| {
+                commands.trigger(AuthoredAnimationKeyframeEvent {
+                    entity,
+                    timeline: keys.clone(),
+                    first_key,
+                    end_key,
+                });
+            },
+        );
+        first_key = end_key;
+    }
+    let animation_clip_handle =
+        animation_clip_load_context.add_labeled_asset(format!("{label_prefix}Clip"), clip);
+    let (graph, animation_node) = AnimationGraph::from_clip(animation_clip_handle.clone());
+    let animation_graph =
+        animation_clip_load_context.add_labeled_asset(format!("{label_prefix}Graph"), graph);
     AnimationClipSourceAsset {
         authored_animation_clip_metadata: Arc::new(authored_animation_clip_metadata),
-        timeline: timeline.into(),
+        timeline,
         animation_clip_handle,
         animation_graph,
         animation_node,

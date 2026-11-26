@@ -1,9 +1,11 @@
 use bevy::{ecs::relationship::RelationshipTarget, platform::collections::HashMap, prelude::*};
-use openzt2_game_data::AssetId;
 use openzt2_game_data::species::{NeedKind, SpeciesHabitatSpace, SpeciesNeed};
+use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::{
+    AnimalCrate, ScriptedCrating, UncratedWorldEntity,
+};
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
@@ -17,7 +19,7 @@ use super::calculations::clamp_animal_need_q16_after_delta;
 use super::types::{EnvironmentHabitatAssessed, EnvironmentNeed, HabitatSuitability, Q16_ONE};
 use super::{
     need_latch_types::NeedLatch,
-    need_updates::{NeedThresholdCrossing, observe_need_write},
+    need_updates::{observe_need_write, NeedThresholdCrossing},
 };
 
 #[derive(Component)]
@@ -33,7 +35,8 @@ pub(super) fn mark_habitat_after_occupant_eligibility_changes(
             SpeciesHandle,
             EnvironmentNeed,
             Dead,
-            WorldEntityIsCrated,
+            AnimalCrate,
+            ScriptedCrating,
             AquaticAnimal,
         )>,
     >,
@@ -53,7 +56,8 @@ pub(super) fn mark_habitat_after_occupant_eligibility_is_removed(
             Animal,
             SpeciesHandle,
             Dead,
-            WorldEntityIsCrated,
+            AnimalCrate,
+            ScriptedCrating,
             AquaticAnimal,
         )>,
     >,
@@ -93,7 +97,7 @@ pub(super) fn project_changed_habitat_suitability(
         (
             With<Animal>,
             Without<Dead>,
-            Without<WorldEntityIsCrated>,
+            UncratedWorldEntity,
             Without<AquaticAnimal>,
         ),
     >,

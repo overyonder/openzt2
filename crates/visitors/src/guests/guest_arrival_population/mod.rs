@@ -5,7 +5,8 @@ use bevy::{
 };
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::{
-    world_entity_crating::WorldEntityIsCrated, world_membership_types::WorldMember,
+    world_entity_crating::{AnimalCrate, ScriptedCrating},
+    world_membership_types::WorldMember,
 };
 use openzt2_zoo_state::{
     animal_health::types::Dead,
@@ -101,7 +102,7 @@ pub(super) struct PopulationChanges<'w, 's> {
                 Added<Guest>,
                 Added<Animal>,
                 Added<Dead>,
-                Added<WorldEntityIsCrated>,
+                Or<(Added<AnimalCrate>, Added<ScriptedCrating>)>,
             )>,
         ),
     >,
@@ -110,7 +111,8 @@ pub(super) struct PopulationChanges<'w, 's> {
     species: RemovedComponents<'w, 's, SpeciesHandle>,
     members: RemovedComponents<'w, 's, WorldMember>,
     dead: RemovedComponents<'w, 's, Dead>,
-    crated: RemovedComponents<'w, 's, WorldEntityIsCrated>,
+    crated: RemovedComponents<'w, 's, AnimalCrate>,
+    script_crated: RemovedComponents<'w, 's, ScriptedCrating>,
     enabled: RemovedComponents<'w, 's, Disabled>,
 }
 
@@ -125,7 +127,7 @@ pub(super) fn synchronize_arrival_population(
             Has<Guest>,
             Has<Animal>,
             Has<Dead>,
-            Has<WorldEntityIsCrated>,
+            (Has<AnimalCrate>, Has<ScriptedCrating>),
             Option<&mut ArrivalPopulationMember>,
         ),
         Or<(With<Guest>, With<Animal>, With<ArrivalPopulationMember>)>,
@@ -140,7 +142,7 @@ pub(super) fn synchronize_arrival_population(
         .chain(changes.species.read())
         .chain(changes.members.read())
         .chain(changes.dead.read())
-        .chain(changes.crated.read())
+        .chain(changes.crated.read().chain(changes.script_crated.read()))
         .chain(changes.enabled.read())
         .collect();
     for entity in affected {
@@ -150,7 +152,7 @@ pub(super) fn synchronize_arrival_population(
             continue;
         };
         let species = species
-            .filter(|_| animal && !dead && !crated)
+            .filter(|_| animal && !dead && !crated.0 && !crated.1)
             .map(|handle| handle.species);
         let Some(member) =
             member.filter(|member| (guest || species.is_some()) && worlds.contains(member.root))

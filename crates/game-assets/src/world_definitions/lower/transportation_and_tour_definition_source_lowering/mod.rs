@@ -751,11 +751,19 @@ pub(super) fn bind_authored_vehicle_seats(
                 }
             }
             let pitch_limit = |name| {
-                state.attribute_named_any(&[name]).map(|value| {
-                    parse_blue_fang_source_numeric_lexeme::<f32>(value)
-                        .filter(|angle| angle.is_finite())
-                        .ok_or_else(|| BindError::record(record, format!("invalid vehicle seat angle {name}: {value}")))
-                }).transpose()
+                state
+                    .attribute_named_any(&[name])
+                    .map(|value| {
+                        parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                            .filter(|angle| angle.is_finite())
+                            .ok_or_else(|| {
+                                BindError::record(
+                                    record,
+                                    format!("invalid vehicle seat angle {name}: {value}"),
+                                )
+                            })
+                    })
+                    .transpose()
             };
             resolved_animation_states.push(TransportationVehicleSeatAnimationState {
                 clip_prefix: prefix.to_owned(),

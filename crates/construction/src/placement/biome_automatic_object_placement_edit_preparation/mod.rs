@@ -137,7 +137,7 @@ pub(super) fn begin_biome_object_drag(
         } else {
             IVec2::ZERO
         };
-        if let Some(mut stored) = stored {
+        if let Some(stored) = stored {
             stored
                 .map_unchanged(|start| &mut start.0)
                 .set_if_neq(offset);

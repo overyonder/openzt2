@@ -248,8 +248,8 @@ fn lower_authored_staff_tokens(
 
 #[cfg(test)]
 mod tests {
-    use super::StaffRequestData;
     use super::id;
+    use super::StaffRequestData;
     use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
 
     use crate::source_document::blue_fang_actor_manifest_model_and_scene_resolution_index::BlueFangActorManifestModelAndSceneResolutionIndex;
@@ -296,8 +296,8 @@ mod tests {
     }
 
     #[test]
-    fn staff_manager_policy_lowers_with_authored_and_default_values()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn staff_manager_policy_lowers_with_authored_and_default_values(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let document = lower_staff_manager(AUTHORED_STAFF_MANAGER)?;
         let policy = document
             .staff_manager

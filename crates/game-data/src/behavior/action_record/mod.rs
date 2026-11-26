@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::action;
-use crate::{AssetId, animation::animation_text_key::AuthoredAnimationTextCommand};
+use crate::{animation::animation_text_key::AuthoredAnimationTextCommand, AssetId};
 
 pub type BehaviorAnimationTextKeyAliases = Vec<(AssetId, Vec<AuthoredAnimationTextCommand>)>;
 

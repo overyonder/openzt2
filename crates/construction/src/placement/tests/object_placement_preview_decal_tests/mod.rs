@@ -35,6 +35,8 @@ fn placement_preview_keeps_its_footprint_and_grid_decals_when_the_pose_changes()
         .init_resource::<WorldDefinitions>()
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<TerrainAsset>>()
+        .init_resource::<Assets<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>()
+        .add_message::<AssetEvent<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>()
         .add_message::<TerrainChanged>()
         .add_message::<TerrainPresentationRestored>()
         .add_message::<openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprintChanged>()
@@ -50,6 +52,7 @@ fn placement_preview_keeps_its_footprint_and_grid_decals_when_the_pose_changes()
         objects: vec![WorldObjectDefinition {
             authored_runtime: Default::default(),
             audio_cue_prefixes: Vec::new(),
+            audio_stage_volumes: Vec::new(),
             surface_effect_strength: None,
             presentation_caustic_policies: Vec::new(),
             traversal_animation_manifests: Vec::new(),
@@ -107,6 +110,7 @@ fn placement_preview_keeps_its_footprint_and_grid_decals_when_the_pose_changes()
         .spawn((
             WorldMember { root },
             Visibility::Inherited,
+            Transform::default(),
             ConstructionPreview {
                 definition,
                 transform: Transform::default(),
@@ -134,9 +138,8 @@ fn placement_preview_keeps_its_footprint_and_grid_decals_when_the_pose_changes()
 
     // Changing the pose keeps the existing grid and footprint entities.
     app.world_mut()
-        .get_mut::<ConstructionPreview>(preview)
+        .get_mut::<Transform>(preview)
         .unwrap()
-        .transform
         .rotate_y(std::f32::consts::FRAC_PI_2);
     app.update();
     let rebuilt = decals(&mut app);

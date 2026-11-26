@@ -7,8 +7,9 @@ use bevy::{
     prelude::*,
 };
 use openzt2_animals::animal_lifecycle::adoption_offer_types::{
-    AdoptionOfferClock, AdoptionOfferCooldown, AdoptionOfferForOption, AdoptionOfferOption,
-    AdoptionOfferOptions, AdoptionOfferRandom, AdoptionOfferSupply, CurrentAdoptionOffer,
+    AdoptionOfferCooldown, AdoptionOfferForOption, AdoptionOfferOption, AdoptionOfferOptions,
+    AdoptionOfferRandom, AdoptionOfferSupply, AdoptionOfferTiming, AdoptionOfferUnlocked,
+    CurrentAdoptionOffer,
 };
 use openzt2_game_assets::species::species_asset_types::SpeciesView;
 use openzt2_world_state::game_session_types::WorldSessionMode;
@@ -60,7 +61,6 @@ pub(super) struct AdoptionOfferSnapshotCapture<'w, 's> {
         's,
         (
             Entity,
-            Option<&'static AdoptionOfferClock>,
             Option<&'static AdoptionOfferRandom>,
             Option<&'static AdoptionOfferOptions>,
         ),
@@ -75,7 +75,7 @@ pub(super) struct AdoptionOfferSnapshotCapture<'w, 's> {
             Option<&'static CurrentAdoptionOffer>,
         ),
     >,
-    supplies: Query<'w, 's, &'static AdoptionOfferSupply>,
+    supplies: Query<'w, 's, (&'static AdoptionOfferSupply, &'static AdoptionOfferTiming)>,
     adoptions: Query<'w, 's, &'static PendingAdoption>,
 }
 
@@ -84,10 +84,10 @@ impl AdoptionOfferSnapshotCapture<'_, '_> {
         &self,
     ) -> Result<Option<AnimalAdoptionOffersSnapshot>, WorldSnapshotPersistenceFailure> {
         let invalid = WorldSnapshotPersistenceFailure::CorruptSnapshotSection;
-        let (root, clock, random, options) = self.roots.single().map_err(|_| invalid)?;
-        let (clock, random) = match (clock, random, options) {
-            (None, None, None) => return Ok(None),
-            (Some(clock), Some(random), _) => (clock.0, random.0.to_raw()),
+        let (root, random, options) = self.roots.single().map_err(|_| invalid)?;
+        let random = match (random, options) {
+            (None, None) => return Ok(None),
+            (Some(random), _) => random.0.to_raw(),
             _ => return Err(invalid),
         };
         if self
@@ -105,7 +105,6 @@ impl AdoptionOfferSnapshotCapture<'_, '_> {
         }
         let mut slots = vec![AdoptionOfferSlotSnapshot::default(); option_count / 2];
         let mut seen_options = vec![[false; 2]; slots.len()];
-        let remaining = |deadline: f64| (deadline - clock).max(0.0) as f32;
         for entity in members {
             let (option, cooldown, current) = self.options.get(entity).map_err(|_| invalid)?;
             let slot_index = usize::from(option.slot);
@@ -118,31 +117,29 @@ impl AdoptionOfferSnapshotCapture<'_, '_> {
                 return Err(invalid);
             }
             if let Some(current) = current {
-                let supply = self
+                let (supply, timing) = self
                     .supplies
                     .get(*current.collection())
                     .map_err(|_| invalid)?;
                 if supply.available_by_sex == [0; 2] {
                     return Err(WorldSnapshotPersistenceFailure::SnapshotTransactionInFlight);
                 }
+                let (unlock_remaining_seconds, removal) = timing.remaining_seconds();
                 slot.offers[option_index] = Some(AdoptionOfferSnapshot {
                     species: supply.species,
                     remaining_by_sex: supply.available_by_sex,
-                    unlock_remaining_seconds: remaining(supply.unlock_at),
-                    remove_remaining_seconds: supply
-                        .remove_at
-                        .map(remaining)
-                        .filter(|seconds| *seconds > 0.0),
+                    unlock_remaining_seconds,
+                    remove_remaining_seconds: removal.filter(|seconds| *seconds > 0.0),
                     dismiss_cooldown_seconds: supply.dismiss_cooldown,
                 });
-                if supply.remove_at.is_some()
+                if removal.is_some()
                     && slot.offers[option_index]
                         .is_some_and(|offer| offer.remove_remaining_seconds.is_none())
                 {
                     return Err(WorldSnapshotPersistenceFailure::SnapshotTransactionInFlight);
                 }
             } else if let Some(cooldown) = cooldown {
-                slot.repopulate_after_seconds[option_index] = remaining(cooldown.0);
+                slot.repopulate_after_seconds[option_index] = cooldown.remaining_seconds();
             }
         }
         Ok(Some(AnimalAdoptionOffersSnapshot {
@@ -157,10 +154,11 @@ pub(super) fn spawn_saved_adoption_offers(
     root: Entity,
     snapshot: AnimalAdoptionOffersSnapshot,
 ) {
-    commands.entity(root).insert((
-        AdoptionOfferClock(0.0),
-        AdoptionOfferRandom(DeterministicRng::from_raw(snapshot.random_state_and_stream)),
-    ));
+    commands
+        .entity(root)
+        .insert(AdoptionOfferRandom(DeterministicRng::from_raw(
+            snapshot.random_state_and_stream,
+        )));
     for (slot, state) in snapshot.slots.into_iter().enumerate() {
         for option in 0..2u8 {
             let mut entity = commands.spawn(AdoptionOfferOption {
@@ -171,19 +169,24 @@ pub(super) fn spawn_saved_adoption_offers(
             let index = usize::from(option);
             if let Some(offer) = state.offers[index] {
                 let option_entity = entity.id();
-                commands.spawn((
+                let mut supply = commands.spawn((
                     WorldMember { root },
                     AdoptionOfferForOption(option_entity),
                     AdoptionOfferSupply::new(
                         offer.species,
                         offer.remaining_by_sex,
-                        f64::from(offer.unlock_remaining_seconds),
-                        offer.remove_remaining_seconds.map(f64::from),
                         offer.dismiss_cooldown_seconds,
                     ),
+                    AdoptionOfferTiming::from_remaining_seconds(
+                        f64::from(offer.unlock_remaining_seconds),
+                        offer.remove_remaining_seconds.map(f64::from),
+                    ),
                 ));
+                if offer.unlock_remaining_seconds == 0.0 {
+                    supply.insert(AdoptionOfferUnlocked);
+                }
             } else if state.repopulate_after_seconds[index] > 0.0 {
-                entity.insert(AdoptionOfferCooldown(f64::from(
+                entity.insert(AdoptionOfferCooldown::from_remaining_seconds(f64::from(
                     state.repopulate_after_seconds[index],
                 )));
             }

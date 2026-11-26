@@ -10,7 +10,10 @@ use super::guest_arrival_population::ArrivalPopulation;
 use super::guest_need_execution::GuestArchetypeTables;
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestNeedDefinition;
-use openzt2_game_data::AssetId;
+use openzt2_game_assets::localization::{
+    localization_asset_types::LocalizationAsset,
+    localization_precedence_index::LocalizationPrecedenceIndex,
+};
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::{
@@ -19,7 +22,7 @@ use openzt2_zoo_state::{
     habitat::habitat_types::HabitatMember,
     topology::topology_graph_types::PathTile,
 };
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::UncratedWorldEntity;
 use super::guest_destination_and_viewing_execution::ViewingGroundSlots;
 use openzt2_zoo_state::economy::facility_economy_types::Wallet;
 use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
@@ -31,7 +34,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
 use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigateTo;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestGeneration;
-use openzt2_zoo_state::person_name_selection_and_resolution::choose_generated_person_name_rows_from_authored_pool;
+use openzt2_zoo_state::person_name_selection_and_resolution::select_authored_person_name;
 use openzt2_zoo_state::progression::fame_types::Fame;
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_world_state::simulation_time::deterministic_random_stream::RngDomain;
@@ -175,7 +178,7 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
             With<Animal>,
             With<HabitatMember>,
             Without<Dead>,
-            Without<WorldEntityIsCrated>,
+            UncratedWorldEntity,
         ),
     >,
     paths: Query<'w, 's, (&'static GlobalTransform, &'static WorldMember), With<PathTile>>,
@@ -427,6 +430,8 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
 
 pub(crate) fn initialize_spawned_guests(
     seed: Single<&ZooSeed>,
+    localization: Option<Res<LocalizationPrecedenceIndex>>,
+    localization_assets: Option<Res<Assets<LocalizationAsset>>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     fresh: Query<(Entity, &PersistentId, &GuestArchetype), (With<Guest>, Without<GuestRng>)>,
@@ -435,18 +440,20 @@ pub(crate) fn initialize_spawned_guests(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
+    let localization = localization
+        .as_deref()
+        .zip(localization_assets.as_deref())
+        .and_then(|(index, assets)| index.borrow_loaded_localization_view(assets));
     for (entity, id, archetype) in &fresh {
-        let Some((asset, definition)) = find_guest_definition(definitions, archetype.0) else {
+        let Some((_, definition)) = find_guest_definition(definitions, archetype.0) else {
             continue;
         };
         let Some(needs) = guest_need_rows(definition) else {
             continue;
         };
-        let name = choose_generated_person_name_rows_from_authored_pool(
-            asset,
-            AssetId(definition.name_pool.0),
-            id.0,
-        );
+        let name = localization.and_then(|localization| {
+            select_authored_person_name(localization, [definition.name_pool], id.0)
+        });
         let mut guest_rng = DeterministicRng::from_entity(**seed, *id, RngDomain::Guest);
         let mut initial_need_value = |need: &GuestNeedDefinition| {
             inclusive_u32(
@@ -506,7 +513,7 @@ pub(crate) fn initialize_spawned_guests(
             entity_commands.insert(GuestViewingNeed::new(viewing_need.initial_q16));
         }
         if let Some(name) = name {
-            entity_commands.insert(name);
+            entity_commands.insert_if_new(name);
         }
     }
 }

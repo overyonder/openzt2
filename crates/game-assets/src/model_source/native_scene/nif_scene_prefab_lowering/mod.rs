@@ -324,6 +324,7 @@ fn visit_netimmerse_scene_block(
                 color_srgb: light.light.diffuse,
                 intensity: light.light.dimmer,
                 range_m: 0.0,
+                affected_rows: None,
                 attenuation: Some([
                     light.constant_attenuation,
                     light.linear_attenuation,
@@ -338,6 +339,7 @@ fn visit_netimmerse_scene_block(
                 color_srgb: light.light.ambient,
                 intensity: light.light.dimmer.max(0.0),
                 range_m: 0.0,
+                affected_rows: None,
                 attenuation: None,
             },
         ),
@@ -348,6 +350,7 @@ fn visit_netimmerse_scene_block(
                 color_srgb: light.light.diffuse,
                 intensity: light.light.dimmer.max(0.0),
                 range_m: 0.0,
+                affected_rows: None,
                 attenuation: None,
             },
         ),

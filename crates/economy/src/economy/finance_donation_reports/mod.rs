@@ -19,8 +19,8 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
-    AssetId, localization::LocalizationFormatArgument,
-    ui_document::widget_live_collection::UiWidgetLiveCollectionSource,
+    localization::LocalizationFormatArgument,
+    ui_document::widget_live_collection::UiWidgetLiveCollectionSource, AssetId,
 };
 use openzt2_interface_state::ui::{
     authored_reusable_list_and_table_runtime_types::{

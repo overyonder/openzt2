@@ -134,3 +134,66 @@ pub(super) fn activate_projected_authored_hotkeys_from_keyboard_input(
         }
     }
 }
+
+/// Resolved authored press bindings with the state of their physical keys.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct AuthoredHeldCameraCommands<'w, 's> {
+    keys: Res<'w, ButtonInput<KeyCode>>,
+    documents: Res<'w, Assets<openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset>>,
+    roots: Query<'w, 's, &'static openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot>,
+    bindings: Query<'w, 's, (
+        &'static UiAuthoredHotkeyKeyboardActivationBinding,
+        &'static ChildOf,
+        &'static openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner,
+        &'static openzt2_interface_state::ui::authored_ui_action_projection_components::UiCameraActions,
+    )>,
+    context: super::active_authored_ui_context::ActiveAuthoredUiContext<'w, 's>,
+    focus: Res<'w, InputFocus>,
+    edits: Query<'w, 's, (), With<EditableText>>,
+}
+
+impl AuthoredHeldCameraCommands<'_, '_> {
+    pub fn for_role(
+        &self,
+        role: openzt2_game_data::ui_document::document::UiDocumentRole,
+    ) -> impl Iterator<Item = openzt2_game_data::AssetId> + '_ {
+        use openzt2_game_data::ui_document::action::camera::UiCameraAction;
+        let control =
+            self.keys.pressed(KeyCode::ControlLeft) || self.keys.pressed(KeyCode::ControlRight);
+        let editing = self
+            .focus
+            .get()
+            .is_some_and(|focus| self.edits.contains(focus));
+        let modal = self.context.top_modal();
+        self.bindings
+            .iter()
+            .filter_map(move |(binding, parent, owner, actions)| {
+                if editing
+                    || binding.activates_on_release
+                    || !(self.keys.pressed(binding.key)
+                        || (binding.key == KeyCode::ControlLeft && control))
+                    || !matches!(
+                        (binding.control_state, control),
+                        (UiDocumentHotkeyControlState::AnyControlState, _)
+                            | (UiDocumentHotkeyControlState::ControlReleased, false)
+                            | (UiDocumentHotkeyControlState::ControlPressed, true)
+                    ) && binding.key != KeyCode::ControlLeft
+                    || !self.context.visible_and_enabled(parent.parent())
+                    || modal.is_some_and(|modal| !self.context.is_in_modal(parent.parent(), modal))
+                {
+                    return None;
+                }
+                let root = self.roots.get(owner.0).ok()?;
+                let document = self.documents.get(&root.document)?;
+                (document.canonical_ui_document().role == role).then_some((actions, document))
+            })
+            .flat_map(|(actions, document)| actions.authored_action_records(document))
+            .filter_map(|record| match record.action {
+                UiCameraAction::SetCommandState {
+                    command,
+                    pressed: true,
+                } => Some(command),
+                _ => None,
+            })
+    }
+}

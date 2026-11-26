@@ -21,6 +21,7 @@ pub(crate) fn project_camera_actions_into_camera_intent(
     tool: Res<ConstructionTool>,
     placement_policy: Res<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy>,
     capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
+    commands: openzt2_ui::authored_hotkey_keyboard_activation::AuthoredHeldCameraCommands,
     edge_surfaces: Query<(&UiEdgePanSurface, &InheritedVisibility, &Node)>,
     mut cameras: Query<
         (
@@ -40,10 +41,10 @@ pub(crate) fn project_camera_actions_into_camera_intent(
     let mut digital_zoom = 0.0;
     for request in actions.read() {
         match request.action {
-            GameAction::RotateLeft if !construction_owns_rotation => digital_turn -= 1.0,
-            GameAction::RotateRight if !construction_owns_rotation => digital_turn += 1.0,
-            GameAction::ZoomIn => digital_zoom += 1.0,
-            GameAction::ZoomOut => digital_zoom -= 1.0,
+            GameAction::RotateLeft if !construction_owns_rotation && request.source != openzt2_interface_state::input::input_types::ActionSource::KeyboardMouse => digital_turn -= 1.0,
+            GameAction::RotateRight if !construction_owns_rotation && request.source != openzt2_interface_state::input::input_types::ActionSource::KeyboardMouse => digital_turn += 1.0,
+            GameAction::ZoomIn if request.source != openzt2_interface_state::input::input_types::ActionSource::KeyboardMouse => digital_zoom += 1.0,
+            GameAction::ZoomOut if request.source != openzt2_interface_state::input::input_types::ActionSource::KeyboardMouse => digital_zoom -= 1.0,
             _ => {}
         }
     }
@@ -52,10 +53,27 @@ pub(crate) fn project_camera_actions_into_camera_intent(
     let zoom = (axes.zoom + digital_zoom).clamp(-1.0, 1.0);
     for (mut intent, mode, tuning, mouse_look, photo_mode) in &mut cameras {
         let mut next = *intent;
-        if !photo_mode {
-            next.photo_zoom_in_command = false;
-            next.photo_zoom_out_command = false;
-        }
+        use openzt2_game_data::{ui_document::document::UiDocumentRole, AssetId};
+        let held = commands
+            .for_role(if photo_mode {
+                UiDocumentRole::PhotoMode
+            } else {
+                UiDocumentRole::InGameHud
+            })
+            .collect::<bevy::platform::collections::HashSet<_>>();
+        let active = |name| held.contains(&AssetId::from_key(name));
+        next.photo_zoom_in_command = photo_mode && active("photozoomin");
+        next.photo_zoom_out_command = photo_mode && active("photozoomout");
+        next.first_person_commands = crate::camera::camera_execution_types::FirstPersonCommands {
+            forward: active("forward"),
+            backward: active("backward"),
+            turn_left: active("rleft"),
+            turn_right: active("rright"),
+            up: active("rforward"),
+            down: active("rbackward"),
+            crouch: active("crouch"),
+            free_mouse_look: active("freemouselook"),
+        };
         let edge = next.edge_pan.filter(|(surface, _)| {
             *mode == CameraMode::Overhead
                 && tuning.edge_scroll
@@ -76,9 +94,15 @@ pub(crate) fn project_camera_actions_into_camera_intent(
             ];
             next.pan_directions =
                 std::array::from_fn(|index| axes.pan_directions[index].max(ui_directions[index]));
-            next.turn = (turn + next.ui_turn).clamp(-1.0, 1.0);
+            let authored_turn = if construction_owns_rotation {
+                0.0
+            } else {
+                f32::from(active("rright")) - f32::from(active("rleft"))
+            };
+            next.turn = (turn + next.ui_turn + authored_turn).clamp(-1.0, 1.0);
             next.pitch = if mouse_look { -axes.look.y } else { 0.0 };
-            next.zoom = (zoom + next.ui_zoom).clamp(-1.0, 1.0);
+            let authored_zoom = f32::from(active("up")) - f32::from(active("down"));
+            next.zoom = (zoom + next.ui_zoom + authored_zoom).clamp(-1.0, 1.0);
             if capture.wheel
                 == openzt2_interface_state::ui::pointer_capture_types::UiWheelCapture::World
             {

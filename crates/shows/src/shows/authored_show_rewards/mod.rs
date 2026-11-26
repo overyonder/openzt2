@@ -3,7 +3,7 @@ use std::{io, sync::Arc};
 use openzt2_game_data::behavior::action::feedback::BehaviorFeedbackEntry;
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
 use openzt2_game_assets::source_document::{

@@ -1,6 +1,5 @@
 use bevy::ecs::{entity_disabling::Disabled, query::Allow};
 use openzt2_game_assets::application_lifecycle::GamePhase;
-use openzt2_game_assets::saved_world_asset_source::SavedWorldTerrainAsset;
 use std::collections::BTreeMap;
 use super::challenge_economy_initialization::{ChallengeEconomyInitializer, CHALLENGE_MODE_DOCUMENT};
 use openzt2_world_state::game_session_types::WorldSessionMode;
@@ -78,7 +77,6 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
     active_definitions: Res<WorldDefinitions>,
     roots: Query<(), (With<WorldRoot>, Allow<Disabled>)>,
     mut pending: Query<(Entity, &mut PendingWorldLoad)>,
-    saved_terrain_assets: Query<&SavedWorldTerrainAsset>,
     mut failed: MessageWriter<WorldLoadFailed>,
 ) {
     let Ok((load_entity, mut pending)) = pending.single_mut() else {
@@ -205,15 +203,12 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         return;
     }
     let zoo_name = &start_record.name;
-    let terrain_handle = request
-        .operation
-        .and_then(|operation| saved_terrain_assets.get(operation).ok())
-        .filter(|saved| saved.identifier == terrain)
-        .map(|saved| saved.handle.clone())
-        .or_else(|| {
-            let source = scenarios.get(&map_asset)?.terrain_path(terrain)?;
+    let terrain_handle = scenarios.get(&map_asset).and_then(|document| {
+        document.restored_terrain(terrain).cloned().or_else(|| {
+            let source = document.terrain_path(terrain)?;
             Some(asset_server.load::<TerrainAsset>(source.to_owned()))
-        });
+        })
+    });
     let Some(terrain_handle) = terrain_handle else {
         failed.write(WorldLoadFailed {
             operation: request.operation,

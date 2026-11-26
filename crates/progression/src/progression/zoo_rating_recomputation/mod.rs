@@ -441,7 +441,7 @@ pub(super) fn recompute_finance_rating(
     for (world, mut rating) in &mut worlds {
         let balance = cash.as_deref().filter(|_| active_world == Some(world));
         rating.set_if_neq(ZooFinanceRating(balance.map(|cash| {
-            normalize_zoo_rating_input_for_kind(definitions, &RatingInputKind::Finance, cash.0.0)
+            normalize_zoo_rating_input_for_kind(definitions, &RatingInputKind::Finance, cash.0 .0)
         })));
     }
 }

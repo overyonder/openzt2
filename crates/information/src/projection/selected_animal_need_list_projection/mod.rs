@@ -18,13 +18,13 @@ use openzt2_zoo_state::animal_welfare::types::EnvironmentNeed;
 use openzt2_zoo_state::animal_welfare::types::ExerciseNeed;
 use openzt2_zoo_state::animal_welfare::types::Hunger;
 use openzt2_zoo_state::animal_welfare::types::HygieneNeed;
-use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
 use openzt2_zoo_state::animal_welfare::types::PrivacyNeed;
-use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
 use openzt2_zoo_state::animal_welfare::types::RestNeed;
 use openzt2_zoo_state::animal_welfare::types::SocialNeed;
 use openzt2_zoo_state::animal_welfare::types::StimulationNeed;
 use openzt2_zoo_state::animal_welfare::types::Thirst;
+use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
+use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
 
 use openzt2_interface_state::information::entity_selection_types::{
     InfoPanel, SelectedSubject, SelectionChanged,
@@ -215,31 +215,31 @@ fn selected_animal_need_row_value(
 ) -> Option<(NeedKind, i64, i32)> {
     match (source, row_index) {
         (UiWidgetLiveCollectionSource::SelectedAnimalBasicNeeds, 0) => {
-            Some((NeedKind::Environment, 2, needs.1.0))
+            Some((NeedKind::Environment, 2, needs.1 .0))
         }
         (UiWidgetLiveCollectionSource::SelectedAnimalBasicNeeds, 1) => {
-            Some((NeedKind::Hunger, 0, needs.2.0))
+            Some((NeedKind::Hunger, 0, needs.2 .0))
         }
         (UiWidgetLiveCollectionSource::SelectedAnimalBasicNeeds, 2) => {
-            Some((NeedKind::Thirst, 1, needs.3.0))
+            Some((NeedKind::Thirst, 1, needs.3 .0))
         }
         (UiWidgetLiveCollectionSource::SelectedAnimalBasicNeeds, 3) => {
-            Some((NeedKind::Rest, 3, needs.4.0))
+            Some((NeedKind::Rest, 3, needs.4 .0))
         }
         (UiWidgetLiveCollectionSource::SelectedAnimalBasicNeeds, 4) => {
-            Some((NeedKind::Exercise, 4, needs.5.0))
+            Some((NeedKind::Exercise, 4, needs.5 .0))
         }
         (UiWidgetLiveCollectionSource::SelectedAnimalAdvancedNeeds, 0) => {
-            Some((NeedKind::Privacy, 6, needs.6.0))
+            Some((NeedKind::Privacy, 6, needs.6 .0))
         }
         (UiWidgetLiveCollectionSource::SelectedAnimalAdvancedNeeds, 1) => {
-            Some((NeedKind::Hygiene, 7, needs.7.0))
+            Some((NeedKind::Hygiene, 7, needs.7 .0))
         }
         (UiWidgetLiveCollectionSource::SelectedAnimalAdvancedNeeds, 2) => {
-            Some((NeedKind::Social, 8, needs.8.0))
+            Some((NeedKind::Social, 8, needs.8 .0))
         }
         (UiWidgetLiveCollectionSource::SelectedAnimalAdvancedNeeds, 3) => {
-            Some((NeedKind::Stimulation, 9, needs.9.0))
+            Some((NeedKind::Stimulation, 9, needs.9 .0))
         }
         _ => None,
     }

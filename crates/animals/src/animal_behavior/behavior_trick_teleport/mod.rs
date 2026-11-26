@@ -9,10 +9,10 @@ use openzt2_zoo_state::{
         BehaviorSelfToken, BehaviorTrickDestination, BehaviorTrickPropOrigin,
     },
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState,
         running_actions::{
             RunBehaviorTeleportToLocation, RunningBehaviorInstruction, WhenBehaviorAction,
         },
+        BehaviorTaskExecutionState,
     },
     locomotion::locomotion_types::{Destination, Docking, MotionProgress, Route, Velocity},
 };

@@ -127,7 +127,11 @@ pub(super) fn project_tank_water_onto_navigation_cells(
         .chain(restores.read().map(|edit| (edit.chunk, edit.min, edit.max)))
         .filter_map(|(entity, min, max)| {
             let chunk = chunks.get(entity).ok()?;
-            Some(navigation_sample_edit_bounds(chunk, min, max))
+            Some(
+                super::terrain_edit_navigation_refresh::navigation_sample_edit_bounds(
+                    chunk, min, max,
+                ),
+            )
         })
         .collect();
     let removed = removed.read().count() != 0;

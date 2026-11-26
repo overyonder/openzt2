@@ -13,14 +13,14 @@ use openzt2_world_state::world_spawn::{
 
 #[derive(Component)]
 #[relationship(relationship_target = RoomStageObjects)]
-struct RoomStageObjectOf(Entity);
+pub(super) struct RoomStageObjectOf(Entity);
 
 #[derive(Component)]
 #[relationship_target(relationship = RoomStageObjectOf)]
-struct RoomStageObjects(Vec<Entity>);
+pub(super) struct RoomStageObjects(Vec<Entity>);
 
 #[derive(Component, PartialEq)]
-struct RoomStageVolumes(Box<[WorldObjectAudioStageVolume]>);
+pub(super) struct RoomStageVolumes(Box<[WorldObjectAudioStageVolume]>);
 
 pub(super) fn bind_room_stage_volumes(
     mut commands: Commands,

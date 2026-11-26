@@ -234,7 +234,7 @@ impl ActiveAuthoredUiContext<'_, '_> {
         owner
     }
 
-    fn active_scope_with_modal(&self, modal: Option<Entity>) -> Option<Entity> {
+    pub(super) fn active_scope_with_modal(&self, modal: Option<Entity>) -> Option<Entity> {
         self.stack.uinodes.iter().rev().find_map(|entity| {
             (self.focusables.contains(*entity)
                 && self.visible_and_enabled(*entity)

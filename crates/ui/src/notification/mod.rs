@@ -263,8 +263,8 @@ pub(super) fn report_effectively_visible_notifications(
 }
 
 pub(super) fn discard_notification_without_projected_alert(
+    removal: On<Remove<NotificationAlertShowing>>,
     mut commands: Commands,
-    removal: On<Remove, NotificationAlertShowing>,
     alerts: Query<&NotificationAlertShowing>,
 ) {
     if let Ok(alert) = alerts.get(removal.entity) {

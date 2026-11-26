@@ -10,11 +10,11 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
-    AssetId,
     world_definitions::{
         animal_shows_and_training::TrickDefinition,
         object_placement::{FootprintCellFlags, PlaceableDefinition},
     },
+    AssetId,
 };
 use openzt2_world::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
 use openzt2_world_state::world_spawn::{

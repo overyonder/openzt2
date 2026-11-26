@@ -1,7 +1,7 @@
 //! One lowered world-definition source document and its demand-loaded dependencies.
 
 use bevy::prelude::*;
-use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
+use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
 
 pub const AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS: [&str; 18] = [
     "entities/objects/paths/shared/north_mask.dds",
@@ -40,6 +40,7 @@ pub struct WorldDefinitionAsset {
         Option<std::sync::Arc<super::world_definition_asset_loading::authored_binder_reference_resolution::AuthoredBinderSources>>,
     pub(super) textures: Box<[DemandLoadedDependencyPath]>,
     pub(super) models: Box<[DemandLoadedDependencyPath]>,
+    pub(super) materials: Box<[DemandLoadedDependencyPath]>,
     pub(super) effects: Box<[DemandLoadedDependencyPath]>,
     pub(super) scenes: Box<[DemandLoadedDependencyPath]>,
     pub(super) animation_sets: Box<[DemandLoadedDependencyPath]>,
@@ -61,6 +62,7 @@ impl WorldDefinitionAsset {
             authored_binder_sources: None,
             textures: Box::new([]),
             models: Box::new([]),
+            materials: Box::new([]),
             effects: Box::new([]),
             scenes: Box::new([]),
             animation_sets: Box::new([]),
@@ -102,6 +104,14 @@ impl WorldDefinitionAsset {
 
     pub(super) fn texture_path(&self, id: AssetId) -> Option<&str> {
         Self::dependency_path(&self.textures, id)
+    }
+
+    pub(super) fn material(
+        &self,
+        server: &AssetServer,
+        id: AssetId,
+    ) -> Option<Handle<crate::material::material_asset_types::MaterialAsset>> {
+        Self::load(server, &self.materials, id)
     }
 
     pub(super) fn model<T: Asset>(&self, server: &AssetServer, id: AssetId) -> Option<Handle<T>> {

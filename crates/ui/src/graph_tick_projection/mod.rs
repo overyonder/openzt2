@@ -143,8 +143,7 @@ pub(super) fn write_graph_tick_text(
             continue;
         };
         for entity in nodes.iter() {
-            let Ok((node, mut text, mut color, mut font, mut physical_size)) =
-                texts.get_mut(entity)
+            let Ok((node, text, mut color, mut font, mut physical_size)) = texts.get_mut(entity)
             else {
                 continue;
             };

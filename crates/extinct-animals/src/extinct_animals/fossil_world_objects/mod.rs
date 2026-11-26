@@ -3,8 +3,8 @@ use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::extinct_animal_recovery::FossilSetDefinition;
+use openzt2_game_data::AssetId;
 use openzt2_world_state::{
     simulation_time::deterministic_random_stream::{DeterministicRng, RngDomain, ZooSeed},
     world_spawn::{
@@ -32,12 +32,21 @@ use openzt2_zoo_state::{
 };
 
 use super::fossil_definition_index::FossilDefinitionIndex;
-use crate::fossil_site_types::{DigPit, FossilSiteKind, RequestedFossilPuzzle, SetFossilPuzzleToFind};
+use crate::fossil_site_types::{
+    DigPit, FossilSiteKind, RequestedFossilPuzzle, SetFossilPuzzleToFind,
+};
 
 pub(super) fn reset_requested_fossil_search(
     mut requests: MessageReader<SetFossilPuzzleToFind>,
     mut worlds: Query<(Option<&WorldMembers>, Option<&mut RequestedFossilPuzzle>), With<WorldRoot>>,
-    retired: Query<(), Or<(With<FossilSiteKind>, With<DigPit>, With<CollectedFossilPiece>)>>,
+    retired: Query<
+        (),
+        Or<(
+            With<FossilSiteKind>,
+            With<DigPit>,
+            With<CollectedFossilPiece>,
+        )>,
+    >,
     assemblies: Query<(), With<openzt2_zoo_state::extinct_animals::fossil_collection_and_assembly_types::FossilSetAssembly>>,
     mut commands: Commands,
 ) {
@@ -45,15 +54,23 @@ pub(super) fn reset_requested_fossil_search(
         FossilAssemblyCompleted, FossilAssemblySlots, FossilSetAssembly,
     };
 
-    let mut latest = bevy::ecs::entity::EntityHashMap::<Option<openzt2_game_data::AssetId>>::default();
-    latest.extend(requests.read().map(|request| (request.root, request.puzzle)));
+    let mut latest =
+        bevy::ecs::entity::EntityHashMap::<Option<openzt2_game_data::AssetId>>::default();
+    latest.extend(
+        requests
+            .read()
+            .map(|request| (request.root, request.puzzle)),
+    );
     for (root, puzzle) in latest {
-        let Ok((members, current)) = worlds.get_mut(root) else { continue; };
+        let Ok((members, current)) = worlds.get_mut(root) else {
+            continue;
+        };
         for member in members.into_iter().flat_map(RelationshipTarget::iter) {
             if retired.contains(member) {
                 commands.entity(member).try_despawn();
             } else if assemblies.contains(member) {
-                commands.entity(member)
+                commands
+                    .entity(member)
                     .despawn_related::<FossilAssemblySlots>()
                     .remove::<(FossilSetAssembly, FossilAssemblyCompleted)>();
             }
@@ -61,9 +78,15 @@ pub(super) fn reset_requested_fossil_search(
         let mut zoo = commands.entity(root);
         zoo.remove::<(FossilDiscoveryLevel, FossilTierBlockedNotice)>();
         match (puzzle, current) {
-            (Some(puzzle), Some(mut current)) => { current.set_if_neq(RequestedFossilPuzzle(puzzle)); }
-            (Some(puzzle), None) => { zoo.insert(RequestedFossilPuzzle(puzzle)); }
-            (None, Some(_)) => { zoo.remove::<RequestedFossilPuzzle>(); }
+            (Some(puzzle), Some(mut current)) => {
+                current.set_if_neq(RequestedFossilPuzzle(puzzle));
+            }
+            (Some(puzzle), None) => {
+                zoo.insert(RequestedFossilPuzzle(puzzle));
+            }
+            (None, Some(_)) => {
+                zoo.remove::<RequestedFossilPuzzle>();
+            }
             (None, None) => {}
         }
     }
@@ -140,7 +163,7 @@ type RecoveryWorld = (
 );
 
 #[derive(Component)]
-struct FossilTierBlockedNotice;
+pub(super) struct FossilTierBlockedNotice;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_world_fossil_recovery_sites(

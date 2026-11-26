@@ -1,10 +1,14 @@
 use bevy::prelude::*;
 use openzt2_game_data::{world_definitions::staff_management::StaffRoleDefinition, AssetId};
 
+use openzt2_game_assets::localization::{
+    localization_asset_types::LocalizationAsset,
+    localization_precedence_index::LocalizationPrecedenceIndex,
+};
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::economy::money_types::Money;
-use openzt2_zoo_state::person_name_selection_and_resolution::choose_generated_person_name_rows_from_authored_pool;
+use openzt2_zoo_state::person_name_selection_and_resolution::select_authored_person_name;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
@@ -25,6 +29,8 @@ use super::{
 /// employee arrives with its saved [`Employment`], which is kept.
 pub(crate) fn identify_spawned_staff_from_world_definition(
     mut commands: Commands,
+    localization: Option<Res<LocalizationPrecedenceIndex>>,
+    localization_assets: Option<Res<Assets<LocalizationAsset>>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     clock: Single<&ZooClock>,
@@ -44,6 +50,10 @@ pub(crate) fn identify_spawned_staff_from_world_definition(
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
+    let localization = localization
+        .as_deref()
+        .zip(localization_assets.as_deref())
+        .and_then(|(index, assets)| index.borrow_loaded_localization_view(assets));
     for (entity, definition, persistent_identifier, body, restored_role, dressed) in
         &spawned_entities
     {
@@ -70,21 +80,16 @@ pub(crate) fn identify_spawned_staff_from_world_definition(
                 catalogue,
             );
         }
-        let person_name = variant
-            .and_then(|variant| {
-                choose_generated_person_name_rows_from_authored_pool(
-                    catalogue,
-                    AssetId(variant.name_pool.0),
-                    persistent_identifier.0,
-                )
-            })
-            .or_else(|| {
-                choose_generated_person_name_rows_from_authored_pool(
-                    catalogue,
-                    AssetId(role.name_pool.0),
-                    persistent_identifier.0,
-                )
-            });
+        let person_name = localization.and_then(|localization| {
+            select_authored_person_name(
+                localization,
+                variant
+                    .map(|variant| variant.name_pool)
+                    .into_iter()
+                    .chain([role.name_pool]),
+                persistent_identifier.0,
+            )
+        });
         let mut staff_commands = commands.entity(entity);
         staff_commands
             .insert((Staff, StaffRole(role_identifier)))
@@ -96,7 +101,7 @@ pub(crate) fn identify_spawned_staff_from_world_definition(
                     .saturating_add(u32::from(calendar.month.saturating_sub(1))),
             });
         if let Some(person_name) = person_name {
-            staff_commands.insert(person_name);
+            staff_commands.insert_if_new(person_name);
         }
         attach_staff_virtual_nodes(&mut commands, entity, role);
     }

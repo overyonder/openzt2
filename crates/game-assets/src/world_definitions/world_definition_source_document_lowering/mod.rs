@@ -4,7 +4,7 @@ use std::io;
 
 use crate::source_document::{
     blue_fang_actor_manifest_model_and_scene_resolution_index::BlueFangActorManifestModelAndSceneResolutionIndex,
-    document_semantics::{SourceDocumentKind, classify_source_document},
+    document_semantics::{classify_source_document, SourceDocumentKind},
     ordered_source_document_types::{OrderedSourceDocument, OrderedSourceDocumentNode},
 };
 use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;

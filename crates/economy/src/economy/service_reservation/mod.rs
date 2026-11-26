@@ -1,6 +1,6 @@
 use bevy::{ecs::relationship::RelationshipTarget, platform::collections::HashMap, prelude::*};
 use openzt2_game_data::{
-    AssetId, world_definitions::facilities_and_maintenance::FacilityPaymentTrigger,
+    world_definitions::facilities_and_maintenance::FacilityPaymentTrigger, AssetId,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -65,7 +65,7 @@ pub(super) fn reserve_requested_facility_capacity_and_inventory_for_customers(
             warn!(?customer, ?facility, requested_service = ?request.service, "live facility does not provide the requested timed service");
             continue;
         }
-        if price.0.0 < 0
+        if price.0 .0 < 0
             || wallet.0 < price.0
             || reservation.is_some_and(|reservation| !reservation.is_empty())
         {

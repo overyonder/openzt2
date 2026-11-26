@@ -208,8 +208,8 @@ pub(super) fn advance_first_person_horizontal_motion(
     if elapsed <= 0.0 {
         return;
     }
-    for (mode, camera, subject, angles, mut motion) in &mut sessions {
-        let Ok((mut pose, world, selected, camera_mode, bounds)) = cameras.get_mut(camera.0) else {
+    for (mode, camera, subject, angles, motion) in &mut sessions {
+        let Ok((pose, world, selected, camera_mode, bounds)) = cameras.get_mut(camera.0) else {
             continue;
         };
         let (Some(camera_definition), Some(mode_policy)) = (
@@ -227,7 +227,7 @@ pub(super) fn advance_first_person_horizontal_motion(
             let Some(subject) = subject else {
                 continue;
             };
-            if let Ok((subject_pose, mut drive, mut tuning)) = controlled.get_mut(subject.0) {
+            if let Ok((subject_pose, drive, mut tuning)) = controlled.get_mut(subject.0) {
                 let tuning_surface = surfaces
                     .at(
                         world.root,

@@ -40,8 +40,9 @@ pub struct TerrainEditPreparationRejected {
     pub reason: PlacementFailure,
 }
 
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Message, EntityEvent, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommitTerrainEdit {
+    #[event_target]
     pub transaction: Entity,
     pub application: EditApplication,
 }

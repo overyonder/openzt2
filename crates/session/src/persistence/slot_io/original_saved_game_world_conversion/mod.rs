@@ -2,22 +2,23 @@ use super::{
     terrain_snapshot_types::TerrainSnapshotRecord, world_snapshot_types::WorldSnapshotRecord,
 };
 use openzt2_game_assets::{
-    original_saved_game_asset_loading::OriginalSavedGameAsset,
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
+    world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
 };
 use openzt2_game_data::world_scenario::WorldMapSupportedGameModeFlags;
 use openzt2_world_state::game_session_types::WorldSessionMode;
 use std::io;
 
 pub(super) fn read_original_saved_world(
-    saved: &OriginalSavedGameAsset,
+    scenario: &WorldScenarioDocumentAsset,
     terrain: &TerrainAsset,
+    server: &bevy::prelude::AssetServer,
     last_saved_unix_timestamp_milliseconds: u64,
 ) -> io::Result<(WorldSnapshotRecord, TerrainSnapshotRecord)> {
-    let [map] = saved.source.document.maps.as_slice() else {
+    let [map] = scenario.document.maps.as_slice() else {
         return Err(invalid("saved world does not contain exactly one map"));
     };
-    let [start] = saved.source.document.starting_zoos.as_slice() else {
+    let [start] = scenario.document.starting_zoos.as_slice() else {
         return Err(invalid(
             "saved world does not contain exactly one starting world",
         ));
@@ -46,7 +47,7 @@ pub(super) fn read_original_saved_world(
             session_mode: mode,
             last_saved_unix_timestamp_milliseconds,
             display_name: start.name.clone(),
-            source_document: Some(saved.source.clone()),
+            source_document: Some(scenario.capture_source_document(server)?),
         },
         TerrainSnapshotRecord {
             grid,

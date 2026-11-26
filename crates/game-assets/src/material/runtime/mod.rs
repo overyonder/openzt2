@@ -24,6 +24,7 @@ mod evaluated_d3d9_sampler_state_tests;
 use bevy::{
     asset::AssetEvent,
     camera::Camera3d,
+    ecs::schedule::SystemCondition,
     pbr::MaterialPlugin,
     prelude::*,
     render::{renderer::RenderDevice, storage::ShaderBuffer},
@@ -64,13 +65,13 @@ pub(super) fn register_effect_pass_material_asset_and_fixed_function_shader(appl
             (
                 refresh_effect_pass_depth_stencil_format.run_if(
                     on_message::<AssetEvent<EffectPassMaterial>>
-                        .or(resource_changed_or_removed::<RenderDevice>),
+                        .or_eager(resource_changed_or_removed::<RenderDevice>),
                 ),
                 select_camera_depth_stencil_format
                     .after(refresh_effect_pass_depth_stencil_format)
                     .run_if(
                         resource_changed::<EffectPassDepthStencilFormat>
-                            .or(any_match_filter::<Added<Camera3d>>),
+                            .or_eager(any_match_filter::<Added<Camera3d>>),
                     ),
             ),
         );

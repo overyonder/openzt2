@@ -20,6 +20,7 @@ use super::{
 };
 use bevy::{ecs::system::SystemState, prelude::*};
 use openzt2_animals::animal_lifecycle::animal_spawn_resolution_types::ResolvedAnimalSpawnComponents;
+use openzt2_animals::animal_welfare::need_timing_types::NeedAdjustmentCadence;
 use openzt2_game_data::{
     species::{LifeStage, Sex, SpeciesFlags, SpeciesVariantFlags},
     AssetId,
@@ -78,10 +79,10 @@ fn spawn_named_animal(
     ));
     world.entity_mut(animal).insert((
         AnimalWelfare(72),
-        AnimalNeedAdjustmentTimer {
-            remaining_ns: 234_000_000,
-            random: openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng::from_raw([42, 3]),
-        },
+        NeedAdjustmentCadence::from_saved_remaining(
+            234_000_000,
+            openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng::from_raw([42, 3]),
+        ),
         WelfareBand::Poor,
         NeedTriggerState(0x505),
         CumulativeNeedPoints {
@@ -147,9 +148,12 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
     source
         .entity_mut(child)
         .insert((AnimalMother(mother), AnimalFather(father)));
-    source
-        .entity_mut(mother)
-        .insert(openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode::Decaffeinated);
+    source.entity_mut(mother).insert(
+        openzt2_zoo_state::locomotion::locomotion_types::CaffeineFlags {
+            caffeinated: true,
+            decaffeinated: true,
+        },
+    );
     source.entity_mut(mother).insert((
         Pregnancy { father: None },
         PregnancyFather(father),
@@ -170,7 +174,7 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
         EnvironmentHabitatAssessed,
         ReleaseRestricted,
         CratingRestricted,
-        openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated,
+        openzt2_world_state::world_spawn::world_entity_crating::ScriptedCrating,
     ));
     source
         .entity_mut(father)
@@ -307,8 +311,13 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
     );
     assert_eq!(
         destination
-            .get::<openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode>(restored[&51]),
-        Some(&openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode::Decaffeinated)
+            .get::<openzt2_zoo_state::locomotion::locomotion_types::CaffeineFlags>(restored[&51]),
+        Some(
+            &openzt2_zoo_state::locomotion::locomotion_types::CaffeineFlags {
+                caffeinated: true,
+                decaffeinated: true
+            }
+        )
     );
     assert_eq!(
         destination.get::<Name>(restored_child).unwrap().as_str(),
@@ -450,7 +459,7 @@ fn native_crate_relationship_preserves_relocated_pose_and_restored_identity() {
     };
     use super::placement_snapshot_section::PlacementSnapshotRecord;
     use openzt2_world_state::world_spawn::world_entity_crating::{
-        AnimalCrate, ContainedCratedAnimal, WorldEntityIsCrated,
+        AnimalCrate, ContainedCratedAnimal, ScriptedCrating,
     };
 
     let mut source = World::new();
@@ -462,7 +471,7 @@ fn native_crate_relationship_preserves_relocated_pose_and_restored_identity() {
         .id();
     source.entity_mut(animal).insert((
         WorldMember { root },
-        WorldEntityIsCrated,
+        ScriptedCrating,
         AnimalCrate(crate_entity),
     ));
     let mut records = capture(&mut source);

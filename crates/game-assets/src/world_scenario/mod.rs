@@ -19,8 +19,8 @@ use bevy::{asset::AssetApp, prelude::*};
 
 use self::{
     world_scenario_asset_set_refresh_and_indexing::{
-        ScenarioCatalogueSources, index_loaded_world_scenario_assets_by_identifier,
-        refresh_world_scenario_catalogue_sources,
+        index_loaded_world_scenario_assets_by_identifier, refresh_world_scenario_catalogue_sources,
+        ScenarioCatalogueSources,
     },
     world_scenario_document_loading::WorldScenarioDocumentLoader,
 };

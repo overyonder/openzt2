@@ -300,7 +300,7 @@ pub(super) fn link_selected_globe_marker_anchors(
 }
 
 pub(super) fn cancel_turn_when_globe_marker_is_lost(
-    removal: On<Remove, GlobeSelectedMarker>,
+    removal: On<Remove<GlobeSelectedMarker>>,
     mut commands: Commands,
 ) {
     commands

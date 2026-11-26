@@ -9,7 +9,7 @@ use openzt2_zoo_state::economy::general_economy_types::{
 
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    RunningBehaviorEconomyTransaction, RunningBehaviorInstruction, complete_behavior_refill,
+    complete_behavior_refill, RunningBehaviorEconomyTransaction, RunningBehaviorInstruction,
 };
 
 use super::{

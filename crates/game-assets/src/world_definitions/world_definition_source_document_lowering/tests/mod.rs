@@ -2,10 +2,10 @@ use super::*;
 use crate::source_document::{
     blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
 };
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::animal_health::{
     DiseaseAnimalFilter, DiseaseComparison, DiseaseZooTest,
 };
+use openzt2_game_data::AssetId;
 
 #[test]
 fn environment_retains_distinct_light_and_fog_programs() {

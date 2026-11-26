@@ -3,9 +3,11 @@ use bevy::prelude::*;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_zoo_state::topology::topology_edit_types::TopologyChanged;
-use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
 use openzt2_zoo_state::topology::topology_graph_types::{
     FenceEdge, FenceEnd, FenceSegment, FenceStart, FencesEndingHere, FencesStartingHere,
+};
+use openzt2_zoo_state::topology::topology_graph_types::{
+    TopologyGrid, TopologyIndex, TopologyNode,
 };
 use openzt2_zoo_state::topology::topology_grid_geometry::horizontal_world_segments_intersect;
 

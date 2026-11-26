@@ -1,3 +1,4 @@
+use bevy::asset::AssetLoadFailedEvent;
 pub(crate) mod animation_graph_blend_timer_advancement;
 mod animation_graph_clip_request_execution;
 mod animation_graph_node_request_execution;

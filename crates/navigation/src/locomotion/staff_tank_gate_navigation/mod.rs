@@ -639,6 +639,7 @@ pub(super) fn execute_staff_tank_gate_journeys(
                 } else {
                     AnimationPlaybackRepetitionPolicy::PlayOnce
                 },
+                action_settings: None,
             });
             journey.clip_request = Some(request.id);
             commands.entity(actor).insert(BehaviorHeldAnimationClip {

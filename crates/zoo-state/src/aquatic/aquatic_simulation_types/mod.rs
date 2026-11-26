@@ -149,7 +149,6 @@ pub enum MarinePlacementFailure {
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct WaterFilter {
     pub policy: WaterFilterPolicy,
-    pub seconds_until_cleanup: f32,
     pub dirt_percent: f32,
 }
 
@@ -159,3 +158,6 @@ pub struct AddAquaticWaterDirt {
     pub animal: Entity,
     pub amount: f32,
 }
+
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TankWaterSurfaceMesh(pub Entity);

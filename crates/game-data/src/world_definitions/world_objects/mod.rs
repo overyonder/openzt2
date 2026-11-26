@@ -246,6 +246,12 @@ pub struct WorldObjectFadeRange {
     pub attribute: AssetId,
     pub minimum: f32,
     pub maximum: f32,
+    pub controller_ordinal: u32,
+    pub state_ordinal: u32,
+    pub fade_period_seconds: f32,
+    pub max_alpha: f32,
+    pub fade_hold: bool,
+    pub wrap_value: bool,
 }
 
 impl WorldObjectFadeRange {
@@ -279,6 +285,8 @@ pub struct WaterFilterPolicy {
     pub cleanup_rate: f32,
     /// Dirt the filter holds before a worker has to clean it.
     pub maximum_dirt_capacity: f32,
+    #[serde(default)]
+    pub full_filter_message: Option<AssetId>,
     /// `maintenanceThresholds`: the dirt percent at which a worker is called,
     /// and at which the call is dropped, for the filter panel's preemptive,
     /// regular and occasional schedules.
@@ -340,6 +348,8 @@ pub struct WorldObjectDefinition {
     /// Most-specific authored sound-name prefixes, followed by their base types.
     #[serde(default)]
     pub audio_cue_prefixes: Vec<String>,
+    #[serde(default)]
+    pub audio_stage_volumes: Vec<WorldObjectAudioStageVolume>,
     pub kind: WorldObjectKind,
     /// `ZTAIWaterFilterComponent`, when this object filters tank water.
     #[serde(default)]
@@ -425,6 +435,15 @@ pub struct WorldObjectDefinition {
 
 /// A `virtualNodes` entry in the object's own Bevy frame; its yaw turns
 /// about Bevy's up axis.
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct WorldObjectAudioStageVolume {
+    pub stage: AssetId,
+    pub minimum: [f32; 3],
+    pub maximum: [f32; 3],
+    pub fringe: bool,
+    pub occlude_crowd: bool,
+}
+
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct WorldObjectVirtualNode {
     pub name: String,

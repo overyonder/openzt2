@@ -342,7 +342,6 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
             base_m,
             path_definition?,
             definitions.topology_cell_size_cm(),
-            elevated_mode.clearance_cm()?,
             &policy,
         ))
     };

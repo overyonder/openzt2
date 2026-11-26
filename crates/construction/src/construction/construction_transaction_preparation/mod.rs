@@ -81,7 +81,7 @@ pub fn clear_submitted_preview<T: Component + Clone>(
 /// Opens one construction transaction only from the exact still-live valid
 /// preview. The confirming pointer coordinate is retained solely for feedback
 /// after the domain and economy transaction has fully committed.
-pub(super) fn begin_construction_transaction_from_valid_preview(
+pub fn begin_construction_transaction_from_valid_preview(
     mut commands: Commands,
     mut construction_commit_requests: MessageReader<CommitConstruction>,
     tool: Res<ConstructionTool>,

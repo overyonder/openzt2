@@ -12,6 +12,13 @@ fn loaded_topology_requests_one_initial_habitat_region_rebuild() {
             Update,
             request_initial_habitat_region_rebuild_from_loaded_topology,
         );
+    application.world_mut().spawn((
+        openzt2_world_state::world_spawn::world_membership_types::WorldRoot {
+            scenario: default(),
+        },
+        openzt2_zoo_state::topology::topology_graph_types::TopologyGrid::default(),
+        openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex::default(),
+    ));
     application.world_mut().spawn(
         openzt2_zoo_state::topology::topology_graph_types::TopologyNode {
             cell: IVec3::new(-2, 0, 4),

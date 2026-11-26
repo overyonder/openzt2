@@ -89,7 +89,7 @@ pub(super) struct ElevatedPathMode<'w> {
 }
 
 impl ElevatedPathMode<'_> {
-    pub fn clearance_cm(&self) -> Option<i32> {
+    pub(super) fn clearance_cm(&self) -> Option<i32> {
         Some(self.assets.get(&self.source.0)?.clearance_cm)
     }
 }
@@ -103,11 +103,10 @@ pub(super) struct ElevatedPathProfile {
 }
 
 impl ElevatedPathProfile {
-    pub fn new(
+    pub(super) fn new(
         base_m: f32,
         definition: &GuestPathDefinition,
         spacing_cm: u16,
-        clearance_cm: i32,
         policy: &ConstructionPlacementPolicy,
     ) -> Self {
         let min = i32::from(definition.support_headroom_cm);
@@ -122,7 +121,7 @@ impl ElevatedPathProfile {
         }
     }
 
-    pub fn reference_m(self) -> f32 {
+    pub(super) fn reference_m(self) -> f32 {
         self.reference_cm as f32 * 0.01
     }
 }

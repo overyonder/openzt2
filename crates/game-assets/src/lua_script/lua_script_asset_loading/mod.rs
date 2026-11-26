@@ -1,7 +1,7 @@
 use std::{io, path::Path, sync::Arc};
 
 use bevy::{
-    asset::{AssetApp, AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetApp, AssetLoader, LoadContext},
     prelude::*,
 };
 
@@ -68,8 +68,8 @@ pub(super) fn register_lua_script_asset_and_loader(application: &mut App) {
 #[cfg(test)]
 mod stripped_bytecode_tests {
     #[test]
-    fn stripped_lua50_instructions_execute_without_debug_lines()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn stripped_lua50_instructions_execute_without_debug_lines(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Lua 5.0, little endian, 32-bit int/size_t/instructions, double numbers.
         let mut bytes = b"\x1bLua\x50\x01\x04\x04\x04\x06\x08\x09\x09\x08".to_vec();
         bytes.extend_from_slice(&0x417d_f5e7_6893_09b6_u64.to_le_bytes());
@@ -93,8 +93,8 @@ mod stripped_bytecode_tests {
     }
 
     #[test]
-    fn stripped_closure_upvalues_survive_format_conversion()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn stripped_closure_upvalues_survive_format_conversion(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let lua = mlua::Lua::new();
         let source = lua
             .load("local value = 42; return function() return value end")

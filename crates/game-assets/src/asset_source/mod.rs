@@ -2,6 +2,8 @@
 
 pub(crate) mod archive_entry_asset_path;
 
+pub(crate) mod generated_asset_publication;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Component, Path, PathBuf},
@@ -14,8 +16,8 @@ use bevy::{
         PathStream, Reader, VecReader,
     },
     prelude::{
-        App, DetectChangesMut, First, IntoScheduleConfigs, Message, MessageWriter, Plugin, ResMut,
-        Resource, resource_changed,
+        resource_changed, App, DetectChangesMut, First, IntoScheduleConfigs, Message,
+        MessageWriter, Plugin, ResMut, Resource,
     },
     tasks::futures_lite::stream,
 };
@@ -994,15 +996,15 @@ pub(crate) mod tests {
     use bevy::{
         app::TaskPoolPlugin,
         asset::{
-            Asset, AssetApp, AssetLoader, AssetPlugin, AssetServer, Assets, Handle, LoadContext,
             io::{AssetReader, AssetSourceId, Reader},
+            Asset, AssetApp, AssetLoader, AssetPlugin, AssetServer, Assets, Handle, LoadContext,
         },
         prelude::{App, TypePath},
     };
-    use zip::{ZipWriter, write::SimpleFileOptions};
+    use zip::{write::SimpleFileOptions, ZipWriter};
 
     use super::{
-        Z2fAssetReader, archive_entry_asset_path, create_bevy_asset_source_for_enabled_z2f_archives,
+        archive_entry_asset_path, create_bevy_asset_source_for_enabled_z2f_archives, Z2fAssetReader,
     };
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -1149,8 +1151,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn ui_references_prefer_exact_loose_paths_before_archive_basename_fallbacks()
-    -> std::io::Result<()> {
+    fn ui_references_prefer_exact_loose_paths_before_archive_basename_fallbacks(
+    ) -> std::io::Result<()> {
         let directory = TestDirectory::new()?;
         let base = directory.archive(
             "x300_000.z2f",
@@ -1228,8 +1230,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn archive_toggle_reloads_compatible_image_handle_when_physical_dds_winner_changes()
-    -> std::io::Result<()> {
+    fn archive_toggle_reloads_compatible_image_handle_when_physical_dds_winner_changes(
+    ) -> std::io::Result<()> {
         let directory = TestDirectory::new()?;
         let base = directory.archive("x300_000.z2f", &[("image.dds", b"base")])?;
         let modification = directory.archive("mod.z2f", &[("image.dds", b"mod")])?;

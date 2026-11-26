@@ -13,6 +13,10 @@ pub struct UiPresentationActionRecord {
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub enum UiPresentationAction {
+    WatchTextEdit {
+        target_node: AssetId,
+        source_node: AssetId,
+    },
     ShowDocumentRole {
         document_role: UiDocumentRole,
     },
@@ -166,6 +170,10 @@ impl UiPresentationAction {
             | Self::HideOwningDocumentAfterConfirmationDismissal
             | Self::SetAllEmotePresentationsVisible { .. } => [None, None],
             Self::CopySourceNodeTextToTargetNode {
+                target_node,
+                source_node,
+            }
+            | Self::WatchTextEdit {
                 target_node,
                 source_node,
             } => [Some(target_node), Some(source_node)],

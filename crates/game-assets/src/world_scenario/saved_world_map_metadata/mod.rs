@@ -1,8 +1,8 @@
 use std::io;
 
 use openzt2_game_data::{
-    AssetId,
     world_scenario::{WorldMapSupportedGameModeFlags, WorldScenarioDocument},
+    AssetId,
 };
 
 use super::{

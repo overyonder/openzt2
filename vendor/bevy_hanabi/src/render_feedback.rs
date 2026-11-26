@@ -19,7 +19,7 @@ impl ParticleEffectGpuReady {
 }
 
 /// Opt-in GPU particle count. The first value is published after a readback completes.
-#[derive(Component, Debug, Default, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ParticleAliveCount(Option<ParticleCountSample>);
 
 impl ParticleAliveCount {

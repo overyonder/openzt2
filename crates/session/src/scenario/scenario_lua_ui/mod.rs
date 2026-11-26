@@ -4,19 +4,24 @@ pub(super) mod presentation;
 
 use bevy::prelude::*;
 use mlua::{Lua, Scope, Table};
-use openzt2_game_assets::lua_script::lua_script_archive_path_index::LuaScriptArchivePathIndex;
 use openzt2_game_assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
+use openzt2_game_assets::lua_script::lua_script_sources::LuaScriptSources;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_data::ui_document::{
     document::UiDocument, node_layout::UiNodeRegionMetric, widget::UiWidgetRecord,
 };
 use openzt2_game_data::world_scenario::{ScenarioScriptBinding, ScenarioScriptPhase};
 use openzt2_game_data::AssetId;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
+use openzt2_interface_state::ui::{
+    authored_ui_action_projection_components::UiScriptActions,
+    authored_ui_activation_contracts::UiNodeActivated,
+    authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot},
+};
 use openzt2_zoo_state::scenario::scenario_session_types::{
     ActiveScenarioSession, ScenarioDocument,
 };
 use openzt2_zoo_state::scenario::timed_scenario_ui_actions::{
-    RunTimedScenarioUiAction, TimedScenarioUiActionCompleted,
+    RunAuthoredUiScript, TimedScenarioUiActionCompleted,
 };
 use std::cell::RefCell;
 
@@ -94,7 +99,7 @@ const REFERENCE_PATH_SEPARATOR: char = '\u{2}';
 pub(super) fn register(app: &mut App) {
     use openzt2_game_assets::application_lifecycle::GamePhase;
     app.add_message::<ScenarioUiCommand>()
-        .add_message::<RunTimedScenarioUiAction>()
+        .add_message::<RunAuthoredUiScript>()
         .add_message::<TimedScenarioUiActionCompleted>()
         .add_message::<openzt2_zoo_state::scenario::timed_scenario_ui_actions::ScenarioUiSelectionCompleted>()
         .add_message::<presentation::ScenarioConstructionRequest>()
@@ -105,8 +110,9 @@ pub(super) fn register(app: &mut App) {
         .add_systems(
             Update,
             (
+                route_activated_authored_ui_scripts,
                 create_named_ui_lua_contexts_for_requested_scripts,
-                run_authored_timed_scenario_scripts,
+                run_authored_ui_scripts,
                 presentation::apply_scenario_ui_commands,
                 presentation::apply_scenario_tool_requests,
             )
@@ -855,17 +861,50 @@ impl ScenarioUiLuaContextOwners<'_, '_> {
     }
 }
 
+fn route_activated_authored_ui_scripts(
+    mut activations: MessageReader<UiNodeActivated>,
+    nodes: Query<(&UiScriptActions, &UiDocumentOwner)>,
+    roots: Query<&UiDocumentRoot>,
+    documents: Res<Assets<UiDocumentAsset>>,
+    mut scripts: MessageWriter<RunAuthoredUiScript>,
+) {
+    for activation in activations.read() {
+        let Ok((actions, owner)) = nodes.get(activation.node) else {
+            continue;
+        };
+        let Some(document) = roots
+            .get(owner.0)
+            .ok()
+            .and_then(|root| documents.get(&root.document))
+        else {
+            continue;
+        };
+        for invocation in actions
+            .authored_action_records(document)
+            .filter(|action| action.trigger == activation.trigger)
+        {
+            scripts.write(RunAuthoredUiScript {
+                action: activation.node,
+                document_root: owner.0,
+                invocation: invocation.clone(),
+                handle: invocation
+                    .script
+                    .and_then(|id| document.script_handle(id))
+                    .cloned(),
+                timed: false,
+            });
+        }
+    }
+}
+
 fn create_named_ui_lua_contexts_for_requested_scripts(
     mut commands: Commands,
-    mut requests: MessageReader<RunTimedScenarioUiAction>,
+    mut requests: MessageReader<RunAuthoredUiScript>,
     owners: ScenarioUiLuaContextOwners,
 ) {
     let mut created = std::collections::HashSet::new();
     for request in requests.read() {
-        let mut words = request.command.split_ascii_whitespace();
-        let (Some(name), Some(_), Some(_)) = (words.next(), words.next(), words.next()) else {
-            continue;
-        };
+        let name = &request.invocation.context;
         if name.eq_ignore_ascii_case("scenario") {
             continue;
         }
@@ -883,12 +922,12 @@ fn create_named_ui_lua_contexts_for_requested_scripts(
     }
 }
 
-fn run_authored_timed_scenario_scripts(
-    mut requests: MessageReader<RunTimedScenarioUiAction>,
+fn run_authored_ui_scripts(
+    mut requests: MessageReader<RunAuthoredUiScript>,
     owners: ScenarioUiLuaContextOwners,
     active_scenarios: Query<(Entity, &ActiveScenarioSession, &ScenarioDocument)>,
     scripts: Res<Assets<LuaScriptAsset>>,
-    script_index: Res<LuaScriptArchivePathIndex>,
+    script_sources: Res<LuaScriptSources>,
     mut runtime: Query<&mut ScenarioLuaContext>,
     (fact_sources, direct): (
         ScenarioLuaQueryFactSources,
@@ -909,21 +948,28 @@ fn run_authored_timed_scenario_scripts(
             let Some((root, view_owner)) = owners.owner(request.document_root) else {
                 return false;
             };
-            let mut words = request.command.split_ascii_whitespace();
-            let (Some(context), Some(path), Some(entry)) =
-                (words.next(), words.next(), words.next())
-            else {
-                warn!(command = %request.command, "unsupported timed scenario script command");
-                return false;
-            };
+            let invocation = &request.invocation;
+            let context = &invocation.context;
+            let entry = &invocation.entry;
             let referring_path = root
                 .document
                 .path()
                 .map(|path| path.path().to_string_lossy());
-            let Some((script_path, script_handle)) =
-                script_index.resolve(referring_path.as_deref().unwrap_or(""), path)
-            else {
-                warn!(%path, "timed UI script does not resolve");
+            let resolved = request
+                .handle
+                .as_ref()
+                .and_then(|handle| {
+                    let path = handle.path()?.path().to_string_lossy().into_owned();
+                    Some((path, handle.clone()))
+                })
+                .or_else(|| {
+                    script_sources.load(
+                        referring_path.as_deref().unwrap_or(""),
+                        &invocation.authored_path,
+                    )
+                });
+            let Some((script_path, script_handle)) = resolved else {
+                warn!(path = %invocation.authored_path, "UI script does not resolve");
                 return false;
             };
             let (owner, scenario, document_id) = if context.eq_ignore_ascii_case("scenario") {
@@ -941,13 +987,17 @@ fn run_authored_timed_scenario_scripts(
             let Ok(mut context) = runtime.get_mut(owner) else {
                 return false;
             };
-            let arguments = words.collect::<Vec<_>>();
+            let arguments = invocation
+                .arguments
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
             match context.execute(
                 document_id,
-                script_path,
-                script_handle,
+                &script_path,
+                &script_handle,
                 &scripts,
-                &script_index,
+                &script_sources,
                 &ScenarioScriptBinding {
                     scenario,
                     objective: AssetId::default(),
@@ -960,14 +1010,17 @@ fn run_authored_timed_scenario_scripts(
             ) {
                 Ok(result) => {
                     if let Some(failure) = &result.failure {
-                        error!(%failure, %entry, "timed scenario script failed");
+                        error!(%failure, %entry, "authored UI script failed");
                     }
                     outputs.publish(queries.world.unwrap_or(request.document_root), result);
                 }
-                Err(failure) => error!(%failure, %entry, "timed scenario script failed"),
+                Err(failure) => error!(%failure, %entry, "authored UI script failed"),
             }
             true
         })();
+        if !request.timed {
+            continue;
+        }
         if delivered {
             outputs.write_timed_boundary(ScenarioUiCommand::Node {
                 path: Vec::new(),

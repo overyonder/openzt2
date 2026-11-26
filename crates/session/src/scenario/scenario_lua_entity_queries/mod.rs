@@ -118,7 +118,7 @@ fn live_fact(
         variant: animal.variant.map(|v| v.0),
         adult: animal.stage.is_some_and(|v| v.0 == LifeStage::Adult),
         pregnant: animal.pregnant,
-        crated: animal.crated,
+        crated: animal.crated.0 || animal.crated.1,
         needs: NEEDS.map(|(name, _)| animal.need_wellness_q16(name)),
         carried: animal.carried,
         relocating: animal.relocating,
@@ -786,7 +786,7 @@ mod tests {
     use super::*;
     use bevy::{ecs::system::SystemState, prelude::World};
     use openzt2_world_state::world_spawn::{
-        world_entity_crating::WorldEntityIsCrated,
+        world_entity_crating::ScriptedCrating,
         world_membership_types::{DefinitionId, WorldMember},
     };
     use openzt2_zoo_state::{
@@ -815,7 +815,7 @@ mod tests {
         let crated = spawn(male);
         let dead = spawn(male);
         spawn(female);
-        world.entity_mut(crated).insert(WorldEntityIsCrated);
+        world.entity_mut(crated).insert(ScriptedCrating);
         let death = Dead {
             cause: DeathCause::Authored(AssetId::from_key("oldage")),
             since_tick: 1,
@@ -844,7 +844,7 @@ mod tests {
         assert_eq!(counts(&world), [2, 1, 3, 3]);
         world.entity_mut(living).insert(death);
         assert_eq!(counts(&world), [1, 0, 2, 2]);
-        world.entity_mut(crated).remove::<WorldEntityIsCrated>();
+        world.entity_mut(crated).remove::<ScriptedCrating>();
         assert_eq!(counts(&world), [1, 1, 2, 2]);
     }
 }

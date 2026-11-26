@@ -127,6 +127,7 @@ pub(crate) fn loading_app() -> (App, Entity) {
     .init_resource::<Assets<LocalizationAsset>>()
     .init_resource::<LocalizationPrecedenceIndex>()
     .init_asset::<WorldScenarioDocumentAsset>()
+    .init_asset::<openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset>()
     .init_asset::<openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset>()
     .init_resource::<WorldScenarios>()
     .init_asset::<SpeciesAsset>()
@@ -139,6 +140,9 @@ pub(crate) fn loading_app() -> (App, Entity) {
     .insert_resource(ProfileOptions {
         profile_identifier: PROFILE,
         ..default()
+    })
+    .insert_resource(openzt2_photos::PhotoAlbumProfileOptions {
+        default_spreads: Some(5),
     })
     .add_message::<AssetEvent<LuaScriptAsset>>()
     .add_message::<BeginWorldLoad>()
@@ -181,7 +185,9 @@ pub(crate) fn loading_app() -> (App, Entity) {
                 month: 1,
                 day: 1,
             }),
-            SimulationControl::new(0, false),
+            SimulationControl::new(false),
+            openzt2_world_state::simulation_time::simulation_control_types::SimulationPaused::default(),
+            openzt2_world_state::simulation_time::simulation_control_types::SimulationSpeedTier(0),
             ZooSeed(17),
             (
                 openzt2_zoo_state::topology::topology_graph_types::TopologyIndex::default(),

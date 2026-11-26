@@ -184,17 +184,19 @@ pub(super) fn project_changed_scenario_goal_rows(
         &ScenarioObjectiveStatus,
         &ScenarioObjectiveAuthoredVisibility,
     )>,
-    parents: Query<&ChildOf>,
-    children: Query<&Children>,
-    mut texts: Query<Option<&mut UiTextBinding>, With<Text>>,
-    mut status_nodes: Query<
-        (
-            &UiScenarioObjectiveStatusVisualClassification,
-            &mut Visibility,
-            &mut Node,
-        ),
-        Without<UiListRow>,
-    >,
+    (parents, children, mut texts, mut status_nodes): (
+        Query<&ChildOf>,
+        Query<&Children>,
+        Query<Option<&mut UiTextBinding>, With<Text>>,
+        Query<
+            (
+                &UiScenarioObjectiveStatusVisualClassification,
+                &mut Visibility,
+                &mut Node,
+            ),
+            Without<UiListRow>,
+        >,
+    ),
 ) {
     let catalogue_changed = scenarios.is_changed() || scenario_assets.is_changed();
     let Some(scenarios) = scenarios.get(&scenario_assets) else {

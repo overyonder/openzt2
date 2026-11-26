@@ -35,7 +35,7 @@ use openzt2_interface_state::{
         ui_document_lifecycle_contracts::{InGameUiOwner, ShowUiRole},
     },
 };
-use openzt2_ui::animation::UiShowHideAnimation;
+use openzt2_ui::animation::{UiAnimationDirection, UiShowHideAnimation, UiShowHidePlayback};
 use openzt2_ui::authored_ui_presentation_action_application::RequestUiPresentationAction;
 use openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioCue;
 use openzt2_zoo_state::{
@@ -180,11 +180,13 @@ pub(super) fn fit_animation_heights_to_text(
     mut panels: Query<(
         &AnimationHeightFollowsText,
         &mut UiShowHideAnimation,
+        &UiAnimationDirection,
+        Has<UiShowHidePlayback>,
         &mut Node,
     )>,
     texts: Query<&ComputedNode>,
 ) {
-    for (fit, mut animation, mut node) in &mut panels {
+    for (fit, mut animation, direction, playing, mut node) in &mut panels {
         let Ok(text) = texts.get(fit.text) else {
             continue;
         };
@@ -192,7 +194,7 @@ pub(super) fn fit_animation_heights_to_text(
         let start = animation.rect_intervals[3].map_or(height, |[start, _]| start);
         if animation.rect_intervals[3] != Some([start, height]) {
             animation.rect_intervals[3] = Some([start, height]);
-            if !animation.running && animation.forward {
+            if !playing && direction.0 {
                 node.height = Val::Px(height);
             }
         }
@@ -212,7 +214,7 @@ fn role_for(documents: &Assets<UiDocumentAsset>, path: &[String]) -> Option<UiDo
     roles.all(|role| role == first).then_some(first)
 }
 
-pub(super) fn resolve_node(document: &UiDocument, path: &[String]) -> Option<AssetId> {
+pub(in crate::scenario) fn resolve_node(document: &UiDocument, path: &[String]) -> Option<AssetId> {
     let mut parent = None;
     for name in path {
         if let Some(index) = name.strip_prefix(INDEX_PATH_STEP) {
@@ -590,7 +592,7 @@ pub(super) fn apply_scenario_ui_commands(
     // Scripts also address buy-panel rows, by the name of what each one sells.
     if !changed_enabled.is_empty() || state_added || restrictions_changed {
         if let Ok(mut disabled) = disabled_catalogue.get_mut(owner) {
-            let definitions = pending
+            let definitions = values
                 .enabled
                 .iter()
                 .filter(|(_, enabled)| !**enabled)

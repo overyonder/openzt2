@@ -1,4 +1,5 @@
 use avian3d::prelude::{Collider, CollisionEventsEnabled, CollisionLayers, RigidBody, SweptCcd};
+use bevy::asset::AssetLoadFailedEvent;
 use bevy::{
     animation::AnimatedBy,
     asset::LoadState,
@@ -20,7 +21,6 @@ use openzt2_game_assets::world_definitions::{
 };
 use openzt2_world_state::application_schedule::GameSet;
 use openzt2_world_state::world_spawn::{
-    prefab_authored_rotation_cycle_advancement::PrefabRealTimeRotationClock,
     prefab_model_readiness::first_missing_prefab_collider_model_asset_id,
     prefab_object_presentation_attachment_projection::PrefabObjectPresentationAttachmentProjectionHydrated,
     prefab_presentation_types::PrefabSkinRenderBound,
@@ -172,7 +172,7 @@ type AuxiliaryFameGatePrefabChild = (
     Or<(
         With<PrefabRowRenderableOf>,
         With<super::super::prefab_effect_trigger_hydration::PrefabEffectTrigger>,
-        With<ModelRenderVisibilityGate>,
+        With<crate::model_render::world_entity_model_suppression::ModelRenderVisibilityGate>,
         With<Collider>,
         With<NamedPresentationNodeAttachment>,
     )>,
@@ -319,7 +319,7 @@ fn retire_fame_gate_prefab(
             bevy::animation::AnimationTargetId,
             AnimatedBy,
             PrefabMotionRotation,
-            PrefabRealTimeRotationClock,
+            crate::animation_playback::player_clock_lanes::PrefabRealTimeAnimation,
             PrefabTransformClocks,
         )>();
     }

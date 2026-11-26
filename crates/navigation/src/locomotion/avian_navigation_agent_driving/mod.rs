@@ -5,6 +5,7 @@ use avian3d::prelude::AngularVelocity;
 use avian3d::prelude::LinearVelocity;
 use avian3d::prelude::RigidBody;
 use bevy::prelude::*;
+use openzt2_interface_state::camera::camera_runtime_state_types::FirstPersonLocomotionTuning;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use crate::locomotion::fence_navigation_policy::FenceNavigationPolicy;
@@ -40,6 +41,7 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
         Option<&Docking>,
         Has<DirectLocomotion>,
         Option<&LocomotionAnimationSource>,
+        Option<&FirstPersonLocomotionTuning>,
     )>,
     mut completed_arrivals: MessageWriter<Arrived>,
 ) {
@@ -59,8 +61,13 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
         docking,
         direct_locomotion,
         animation_source,
+        tuning,
     ) in &mut avian_navigation_agents
     {
+        let tuning = tuning.filter(|_| direct_locomotion);
+        let maximum_speed = tuning.map_or(navigation_agent.max_speed_mps, |tuning| {
+            tuning.maximum_speed_mps
+        });
         let playback = animation_samples.get(navigation_agent_entity, animation_source);
         let animation_mean_speed = animation_source
             .map_or(navigation_agent.max_speed_mps, |source| {
@@ -75,9 +82,7 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
         // Route steering is not evaluated without a destination. Its retained
         // value must not restart movement after arrival or docking completes.
         let mut desired_velocity = if destination.is_some() || direct_locomotion {
-            steering
-                .desired_velocity
-                .clamp_length_max(navigation_agent.max_speed_mps)
+            steering.desired_velocity.clamp_length_max(maximum_speed)
         } else {
             Vec3::ZERO
         };
@@ -93,20 +98,27 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
             // vertical contact response on dynamic agents.
             desired_velocity.y = linear_velocity.y;
         }
-        let requested_velocity_change = desired_velocity - linear_velocity.0;
-        linear_velocity.0 += requested_velocity_change
-            .clamp_length_max(navigation_agent.acceleration_mps2 * fixed_delta_seconds);
-        if preserve_vertical_physics_velocity && !sampled {
-            let horizontal_velocity = Vec2::new(linear_velocity.x, linear_velocity.z)
-                .clamp_length_max(navigation_agent.max_speed_mps);
-            linear_velocity.x = horizontal_velocity.x;
-            linear_velocity.z = horizontal_velocity.y;
-        } else if !sampled {
-            linear_velocity.0 = linear_velocity
-                .0
-                .clamp_length_max(navigation_agent.max_speed_mps);
+        if let Some(tuning) = tuning {
+            let horizontal = tuning.advance_horizontal_velocity(
+                linear_velocity.0.xz(),
+                desired_velocity.xz(),
+                fixed_delta_seconds,
+            );
+            linear_velocity.x = horizontal.x;
+            linear_velocity.z = horizontal.y;
+        } else {
+            let requested_velocity_change = desired_velocity - linear_velocity.0;
+            linear_velocity.0 += requested_velocity_change
+                .clamp_length_max(navigation_agent.acceleration_mps2 * fixed_delta_seconds);
+            if preserve_vertical_physics_velocity && !sampled {
+                let horizontal_velocity =
+                    Vec2::new(linear_velocity.x, linear_velocity.z).clamp_length_max(maximum_speed);
+                linear_velocity.x = horizontal_velocity.x;
+                linear_velocity.z = horizontal_velocity.y;
+            } else if !sampled {
+                linear_velocity.0 = linear_velocity.0.clamp_length_max(maximum_speed);
+            }
         }
-
         // Physics updates the world actor's root Transform each fixed step;
         // GlobalTransform can still describe the preceding rendered frame.
         let position = transform.translation;

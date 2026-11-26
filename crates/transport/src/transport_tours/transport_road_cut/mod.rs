@@ -163,7 +163,7 @@ pub(super) struct RoadWrites<'w, 's> {
             Option<&'static mut TrackTravelDistances>,
         ),
     >,
-    pieces: Query<'w, 's, &'static mut TransportTrackConstructionPiece>,
+    pieces: Query<'w, 's, &'static TransportTrackConstructionPiece>,
     sockets: Query<'w, 's, (Option<&'static TrackStart>, Option<&'static TrackEnd>)>,
     members: Query<'w, 's, &'static CircuitMember>,
 }
@@ -207,20 +207,12 @@ impl RoadWrites<'_, '_> {
         for (index, piece) in pieces[run.pieces].iter().copied().enumerate() {
             let piece = piece.expect("validated road piece");
             let piece_index = u16::try_from(index).expect("existing road piece index fits");
-            match self.pieces.get_mut(piece) {
-                Ok(mut current) if current.route_segment == root => {
-                    current
-                        .map_unchanged(|piece| &mut piece.piece_index)
-                        .set_if_neq(piece_index);
-                }
-                _ => {
-                    commands
-                        .entity(piece)
-                        .insert(TransportTrackConstructionPiece {
-                            route_segment: root,
-                            piece_index,
-                        });
-                }
+            let next = TransportTrackConstructionPiece {
+                route_segment: root,
+                piece_index,
+            };
+            if self.pieces.get(piece).ok() != Some(&next) {
+                commands.entity(piece).insert(next);
             }
         }
     }

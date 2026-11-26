@@ -4,18 +4,17 @@ use std::{collections::HashSet, io};
 
 use bevy::{
     asset::{io::Reader, AssetLoader, LoadContext},
-    gltf::GltfLoader,
     prelude::*,
 };
 
 use crate::{
-    model::bevy_gltf_loader_configuration::create_bevy_gltf_loader_for_lowered_source_assets,
+    asset_source::generated_asset_publication::GeneratedAssetPublication,
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document,
         ordered_source_document_types::OrderedSourceDocument, path::AssetPath,
     },
     terrain::source::{
-        blue_fang_terrain_glb_and_domain_lowering::lower_blue_fang_terrain_to_domain_grid_and_glb,
+        blue_fang_terrain_glb_and_domain_lowering::lower_blue_fang_terrain_to_canonical_grid,
         blue_fang_terrain_presentation_source_lowering::{
             find_authored_terrain_water_material_source_document_paths,
             find_authored_terrain_waterfall_particle_source_document_path,
@@ -31,7 +30,6 @@ use super::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 #[derive(TypePath)]
 pub(super) struct TerrainSourceAssetLoader {
-    gltf_loader: GltfLoader,
     asset_archives: crate::asset_source::AssetArchives,
 }
 
@@ -41,7 +39,6 @@ impl FromWorld for TerrainSourceAssetLoader {
             asset_archives: world
                 .resource::<crate::asset_source::AssetArchives>()
                 .clone(),
-            gltf_loader: create_bevy_gltf_loader_for_lowered_source_assets(world),
         }
     }
 }
@@ -153,7 +150,7 @@ impl AssetLoader for TerrainSourceAssetLoader {
                 &source_documents,
                 terrain_source.biome_names(),
             )?;
-        let lowered_terrain = lower_blue_fang_terrain_to_domain_grid_and_glb(
+        let canonical_terrain_grid = lower_blue_fang_terrain_to_canonical_grid(
             terrain_source,
             read_authored_terrain_heights(&source_documents)?,
             terrain_presentation,
@@ -161,13 +158,10 @@ impl AssetLoader for TerrainSourceAssetLoader {
             terrain_waterfall,
         )
         .map_err(io::Error::other)?;
-        let canonical_terrain_grid = lowered_terrain.grid;
         super::terrain_asset_dependency_construction::build_terrain_asset_dependencies(
             canonical_terrain_grid,
-            &lowered_terrain.glb,
-            &self.gltf_loader,
             &self.asset_archives,
-            load_context,
+            &mut GeneratedAssetPublication::Labeled(load_context),
         )
         .await
     }

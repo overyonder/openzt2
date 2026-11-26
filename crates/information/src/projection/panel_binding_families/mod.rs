@@ -417,10 +417,7 @@ pub(crate) fn bind_information_panel_fields(
         }
         if let Some(selected) = selected {
             match &selected.0 {
-                Boolean::WorkerCleansFilters
-                | Boolean::WorkerCleansRecycling
-                | Boolean::WorkerEmptiesTrash
-                | Boolean::WorkerSweepsTrash => {
+                Boolean::WorkerDutyAssigned(_) => {
                     entity.insert(StaffDutyFieldOf(owner.0));
                 }
                 _ => {}

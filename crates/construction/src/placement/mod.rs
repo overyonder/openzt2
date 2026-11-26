@@ -5,7 +5,7 @@ use crate::construction::construction_transaction_preparation::{
 
 use bevy::ecs::schedule::common_conditions::any_with_component;
 mod behavior_target_placement_application;
-mod biome_automatic_object_placement_edit_preparation;
+pub(crate) mod biome_automatic_object_placement_edit_preparation;
 pub use biome_automatic_object_placement_edit_preparation::BiomeAutomaticPlacementRanges;
 mod biome_brush_policy;
 mod ground_path_placement_stomp;

@@ -49,12 +49,16 @@ impl MetadataArchiveDirectory {
         let mut archive = ZipWriter::new(File::create_new(&path)?);
         for (name, source) in [
             (
+                "config/gamectxt.xml",
+                r#"<BFGameContext><BFBinderRoot><Directory path="entities/units/animals/ai"/></BFBinderRoot></BFGameContext>"#,
+            ),
+            (
                 "config/timekeeper.xml",
                 r#"<BFTimeKeeper timeScale="3600"><BFTIME_HEARTBEAT interval="0.02"/><BFTIME_SIMTICK interval="0.01"/><BFTIME_SLOWTICK interval="0.1"/></BFTimeKeeper>"#,
             ),
             (
                 "entities/units/animals/ai/metadata.xml",
-                "<BFAIEntityType/>",
+                r#"<BFTypedBinder binderType="animal"><BFAIEntityType/></BFTypedBinder>"#,
             ),
             ("entities/units/animals/ai/malformed.xml", "<"),
         ] {

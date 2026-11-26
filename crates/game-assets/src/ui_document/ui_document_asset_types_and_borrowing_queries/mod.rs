@@ -1,7 +1,10 @@
 //! One UI document and its sorted typed dependency-handle indexes.
 
 use bevy::{audio::AudioSource, prelude::*};
-use openzt2_game_data::{ui_document::document::UiDocument, AssetId};
+use openzt2_game_data::{
+    ui_document::{document::UiDocument, node::MoneyTextFormat, widget::UiWidgetRecord},
+    AssetId,
+};
 
 use crate::{
     lua_script::lua_script_asset_loading::LuaScriptAsset, scene_prefab::ScenePrefabAsset,
@@ -18,10 +21,78 @@ pub struct UiDocumentAsset {
     pub(in crate::ui_document) nested_ui_document_handles:
         Box<[(AssetId, Handle<UiDocumentAsset>)]>,
     pub(in crate::ui_document) audio_source_handles: Box<[(AssetId, Handle<AudioSource>)]>,
+    pub(in crate::ui_document) fame_stars: Option<FameStarDisplay>,
     pub(in crate::ui_document) script_handles: Box<[(AssetId, Handle<LuaScriptAsset>)]>,
 }
 
+#[derive(Clone, Debug)]
+pub struct FameStarDisplay {
+    pub wells_node_index: u32,
+    pub well_transforms: Vec<Transform>,
+    pub viewport_transform: Transform,
+    pub viewport_size_m: Vec2,
+    pub animation_delay_seconds: f32,
+    pub full: FameStarModel,
+    pub half: FameStarModel,
+    pub appear: FameStarModel,
+    pub disappear: FameStarModel,
+}
+
+#[derive(Clone, Debug)]
+pub struct FameStarModel {
+    pub model: Handle<ScenePrefabAsset>,
+    pub scale: f32,
+    pub duration_seconds: f32,
+    pub auto_start: bool,
+    pub looping: bool,
+    pub effects: Vec<FameStarEffect>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FameStarEffect {
+    pub prefab: Handle<ScenePrefabAsset>,
+    pub duration_seconds: Option<f32>,
+}
+
+pub struct GraphLabelText {
+    pub format: AssetId,
+    pub color: [u8; 4],
+    pub money: Option<MoneyTextFormat>,
+}
+
 impl UiDocumentAsset {
+    pub fn fame_star_display(&self) -> Option<&FameStarDisplay> {
+        self.fame_stars.as_ref()
+    }
+
+    pub fn edge_pan_surface_node_index(&self) -> Option<u32> {
+        self.canonical_ui_document.edge_pan_surface_node_index
+    }
+
+    pub fn graph_label_text_node(&self, index: u32) -> Option<GraphLabelText> {
+        let node = self.canonical_ui_document.nodes.get(index as usize)?;
+        if !matches!(node.widget, UiWidgetRecord::Text(_)) || node.text_format == AssetId::default()
+        {
+            return None;
+        }
+        let color = node
+            .visuals
+            .iter()
+            .find_map(|visual| {
+                (matches!(
+                    visual.visual_state,
+                    openzt2_game_data::ui_document::node_presentation::UiNodeVisualState::Default
+                ) && visual.affects_text_color)
+                    .then_some(visual.text_color)
+            })
+            .unwrap_or(node.style.color);
+        Some(GraphLabelText {
+            format: node.text_format,
+            color: color.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8),
+            money: node.money_text_format,
+        })
+    }
+
     pub fn canonical_ui_document(&self) -> &UiDocument {
         &self.canonical_ui_document
     }

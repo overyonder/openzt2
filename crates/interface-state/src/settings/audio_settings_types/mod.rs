@@ -12,6 +12,8 @@ pub struct AudioSettings {
     #[serde(rename = "effects_3d")]
     pub three_dimensional_effect_volume_percent: u8,
     pub muted: bool,
+    #[serde(default)]
+    pub eight_bit_sound: bool,
 }
 
 impl Default for AudioSettings {
@@ -22,6 +24,7 @@ impl Default for AudioSettings {
             two_dimensional_effect_volume_percent: 100,
             three_dimensional_effect_volume_percent: 100,
             muted: false,
+            eight_bit_sound: false,
         }
     }
 }

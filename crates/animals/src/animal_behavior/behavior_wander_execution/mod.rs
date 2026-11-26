@@ -10,7 +10,9 @@ use openzt2_game_data::behavior::action::wander::{
     BehaviorGroundLocomotionSpeed, BehaviorWanderAction,
 };
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::{
+    AnimalCrate, ScriptedCrating, UncratedWorldEntity,
+};
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
 use openzt2_zoo_state::animal_health::types::{Dead, Tranquilized};
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
@@ -110,10 +112,7 @@ fn execute_current_wander_actions(
     mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut requests: MessageWriter<NavigateTo>,
     subject_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
-    entities: Query<
-        (Entity, &GlobalTransform, &DefinitionId, &WorldMember),
-        Without<WorldEntityIsCrated>,
-    >,
+    entities: Query<(Entity, &GlobalTransform, &DefinitionId, &WorldMember), UncratedWorldEntity>,
     routes: Query<&Route>,
     nearby: BehaviorSpatialCandidates,
     mut candidates: Local<Vec<Entity>>,
@@ -131,7 +130,7 @@ fn execute_current_wander_actions(
             Option<&Destination>,
             Option<&mut BehaviorWanderNavigation>,
             Has<PendingBehaviorTaskFailure>,
-            Has<WorldEntityIsCrated>,
+            (Has<AnimalCrate>, Has<ScriptedCrating>),
             Has<Tranquilized>,
             Has<Dead>,
             Has<Staff>,
@@ -163,7 +162,7 @@ fn execute_current_wander_actions(
     ) in behavior_action_actors(&mut animals, activation.0)
     {
         let mut wandering = wandering;
-        let immobilized = crated || tranquilized || dead;
+        let immobilized = crated.0 || crated.1 || tranquilized || dead;
         if wandering.as_ref().is_some_and(|wandering| {
             failing
                 || immobilized
@@ -455,10 +454,7 @@ fn execute_current_evasion_actions(
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     subject_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
-    entities: Query<
-        (Entity, &GlobalTransform, &DefinitionId, &WorldMember),
-        Without<WorldEntityIsCrated>,
-    >,
+    entities: Query<(Entity, &GlobalTransform, &DefinitionId, &WorldMember), UncratedWorldEntity>,
     nearby: BehaviorSpatialCandidates,
     mut candidates: Local<Vec<Entity>>,
     mut actors: Query<
@@ -473,7 +469,7 @@ fn execute_current_evasion_actions(
             Option<&mut BehaviorEvasionSteering>,
             &mut BehaviorRandomStream,
             Has<PendingBehaviorTaskFailure>,
-            Has<WorldEntityIsCrated>,
+            (Has<AnimalCrate>, Has<ScriptedCrating>),
             Has<Tranquilized>,
             Has<Dead>,
         ),
@@ -504,7 +500,7 @@ fn execute_current_evasion_actions(
         dead,
     ) in behavior_action_actors(&mut actors, activation.0)
     {
-        let immobilized = failing || crated || tranquilized || dead;
+        let immobilized = failing || crated.0 || crated.1 || tranquilized || dead;
         let current = evading.filter(|evading| {
             !immobilized
                 && task.zip(running).is_some_and(|(task, (instruction, _))| {

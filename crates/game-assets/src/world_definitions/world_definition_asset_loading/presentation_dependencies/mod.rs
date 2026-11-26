@@ -1,6 +1,6 @@
 use super::super::world_definition_document_asset_and_demand_loaded_dependency_paths::{
-    AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS, DemandLoadedDependencyPath,
-    WorldDefinitionAsset,
+    DemandLoadedDependencyPath, WorldDefinitionAsset,
+    AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS,
 };
 use super::unresolved_reference;
 use crate::asset_source::AssetArchives;
@@ -16,7 +16,7 @@ use crate::source_document::{
 };
 use crate::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image;
 use bevy::asset::LoadContext;
-use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
+use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
 use std::{collections::BTreeMap, io, path::Path};
 
 pub(super) async fn resolve_world_definition_presentation_models(
@@ -187,6 +187,33 @@ pub(super) fn register_world_definition_presentation_dependencies(
             &mut textures,
         );
     }
+    let tank_material_ids: std::collections::BTreeSet<_> = document
+        .tanks
+        .iter()
+        .flat_map(|tank| {
+            [tank.floor_material]
+                .into_iter()
+                .chain(tank.wall_materials)
+                .chain(tank.wall_materials_low)
+        })
+        .collect();
+    let mut materials: Vec<_> = archives
+        .source_paths_under(Path::new("materials"))
+        .into_iter()
+        .filter_map(|path| {
+            let path = path.to_string_lossy().replace('\\', "/");
+            let id = AssetId::from_virtual_path(
+                &crate::source_document::path::AssetPath::new(&path).key(),
+            );
+            tank_material_ids
+                .contains(&id)
+                .then(|| DemandLoadedDependencyPath {
+                    id,
+                    path: path.into_boxed_str(),
+                })
+        })
+        .collect();
+    sort_paths(&mut materials);
     sort_paths(&mut textures);
     sort_paths(&mut models);
     sort_paths(&mut effects);
@@ -198,6 +225,7 @@ pub(super) fn register_world_definition_presentation_dependencies(
         authored_binder_sources: None,
         textures: textures.into_boxed_slice(),
         models: models.into_boxed_slice(),
+        materials: materials.into_boxed_slice(),
         effects: effects.into_boxed_slice(),
         scenes: scenes.into_boxed_slice(),
         animation_sets: animation_sets.into_boxed_slice(),

@@ -4993,7 +4993,6 @@ pub(crate) fn batch_effects(
     mut sort_bind_groups: ResMut<SortBindGroups>,
     mut q_cached_effects: Query<(
         Entity,
-        &MainEntity,
         &ExtractedEffect,
         &ExtractedSpawner,
         &ExtractedEffectMesh,
@@ -5029,7 +5028,7 @@ pub(crate) fn batch_effects(
     // - with parents before their children, to ensure ???? FIXME don't we need
     //   to opposite?!!!
     let mut effect_sorter = EffectSorter::new();
-    for (entity, _, _, _, _, _, _, _, child_of, _, _, input, ..) in &q_cached_effects {
+    for (entity, _, _, _, _, _, _, child_of, _, _, input, ..) in &q_cached_effects {
         effect_sorter.insert(
             entity,
             input.effect_slice.slab_id,
@@ -5050,7 +5049,6 @@ pub(crate) fn batch_effects(
     for entity in effect_sorter.iter() {
         let Ok((
             entity,
-            main_entity,
             extracted_effect,
             extracted_spawner,
             extracted_effect_mesh,
@@ -5093,7 +5091,6 @@ pub(crate) fn batch_effects(
         // Create a single-effect batch candidate. It can be merged with the
         // previous batch if fully compatible.
         let mut effect_batch = EffectBatch::from_input(
-            main_entity.id(),
             extracted_effect,
             extracted_spawner,
             extracted_effect_mesh,

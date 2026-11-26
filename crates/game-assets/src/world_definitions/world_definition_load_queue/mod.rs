@@ -4,8 +4,8 @@ use std::{
     io,
     path::PathBuf,
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
 };
 
@@ -78,8 +78,8 @@ mod tests {
     use bevy::{
         app::TaskPoolPlugin,
         asset::{
+            io::{memory::MemoryAssetReader, AssetSourceBuilder, AssetSourceId, Reader},
             AssetApp, AssetLoader, AssetPlugin, LoadContext,
-            io::{AssetSourceBuilder, AssetSourceId, Reader, memory::MemoryAssetReader},
         },
     };
     use std::{
@@ -121,8 +121,8 @@ mod tests {
     }
 
     #[test]
-    fn definition_queue_preserves_order_and_advances_after_failures_without_app_frames()
-    -> io::Result<()> {
+    fn definition_queue_preserves_order_and_advances_after_failures_without_app_frames(
+    ) -> io::Result<()> {
         let reader = MemoryAssetReader::default();
         let paths = (0..32)
             .map(|index| PathBuf::from(format!("{index}.queue-test")))

@@ -78,7 +78,7 @@ pub(super) fn toggle_or_close_authored_drop_list_displays_from_activations(
 #[cfg(test)]
 mod tests {
     use super::super::authored_ui_layout_participation::{
-        synchronize_authored_visibility_with_bevy_layout_participation, UiAuthoredLayoutDisplay,
+        project_authored_layout_participation, UiAuthoredLayoutDisplay,
     };
     use super::*;
     use openzt2_interface_state::input::input_types::ActionSource;
@@ -90,7 +90,7 @@ mod tests {
             Update,
             (
                 toggle_or_close_authored_drop_list_displays_from_activations,
-                synchronize_authored_visibility_with_bevy_layout_participation,
+                project_authored_layout_participation,
             )
                 .chain(),
         );

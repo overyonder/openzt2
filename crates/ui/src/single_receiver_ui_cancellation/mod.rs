@@ -103,6 +103,7 @@ pub(super) fn dismiss_one_active_ui_activity_from_cancel_requests(
         return;
     };
     let modal = capture.0.or(ui.scope.modal);
+    let active_scope = context.active_scope_with_modal(modal);
     let edit = ui
         .input_focus
         .get()
@@ -417,5 +418,6 @@ fn cancellation_action(
         UiActionRecord::Animal(record) => (record.trigger, false),
         UiActionRecord::Persistence(record) => (record.trigger, false),
         UiActionRecord::Simulation(record) => (record.trigger, false),
+        UiActionRecord::Script(record) => (record.trigger, false),
     }
 }

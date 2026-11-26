@@ -129,6 +129,7 @@ fn object(id: AssetId) -> WorldObjectDefinition {
     WorldObjectDefinition {
         authored_runtime: Default::default(),
         audio_cue_prefixes: Vec::new(),
+        audio_stage_volumes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),
         traversal_animation_manifests: Vec::new(),
@@ -181,7 +182,7 @@ fn setup(cash: i64) -> (App, Entity) {
         .add_message::<GuestReachedEntrance>()
         .add_message::<ZooDayAdvanced>()
         .add_message::<AnimalDied>()
-        .init_resource::<Assets<ScenePrefabAsset>>()
+        .init_asset::<ScenePrefabAsset>()
         .init_resource::<Assets<SpeciesAsset>>()
         .init_resource::<SpeciesAssets>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
@@ -256,7 +257,7 @@ fn setup(cash: i64) -> (App, Entity) {
         .spawn((
             WorldRoot { scenario: species },
             PersistentIdAllocator::default(),
-            SimulationControl::new(0, true),
+            SimulationControl::new(true),
             ZooSeed(123),
             ZooClock {
                 tick: 99,

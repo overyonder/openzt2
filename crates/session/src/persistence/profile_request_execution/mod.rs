@@ -176,6 +176,7 @@ pub(super) fn begin_creating_requested_profiles(
                     profile_identifier,
                     locale_identifier: AssetId::default(),
                     controller_input_enabled: true,
+                attributes: Default::default(),
                 };
                 let mut stored_profile_records_and_settings =
                     read_stored_profile_index_or_empty(&profile_index_file_path)?.0;
@@ -257,7 +258,7 @@ impl ActiveProfileSettings<'_> {
                 .iter()
                 .find(|record| record.profile_identifier == identifier)?
                 .clone(),
-            options: *self.options,
+            options: self.options.clone(),
             challenge_progress: *self.challenge_progress,
             scenario_variables: self.scenario_variables.clone(),
             audio: *self.audio,
@@ -335,7 +336,7 @@ pub(super) fn begin_selecting_requested_profiles(
                     .find(|stored_profile| {
                         stored_profile.record.profile_identifier == requested_profile_identifier
                     })
-                    .map(|stored_profile| stored_profile.options)
+                    .map(|stored_profile| stored_profile.options.clone())
                     .ok_or(ProfileFailure::Missing)?;
                 let selected_profile_challenge_progress = stored_profile_records_and_settings
                     .iter()
@@ -548,7 +549,7 @@ pub(super) fn begin_persisting_changed_active_profile_options(
         });
         return;
     };
-    let profile_options_to_persist = *profile_options;
+    let profile_options_to_persist = profile_options.clone();
     let scenario_variables_to_persist = scenario_variables.clone();
     let profile_challenge_completion_counts_to_persist = *profile_challenge_completion_counts;
     let audio_settings_to_persist = *audio_settings;

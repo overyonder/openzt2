@@ -8,7 +8,7 @@ pub struct UiDocumentHotkeyDefinition {
     pub character: String,
     pub control_state: UiDocumentHotkeyControlState,
     pub allow_repeat: bool,
-    pub action: UiActionRecord,
+    pub actions: Vec<UiActionRecord>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]

@@ -20,8 +20,8 @@ use openzt2_zoo_state::{
         behavior_token_types::{BehaviorSelfToken, ClaimedBehaviorSelfToken},
     },
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
         running_actions::{RunBehaviorWatchShow, RunningBehaviorInstruction},
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     economy::{
         authored_transaction_amount::authored_currency_to_money,

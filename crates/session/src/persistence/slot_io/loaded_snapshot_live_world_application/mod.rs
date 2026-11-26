@@ -74,11 +74,6 @@ pub(super) fn restore_snapshot_sections(
     let Some(records) = sections.as_ref() else {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     };
-    if records.scenario.is_some()
-        && super::scenario_snapshot_section::scripts_are_pending(&scenario, &asset_server)
-    {
-        return Ok(None);
-    }
     let baseline_topology = if records.topology.is_some() {
         topology
             .baseline_entities(world_root_entity)
@@ -150,9 +145,21 @@ pub(super) fn restore_snapshot_sections(
             records.progression.fame,
         )?;
     }
+    let cadence = openzt2_simulation_time::simulation_time_world_lifecycle::zoo_day_cadence_from_world_definitions(world_definitions)
+        .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
+    let offset = world_snapshot_record
+        .source_document
+        .as_ref()
+        .and_then(|source| {
+            let start = source
+                .document
+                .find_starting_zoo(world_snapshot_record.starting_point_definition_identifier)?;
+            let clock = cadence.clock_at(start.start_tick, Default::default())?;
+            Some(i64::from(start.absolute_day) - i64::from(clock.absolute_day))
+        });
     records
         .time
-        .validate_against_timing(world_definitions.timing())?;
+        .validate_against_timing(world_definitions.timing(), cadence, offset)?;
     let Some(resolved_waste_prefabs) =
         super::maintenance_snapshot_application::resolve_loose_waste_prefabs(
             &records.maintenance.waste,

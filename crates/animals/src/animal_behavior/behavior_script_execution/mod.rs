@@ -10,21 +10,18 @@ use openzt2_game_assets::lua_script::lua_script_module_execution::execute_lua_sc
 use openzt2_game_assets::lua_script::lua_script_module_execution::install_lua_script_dependency_loading_functions;
 use openzt2_game_assets::{
     behavior::behavior_asset_types::BehaviorDocumentAsset,
-    lua_script::{
-        lua_script_archive_path_index::LuaScriptArchivePathIndex,
-        lua_script_asset_loading::LuaScriptAsset,
-    },
+    lua_script::{lua_script_asset_loading::LuaScriptAsset, lua_script_sources::LuaScriptSources},
 };
 use openzt2_game_data::AssetId;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationOperation;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
-use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorScript, RunningBehaviorInstruction,
 };
+use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
+use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
@@ -32,12 +29,11 @@ use std::{
 
 pub(super) mod script_particles;
 mod world_access;
-pub use world_access::{BreedingCenterEndangeredBirths, ScriptFloatAttributes};
 pub(super) use world_access::remove_settled_behavior_script_transactions;
+pub use world_access::BreedingCenterEndangeredBirths;
 use world_access::{
-    BehaviorScriptPlacement, ScriptPlacedObject,
-    BehaviorScriptEffect, BehaviorScriptStructuralEdits, BehaviorScriptWorldAccess,
-    DiseaseAttribute, ScriptFloatAttribute, need_distress,
+    need_distress, BehaviorScriptEffect, BehaviorScriptPlacement, BehaviorScriptStructuralEdits,
+    BehaviorScriptWorldAccess, DiseaseAttribute, ScriptFloatAttribute, ScriptPlacedObject,
 };
 
 #[derive(Default)]
@@ -47,7 +43,7 @@ pub(super) struct BehaviorScriptContexts {
 
 struct BehaviorScriptVirtualMachine {
     lua: Lua,
-    loaded: RefCell<BTreeSet<bevy::asset::AssetId<LuaScriptAsset>>>,
+    loaded: RefCell<BTreeSet<AssetId>>,
 }
 
 #[derive(Clone, Copy)]
@@ -57,12 +53,16 @@ impl mlua::UserData for BehaviorScriptEntityReference {}
 pub(super) fn invalidate_changed_behavior_script_contexts(
     mut contexts: NonSendMut<BehaviorScriptContexts>,
     mut events: MessageReader<AssetEvent<LuaScriptAsset>>,
+    server: Res<AssetServer>,
 ) {
     for event in events.read() {
         if let AssetEvent::Modified { id } | AssetEvent::Removed { id } = event {
-            contexts
-                .contexts
-                .retain(|_, context| !context.loaded.borrow().contains(id));
+            let path = server
+                .get_path(*id)
+                .map(|path| AssetId::from_virtual_path(&path.path().to_string_lossy()));
+            contexts.contexts.retain(|_, context| {
+                path.is_some_and(|path| !context.loaded.borrow().contains(&path))
+            });
         }
     }
 }
@@ -73,7 +73,7 @@ pub(super) fn execute_authored_behavior_script_actions(
     mut contexts: NonSendMut<BehaviorScriptContexts>,
     documents: Res<Assets<BehaviorDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,
-    script_index: Res<LuaScriptArchivePathIndex>,
+    script_sources: Res<LuaScriptSources>,
     clock: Single<&ZooClock>,
     clothing: ClothingScriptContext,
     mut actors: Query<
@@ -129,6 +129,9 @@ pub(super) fn execute_authored_behavior_script_actions(
                 });
         let path_stack = RefCell::new(Vec::new());
         let textures = RefCell::new(Vec::new());
+        let texture_writes = &textures;
+        let clothing_context = &clothing;
+        let entity_lookup = &entities;
         let script_effects = RefCell::new(Vec::new());
         let effects = &script_effects;
         let pending_edits = &structural_edits;
@@ -144,7 +147,7 @@ pub(super) fn execute_authored_behavior_script_actions(
                 &vm.lua,
                 scope,
                 &scripts,
-                &script_index,
+                &script_sources,
                 &vm.loaded,
                 &path_stack,
             )?;
@@ -274,9 +277,9 @@ pub(super) fn execute_authored_behavior_script_actions(
             )?;
             vm.lua.globals().set(
                 "resolveTable",
-                scope.create_function(|lua, reference: AnyUserData| {
+                scope.create_function(move |lua, reference: AnyUserData| {
                     let entity = reference.borrow::<BehaviorScriptEntityReference>()?.0;
-                    if !entities.contains(entity)
+                    if !entity_lookup.contains(entity)
                         && !world_view.borrow().can_resolve(actor, execution_id, entity)
                         && !placed.borrow().iter().any(|object| object.entity == entity)
                     {
@@ -366,10 +369,10 @@ pub(super) fn execute_authored_behavior_script_actions(
                                 }
                                 return Ok(false);
                             }
-                            if let ScriptFloatAttribute::Authored(attribute) = attribute
-                                && world_view.borrow().authored_float(entity, attribute).is_none()
-                            {
-                                return Ok(false);
+                            if let ScriptFloatAttribute::Authored(attribute) = attribute {
+                                if world_view.borrow().authored_float(entity, attribute).is_none() {
+                                    return Ok(false);
+                                }
                             }
                             if !world_view
                                 .borrow_mut()
@@ -578,13 +581,13 @@ pub(super) fn execute_authored_behavior_script_actions(
                     )?;
                     table.set(
                         "BFG_GET_ATTR_STRING",
-                        scope.create_function(|_, (subject, name): (Table, String)| {
+                        scope.create_function(move |_, (subject, name): (Table, String)| {
                             let reference: AnyUserData = subject.get("entity")?;
                             let entity = reference.borrow::<BehaviorScriptEntityReference>()?.0;
                             world_view
                                 .borrow()
                                 .animal_string(entity, &name)
-                                .or_else(|| clothing.attribute(entity, &name))
+                                .or_else(|| clothing_context.attribute(entity, &name))
                                 .ok_or_else(|| {
                                     mlua::Error::runtime(format!("missing string attribute {name}"))
                                 })
@@ -592,7 +595,7 @@ pub(super) fn execute_authored_behavior_script_actions(
                     )?;
                     table.set(
                         "BFG_SET_TEXTURE",
-                        scope.create_function(|_, (subject, texture): (Table, Table)| {
+                        scope.create_function(move |_, (subject, texture): (Table, Table)| {
                             let reference: AnyUserData = subject.get("entity")?;
                             let entity = reference.borrow::<BehaviorScriptEntityReference>()?.0;
                             let physical_object: String = texture.get("physObj")?;
@@ -605,7 +608,7 @@ pub(super) fn execute_authored_behavior_script_actions(
                                     "unsupported clothing texture recipient",
                                 ));
                             }
-                            textures.borrow_mut().push(ClothingScriptTexture {
+                            texture_writes.borrow_mut().push(ClothingScriptTexture {
                                 material: texture.get("material")?,
                                 image: texture.get("image")?,
                             });

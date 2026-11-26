@@ -9,7 +9,7 @@ use bevy::{
     asset::{AssetId as DocumentId, AssetLoadFailedEvent, LoadState},
     prelude::*,
 };
-use openzt2_game_data::{AssetId, behavior::document::BehaviorDocument};
+use openzt2_game_data::{behavior::document::BehaviorDocument, AssetId};
 
 use super::behavior_asset_types::{
     BehaviorDeclarationLocation, BehaviorDeclarationRows, BehaviorDocumentAsset,

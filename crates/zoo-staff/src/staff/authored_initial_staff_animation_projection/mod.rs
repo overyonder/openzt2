@@ -128,6 +128,7 @@ pub(crate) fn request_authored_initial_staff_animation_for_newly_resolved_prefab
             } else {
                 AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
             },
+            action_settings: None,
         });
     }
 }

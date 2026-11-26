@@ -4,10 +4,10 @@ use bevy::prelude::*;
 use mlua::{Function, Lua, Value};
 use openzt2_game_data::world_scenario::ScenarioScriptBinding;
 
-use openzt2_game_assets::lua_script::lua_script_archive_path_index::LuaScriptArchivePathIndex;
 use openzt2_game_assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
 use openzt2_game_assets::lua_script::lua_script_module_execution::execute_lua_script_module_once_per_virtual_machine;
 use openzt2_game_assets::lua_script::lua_script_module_execution::install_lua_script_dependency_loading_functions;
+use openzt2_game_assets::lua_script::lua_script_sources::LuaScriptSources;
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatus;
@@ -61,7 +61,7 @@ impl ScenarioLuaContext {
         lua_script_source_path: &str,
         lua_script_asset_handle: &Handle<LuaScriptAsset>,
         lua_script_assets: &Assets<LuaScriptAsset>,
-        lua_script_path_index: &LuaScriptArchivePathIndex,
+        lua_script_sources: &LuaScriptSources,
         binding: &ScenarioScriptBinding,
         facts: ScenarioLuaQueryFacts<'_>,
         arguments: Option<&[&str]>,
@@ -81,7 +81,7 @@ impl ScenarioLuaContext {
             lua_script_source_path,
             lua_script_asset_handle,
             lua_script_assets,
-            lua_script_path_index,
+            lua_script_sources,
             binding,
             facts,
             arguments,
@@ -95,7 +95,7 @@ impl ScenarioLuaVirtualMachine {
         lua_script_source_path: &str,
         lua_script_asset_handle: &Handle<LuaScriptAsset>,
         lua_script_assets: &Assets<LuaScriptAsset>,
-        lua_script_path_index: &LuaScriptArchivePathIndex,
+        lua_script_sources: &LuaScriptSources,
         scenario_script_binding: &ScenarioScriptBinding,
         scenario_lua_query_facts: ScenarioLuaQueryFacts<'_>,
         authored_arguments: Option<&[&str]>,
@@ -111,6 +111,8 @@ impl ScenarioLuaVirtualMachine {
         let entity_operations =
             RefCell::new(super::scenario_lua_entity_commands::EntityOperations::default());
         let persist_profile_variables = std::cell::Cell::new(false);
+        let script = openzt2_game_data::AssetId::from_virtual_path(lua_script_source_path);
+        let was_loaded = self.loaded_lua_script_asset_identifiers.contains(&script);
         let loaded_lua_script_asset_identifiers = RefCell::new(std::mem::take(
             &mut self.loaded_lua_script_asset_identifiers,
         ));
@@ -121,7 +123,7 @@ impl ScenarioLuaVirtualMachine {
                     &self.lua_virtual_machine,
                     lua_scope,
                     lua_script_assets,
-                    lua_script_path_index,
+                    lua_script_sources,
                     &loaded_lua_script_asset_identifiers,
                     &active_lua_script_source_path_stack,
                 )?;
@@ -230,7 +232,12 @@ impl ScenarioLuaVirtualMachine {
                     .collect(),
             })
         });
-        self.loaded_lua_script_asset_identifiers = loaded_lua_script_asset_identifiers.into_inner();
+        let loaded = loaded_lua_script_asset_identifiers.into_inner();
+        if !was_loaded && loaded.contains(&script) {
+            self.executed_source_paths
+                .push(lua_script_source_path.to_owned());
+        }
+        self.loaded_lua_script_asset_identifiers = loaded;
         execution_result
     }
 }
@@ -240,7 +247,7 @@ pub(super) fn execute_loaded_scenario_lua_script_binding(
     selected_scenario_document: &ScenarioDocument,
     scenario_document_assets: &Assets<WorldScenarioDocumentAsset>,
     lua_script_assets: &Assets<LuaScriptAsset>,
-    lua_script_path_index: &LuaScriptArchivePathIndex,
+    lua_script_sources: &LuaScriptSources,
     scenario_script_binding: &ScenarioScriptBinding,
     scenario_lua_query_facts: ScenarioLuaQueryFacts<'_>,
 ) -> mlua::Result<ScenarioLuaScriptResult> {
@@ -260,7 +267,7 @@ pub(super) fn execute_loaded_scenario_lua_script_binding(
         lua_script_source_path,
         lua_script_asset_handle,
         lua_script_assets,
-        lua_script_path_index,
+        lua_script_sources,
         scenario_script_binding,
         scenario_lua_query_facts,
         None,

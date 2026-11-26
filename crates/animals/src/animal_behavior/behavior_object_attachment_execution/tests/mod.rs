@@ -16,6 +16,7 @@ fn object(id: AssetId) -> WorldObjectDefinition {
     WorldObjectDefinition {
         authored_runtime: Default::default(),
         audio_cue_prefixes: Vec::new(),
+        audio_stage_volumes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),
         traversal_animation_manifests: Vec::new(),
@@ -263,11 +264,10 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
             survives,
             "an empty detach rule releases; an unknown named rule removes"
         );
-        assert!(
-            app.world()
-                .get::<InteractionContainerMember>(item)
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .get::<InteractionContainerMember>(item)
+            .is_none());
         assert!(app.world().get::<ContainedObject>(item).is_none());
         assert!(app.world().get_entity(carried).is_ok());
     }
@@ -296,11 +296,9 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
         .single(world)
         .expect("the first key should create exactly one replacement");
     assert_eq!(definition.0, replacement_id);
-    assert!(
-        world
-            .get::<InteractionContainerMember>(replacement)
-            .is_none()
-    );
+    assert!(world
+        .get::<InteractionContainerMember>(replacement)
+        .is_none());
     assert!(world.get::<ContainedObject>(replacement).is_none());
 
     let unowned = app
@@ -329,9 +327,8 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
         "non-owning hand slot must release its item"
     );
     assert!(app.world().get::<ContainedObject>(unowned).is_none());
-    assert!(
-        app.world()
-            .get::<InteractionContainerMember>(unowned)
-            .is_none()
-    );
+    assert!(app
+        .world()
+        .get::<InteractionContainerMember>(unowned)
+        .is_none());
 }

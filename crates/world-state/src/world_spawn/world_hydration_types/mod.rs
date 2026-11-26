@@ -19,26 +19,22 @@ pub struct PendingTerrainProjections(Vec<Entity>);
 #[derive(Component)]
 pub struct WorldHydration {
     record_count: usize,
-    spawned_roots: Vec<Entity>,
+    committed_count: usize,
 }
 
 impl WorldHydration {
     pub fn new_pending_world_hydration(record_count: usize) -> Self {
         Self {
             record_count,
-            spawned_roots: Vec::with_capacity(record_count),
+            committed_count: 0,
         }
     }
 
     pub fn prefab_loading_progress(&self) -> (usize, usize) {
-        (self.spawned_roots.len(), self.record_count)
+        (self.committed_count, self.record_count)
     }
 
-    pub fn spawned_world_prefab_root_at_record_index(&self, index: u32) -> Option<Entity> {
-        self.spawned_roots.get(index as usize).copied()
-    }
-
-    pub fn record_world_prefab_spawn_completion(&mut self, entity: Entity) {
-        self.spawned_roots.push(entity);
+    pub fn advance_prefab_loading_progress(&mut self) {
+        self.committed_count += 1;
     }
 }

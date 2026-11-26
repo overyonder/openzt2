@@ -9,8 +9,9 @@ pub struct UiPersistenceActionRecord {
     pub action: UiPersistenceAction,
 }
 
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub enum UiPersistenceAction {
+    SetProfileAttribute { key: String, value: String },
     SaveWorldSnapshotToSlot { save_slot: u32 },
     LoadWorldSnapshotFromSlot { save_slot: u32 },
     SaveWorldSnapshotToSelectedSlot,

@@ -1,17 +1,20 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use bevy::{ecs::entity::EntityHashSet, prelude::*};
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_interface_state::{
-    input::input_types::ActionSource, ui::authored_ui_activation_contracts::UiNodeActivated,
+    input::input_types::ActionSource,
+    ui::{
+        authored_ui_action_projection_components::UiScriptActions,
+        authored_ui_activation_contracts::UiNodeActivated,
+        authored_ui_node_projection_components::UiDocumentRoot,
+    },
 };
 use openzt2_zoo_state::scenario::timed_scenario_ui_actions::{
-    PendingScenarioUiSelection, RunTimedScenarioUiAction, ScenarioUiSelectionCompleted,
+    PendingScenarioUiSelection, RunAuthoredUiScript, ScenarioUiSelectionCompleted,
     TimedScenarioUiActionCompleted,
 };
-
-#[derive(Component)]
-pub(super) struct TimedScenarioScript(pub(super) Arc<str>);
 
 #[derive(Component)]
 pub(super) struct UiTimedActionDue(pub(super) Duration);
@@ -75,7 +78,7 @@ pub(super) struct UiSelectionWaitEnded(pub(super) ScenarioUiSelectionCompleted);
 pub(super) struct UiSelectionPresentationCommitted(pub(super) ScenarioUiSelectionCompleted);
 
 pub(super) fn release_selection_when_timed_sequence_disappears(
-    removed: On<Remove, UiAuthoredTimedActionSequencePlayback>,
+    removed: On<Remove<UiAuthoredTimedActionSequencePlayback>>,
     sequences: Query<&UiAuthoredTimedActionSequencePlayback>,
     mut released: MessageWriter<UiSelectionWaitEnded>,
 ) {
@@ -92,8 +95,10 @@ pub(super) fn release_selection_when_timed_sequence_disappears(
 pub(super) fn dispatch_due_authored_sequence_steps(
     time: Res<Time<Real>>,
     mut sequences: Query<&mut UiAuthoredTimedActionSequencePlayback>,
-    deadlines: Query<(&UiTimedActionDue, Option<&TimedScenarioScript>)>,
-    mut scripts: Option<MessageWriter<RunTimedScenarioUiAction>>,
+    deadlines: Query<(&UiTimedActionDue, Option<&UiScriptActions>)>,
+    documents: Query<&UiDocumentRoot>,
+    assets: Option<Res<Assets<UiDocumentAsset>>>,
+    mut scripts: Option<MessageWriter<RunAuthoredUiScript>>,
     mut completed_scripts: Option<MessageReader<TimedScenarioUiActionCompleted>>,
     mut committed_presentations: MessageReader<TimedUiPresentationCommitted>,
     mut activated: MessageWriter<UiNodeActivated>,
@@ -145,14 +150,27 @@ pub(super) fn dispatch_due_authored_sequence_steps(
                 }
                 active.next_step += 1;
                 if let Some(script) = script {
-                    if let Some(scripts) = scripts.as_mut() {
-                        scripts.write(RunTimedScenarioUiAction {
-                            action: step,
-                            document_root: *document,
-                            command: script.0.clone(),
-                        });
-                        active.awaiting_script = Some(step);
-                        break;
+                    if let (Some(scripts), Some(asset)) = (
+                        scripts.as_mut(),
+                        documents
+                            .get(*document)
+                            .ok()
+                            .and_then(|root| assets.as_ref()?.get(&root.document)),
+                    ) {
+                        if let Some(invocation) = script.authored_action_records(asset).next() {
+                            scripts.write(RunAuthoredUiScript {
+                                action: step,
+                                document_root: *document,
+                                invocation: invocation.clone(),
+                                handle: invocation
+                                    .script
+                                    .and_then(|id| asset.script_handle(id))
+                                    .cloned(),
+                                timed: true,
+                            });
+                            active.awaiting_script = Some(step);
+                            break;
+                        }
                     }
                 } else {
                     activated.write(UiNodeActivated {

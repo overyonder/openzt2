@@ -155,6 +155,7 @@ pub(super) fn project_gate_state_to_ready_animation_presentations(
                 blend_duration_milliseconds: 0,
                 playback_speed_permille: 1000,
                 playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
+                action_settings: None,
             });
         }
     }

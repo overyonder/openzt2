@@ -726,10 +726,7 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
             }
             let (_, fade, light, textures) = regions
                 .get(surface_groups.get(parent.parent()).ok()?.0)
-                .ok()?
-            else {
-                return None;
-            };
+                .ok()?;
             if *kind == TerrainWaterSurfacePassKind::MediumEnvironment {
                 let (texture, changed) = environment_map?;
                 if changed || handle.is_changed() || *visibility == Visibility::Hidden {
@@ -1384,6 +1381,14 @@ mod water_target_demand_tests {
             },
             &mut || random.unit_f64(),
         );
+        let mut app = App::new();
+        let region = app.world_mut().spawn(wave_state).id();
+        app.add_systems(Update, openzt2_zoo_state::terrain::terrain_water_wave_register_projection::publish_terrain_water_wave_registers);
+        app.update();
+        let registers = app
+            .world()
+            .get::<TerrainWaterWaveRegisters>(region)
+            .unwrap();
         let projection = PerspectiveProjection {
             fov: std::f32::consts::FRAC_PI_2,
             aspect_ratio: 1.0,
@@ -1400,17 +1405,13 @@ mod water_target_demand_tests {
             horizontal_maximum: Vec2::new(18.0, 2.0),
             maximum_absolute_input_height: 0.0,
         };
-        assert!(
-            surface.intersects_camera_frustum(&projection.compute_frustum(&camera), &wave_state)
-        );
+        assert!(surface.intersects_camera_frustum(&projection.compute_frustum(&camera), registers));
         let moved_camera = GlobalTransform::from(
             Transform::from_xyz(-60.0, 20.0, 0.0)
                 .looking_at(Vec3::new(-60.0, 0.0, 0.0), Vec3::NEG_Z),
         );
         assert!(!surface
-            .intersects_camera_frustum(&projection.compute_frustum(&moved_camera), &wave_state));
-        assert!(
-            surface.intersects_camera_frustum(&projection.compute_frustum(&camera), &wave_state)
-        );
+            .intersects_camera_frustum(&projection.compute_frustum(&moved_camera), registers));
+        assert!(surface.intersects_camera_frustum(&projection.compute_frustum(&camera), registers));
     }
 }

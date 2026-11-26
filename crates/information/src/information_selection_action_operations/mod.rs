@@ -91,7 +91,8 @@ fn select_next_matching_animal_and_follow_with_zoo_camera(
     };
     for camera_definition in &targets.zoo_camera_definitions {
         targets.camera_mode_requests.write(SetCameraMode {
-            mode: CameraMode::Follow(selected_animal),
+            mode: CameraMode::Follow,
+            subject: Some(selected_animal),
             definition: camera_definition.0,
             transition_seconds: None,
         });

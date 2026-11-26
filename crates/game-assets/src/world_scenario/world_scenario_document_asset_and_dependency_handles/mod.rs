@@ -5,8 +5,8 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::{
-    AssetId,
     world_scenario::{PhotoChallengeScriptBinding, ScenarioScriptBinding, WorldScenarioDocument},
+    AssetId,
 };
 
 use crate::{

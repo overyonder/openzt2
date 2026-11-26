@@ -61,7 +61,7 @@ pub(super) fn preserve_independent_attachment_orientation(
     }
     let mut local_poses = poses.p1();
     for (entity, rotation) in corrected {
-        if let Ok(mut pose) = local_poses.get_mut(entity) {
+        if let Ok(pose) = local_poses.get_mut(entity) {
             pose.map_unchanged(|pose| &mut pose.rotation)
                 .set_if_neq(rotation);
         }

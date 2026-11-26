@@ -59,7 +59,7 @@ impl EffectAlphaTest {
 }
 
 /// A render sampler descriptor with a stable cache key.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct EffectSampler {
     address: [AddressMode; 3],
     mag_filter: FilterMode,

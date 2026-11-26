@@ -3,9 +3,9 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::{
-    AssetId,
     species::ConservationStatus,
     ui_document::{node_property_binding::*, widget::UiWidgetRecord},
+    AssetId,
 };
 
 use openzt2_game_assets::{
@@ -16,7 +16,6 @@ use openzt2_game_assets::{
     species::species_asset_types::{SpeciesAsset, SpeciesAssets},
     ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
 };
-use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId;
@@ -26,7 +25,7 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiVisib
 use openzt2_ui::authored_multi_icon_presentation::UiMultiIconPolicy;
 use openzt2_ui::authored_ui_interaction_enabled_binding::UiEnabledBinding;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
-use openzt2_world_state::world_spawn::world_entity_crating::{AnimalCrate, WorldEntityIsCrated};
+use openzt2_world_state::world_spawn::world_entity_crating::{AnimalCrate, ScriptedCrating};
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_health::types::Rampaging;
 use openzt2_zoo_state::animal_lifecycle::types::Adoptable;
@@ -65,7 +64,7 @@ pub(crate) struct AnimalHandlingChanges<'w, 's> {
             Added<Adoptable>,
             Added<ReleaseRestricted>,
             Added<CratingRestricted>,
-            Added<WorldEntityIsCrated>,
+            Or<(Added<AnimalCrate>, Added<ScriptedCrating>)>,
             Added<Rampaging>,
             Added<Dead>,
             Changed<AnimalCrate>,
@@ -77,7 +76,7 @@ pub(crate) struct AnimalHandlingChanges<'w, 's> {
     adoptable: RemovedComponents<'w, 's, Adoptable>,
     release: RemovedComponents<'w, 's, ReleaseRestricted>,
     crating: RemovedComponents<'w, 's, CratingRestricted>,
-    crated: RemovedComponents<'w, 's, WorldEntityIsCrated>,
+    script_crated: RemovedComponents<'w, 's, ScriptedCrating>,
     rampaging: RemovedComponents<'w, 's, Rampaging>,
     dead: RemovedComponents<'w, 's, Dead>,
     crates: RemovedComponents<'w, 's, AnimalCrate>,
@@ -108,7 +107,7 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
             Has<Adoptable>,
             Has<ReleaseRestricted>,
             Has<CratingRestricted>,
-            Has<WorldEntityIsCrated>,
+            (Has<AnimalCrate>, Has<ScriptedCrating>),
             Has<Rampaging>,
             Has<Dead>,
             Option<&AnimalCrate>,
@@ -118,12 +117,7 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
     mut changes: AnimalHandlingChanges,
     mut visibility_nodes: Query<(&UiVisibleBinding, &mut Visibility), With<AnimalHandlingFieldOf>>,
     mut interaction_nodes: Query<
-        (
-            &UiEnabledBinding,
-            &mut UiInteractionEnabled,
-            Option<&mut UiFocusable>,
-            &mut Pickable,
-        ),
+        (&UiEnabledBinding, &mut UiInteractionEnabled, &mut Pickable),
         With<AnimalHandlingFieldOf>,
     >,
     mut conservation_icons: Query<
@@ -147,7 +141,7 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
         .chain(changes.adoptable.read())
         .chain(changes.release.read())
         .chain(changes.crating.read())
-        .chain(changes.crated.read())
+        .chain(changes.script_crated.read())
         .chain(changes.rampaging.read())
         .chain(changes.dead.read())
         .chain(changes.crates.read())
@@ -226,7 +220,7 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
         let pickup_visible = facts.is_some_and(|facts| facts.1 && !facts.6);
         let release_visible = facts.is_some_and(|facts| !facts.2 && !facts.6);
         let pickup_enabled = facts.is_some_and(|facts| pickup_visible && !facts.3 && !facts.5);
-        let crated = facts.is_some_and(|facts| facts.4);
+        let crated = facts.is_some_and(|facts| facts.4 .0 || facts.4 .1);
         let crate_can_move = crated
             && selection
                 .as_ref()
@@ -255,8 +249,7 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
                     });
                 }
             }
-            if let Ok((binding, mut interaction, focusable, mut pickable)) =
-                interaction_nodes.get_mut(entity)
+            if let Ok((binding, mut interaction, mut pickable)) = interaction_nodes.get_mut(entity)
             {
                 let enabled = match binding.0 {
                     UiBooleanPropertyBindingSource::AnimalPickupEnabled => pickup_enabled,
@@ -264,11 +257,6 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
                     _ => continue,
                 };
                 interaction.set_if_neq(UiInteractionEnabled(enabled));
-                if let Some(mut focusable) = focusable {
-                    if focusable.enabled != enabled {
-                        focusable.enabled = enabled;
-                    }
-                }
                 pickable.set_if_neq(if enabled {
                     Pickable::default()
                 } else {

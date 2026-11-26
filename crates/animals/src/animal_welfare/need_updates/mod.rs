@@ -12,7 +12,7 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::{AssetId, species::NeedKind};
+use openzt2_game_data::{species::NeedKind, AssetId};
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::simulation_time::{
     deterministic_random_stream::{DeterministicRng, RngDomain, ZooSeed},
@@ -27,11 +27,7 @@ use openzt2_zoo_state::{
 };
 
 use super::need_timing_types::NeedAdjustmentCadence;
-use super::{
-    calculations::*,
-    need_latch_types::NeedLatch,
-    systems::need_rank,
-};
+use super::{calculations::*, need_latch_types::NeedLatch, systems::need_rank};
 
 #[derive(Message)]
 pub(super) struct NeedThresholdCrossing<const NEED: usize>(pub(super) NeedChanged);
@@ -99,7 +95,6 @@ fn project_species_need_profiles(
 #[query_data(mutable)]
 struct AnimalNeedDecay {
     animal: Entity,
-    location: EntityLocation,
     id: &'static PersistentId,
     member: &'static WorldMember,
     species: &'static SpeciesHandle,
@@ -124,7 +119,7 @@ fn decay_due_animal_needs(
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     profiles: Res<SpeciesNeedProfiles>,
-    mut animals: Query<AnimalNeedDecay, (With<Animal>, Without<Dead>)>,
+    mut animals: Query<(EntityLocation, AnimalNeedDecay), (With<Animal>, Without<Dead>)>,
     parallel: ParallelCommands,
     mut crossings: NeedDecayCrossingWriters,
 ) {
@@ -137,14 +132,16 @@ fn decay_due_animal_needs(
     };
     let step = time.timestep();
     let mut pending = Parallel::<Vec<(usize, usize, usize, NeedChanged)>>::default();
-    animals.par_iter_mut().for_each(|row| {
+    animals.par_iter_mut().for_each(|(location, row)| {
         let Some(profile) = profiles.rows.get(&row.species.species) else {
             return;
         };
         let due = if let Some(mut timer) = row.timer {
             timer.tick(step, policy.delay_steps)
         } else {
-            let Ok(seed) = seeds.get(row.member.root) else { return; };
+            let Ok(seed) = seeds.get(row.member.root) else {
+                return;
+            };
             let mut timer = NeedAdjustmentCadence::from_saved_remaining(
                 0,
                 DeterministicRng::from_entity(*seed, *row.id, RngDomain::AnimalNeeds),
@@ -169,8 +166,8 @@ fn decay_due_animal_needs(
                         pending.scope(|messages| {
                             messages.push((
                                 $rank,
-                                row.location.table_id.as_u32() as usize,
-                                row.location.table_row.index(),
+                                location.table_id.as_u32() as usize,
+                                location.table_row.index(),
                                 crossing,
                             ))
                         });
@@ -193,7 +190,7 @@ fn decay_due_animal_needs(
             decay!(11, Reproduction, (need, latch));
         }
     });
-    let mut sorted = pending.drain().flatten().collect::<Vec<_>>();
+    let mut sorted = pending.drain().collect::<Vec<_>>();
     sorted.sort_unstable_by_key(|&(rank, table, row, _)| (rank, table, row));
     for (rank, _, _, message) in sorted {
         match rank {

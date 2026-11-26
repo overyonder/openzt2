@@ -1,10 +1,6 @@
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 use openzt2_game_assets::graphics_settings_types::ThreeLevelGraphicsDetail;
-use openzt2_game_assets::world_definitions::{
-    world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
-    world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
-};
 use openzt2_game_assets::{
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
     world_definitions::{

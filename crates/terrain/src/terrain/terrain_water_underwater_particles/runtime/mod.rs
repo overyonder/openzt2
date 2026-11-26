@@ -5,7 +5,10 @@ use bevy::transform::helper::TransformHelper;
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
     effect::{
-        explicit_particle_emission::{AppendParticleEffectPoints, ParticleEffectPointEmitter},
+        explicit_particle_emission::{
+            AppendParticleEffectPoints, EffectParticleSizeScale, ParticleAliveCount,
+            ParticleEffectPointEmitter, ParticleSpawnBatch,
+        },
         ParticleEffectDocumentAsset, SpawnParticleEffectEmitter,
     },
     graphics_settings_types::{FourLevelGraphicsDetail, GraphicsSettings},
@@ -448,7 +451,10 @@ pub(in crate::terrain) fn emit_region_underwater_particles(
         Entity,
         &ChildOf,
         &mut TerrainWaterSuspensionEmitter,
-        &mut ParticleEffectPointEmitter,
+        &ParticleEffectPointEmitter,
+        &ParticleAliveCount,
+        &ParticleSpawnBatch,
+        &mut EffectParticleSizeScale,
     )>,
     mut bubble_emitters: Query<(Entity, &ChildOf, &mut TerrainWaterBubbleEmission)>,
     mut points: MessageWriter<AppendParticleEffectPoints>,
@@ -461,7 +467,9 @@ pub(in crate::terrain) fn emit_region_underwater_particles(
     if *phase.get() != GamePhase::InGame || time.delta_secs() <= 0.0 {
         return;
     }
-    for (entity, parent, mut emitter, mut live) in &mut suspension_emitters {
+    for (entity, parent, mut emitter, live, sample, batch, mut size_scale) in
+        &mut suspension_emitters
+    {
         let Ok((parent, quality)) = roots.get(parent.parent()) else {
             continue;
         };
@@ -494,11 +502,11 @@ pub(in crate::terrain) fn emit_region_underwater_particles(
         else {
             continue;
         };
-        live.set_size_scale(if depth > 0.75 {
+        size_scale.set_if_neq(EffectParticleSizeScale(if depth > 0.75 {
             1.0 + 5.0 * (depth - 0.75)
         } else {
             1.0
-        });
+        }));
         let density = suspension_emitter_density(emission, quality.quality as usize, depth);
         let Ok(volumes) = suspension_volumes.get(owner) else {
             continue;
@@ -514,7 +522,7 @@ pub(in crate::terrain) fn emit_region_underwater_particles(
                 &mut random,
             );
             emitter.initial_fill = false;
-        } else if let Some(count) = live.sampled_live_count() {
+        } else if let Some(count) = live.sampled_live_count(sample, batch) {
             append_suspension_density_top_up(
                 &mut emitted,
                 &volumes.volumes,

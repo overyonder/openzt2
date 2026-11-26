@@ -31,11 +31,11 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_
 use openzt2_zoo_state::{
     behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation,
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
         running_actions::{
             BehaviorInstructionId, RunBehaviorTraversalAnimation, RunBehaviorTraversalDock,
             RunningBehaviorInstruction,
         },
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     locomotion::locomotion_types::{
         Arrived, DockAt, NavAgent, NavigationFailed, NavigationRequestGeneration,
@@ -154,6 +154,7 @@ fn start_traversal_docks(
                 playback_speed_permille: 1000,
                 playback_repetition_policy:
                     AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy,
+                action_settings: None,
             });
         }
         let Ok(mut generation) = navigation_generations.get_mut(actor) else {
@@ -275,6 +276,7 @@ fn start_traversal_animation(
                 blend_duration_milliseconds: 0,
                 playback_speed_permille: 1000,
                 playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
+                action_settings: None,
             })
             .id;
         commands.entity(actor).insert(TraversalAnimation {

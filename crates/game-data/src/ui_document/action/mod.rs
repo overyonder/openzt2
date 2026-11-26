@@ -17,6 +17,7 @@ pub mod photography;
 pub mod presentation;
 pub mod research;
 pub mod scenarios;
+pub mod script;
 pub mod shell_navigation;
 pub mod simulation_time;
 pub mod staff_management;
@@ -58,6 +59,7 @@ pub enum UiTrigger {
     Hide,
     On,
     Off,
+    SecondaryPress,
 }
 
 /// An action in a node event list or hotkey. Node lists preserve authored order.
@@ -82,4 +84,5 @@ pub enum UiActionRecord {
     Animal(UiAnimalActionRecord),
     Persistence(UiPersistenceActionRecord),
     Simulation(UiSimulationActionRecord),
+    Script(script::UiScriptActionRecord),
 }

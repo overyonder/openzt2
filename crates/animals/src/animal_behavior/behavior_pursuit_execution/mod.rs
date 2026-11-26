@@ -7,7 +7,7 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::{AnimalCrate, ScriptedCrating};
 use openzt2_zoo_state::animal_behavior::behavior_pursuit_types::{
     BehaviorPursuitLeg, BehaviorPursuitPoll, PendingBehaviorPursuit,
 };
@@ -143,7 +143,7 @@ fn fail_pursuits_of_unavailable_targets(
         Without<PendingBehaviorTaskFailure>,
     >,
     targets: Query<(
-        Has<WorldEntityIsCrated>,
+        (Has<AnimalCrate>, Has<ScriptedCrating>),
         Has<RelocatingPlacedObject>,
         Option<&BehaviorTaskExecutionState>,
         Option<&BehaviorTaskEffectiveScore>,
@@ -162,7 +162,7 @@ fn fail_pursuits_of_unavailable_targets(
             let target = BehaviorTaskEffectiveScore::of_running_task(target_score, target_task);
             target > 0.0 && target > BehaviorTaskEffectiveScore::of_running_task(score, task)
         });
-        if crated || relocating || outscored {
+        if crated.0 || crated.1 || relocating || outscored {
             mark_behavior_task_for_failure_and_stop_navigation(pursuer, &mut commands);
         }
     }
@@ -215,7 +215,9 @@ fn advance_current_pursuit_actions(
             .is_some_and(|((task, (instruction, _)), pending)| pending.owns(task, instruction));
         if let Some(stale) = pending.as_deref().filter(|_| !owned) {
             stop_pursuit_navigation(actor, stale.leg, destination, &mut commands);
-            commands.entity(actor).remove::<(PendingBehaviorPursuit, BehaviorPursuitPoll)>();
+            commands
+                .entity(actor)
+                .remove::<(PendingBehaviorPursuit, BehaviorPursuitPoll)>();
         }
         let Some((task, (instruction, running))) = running else {
             continue;
@@ -282,7 +284,8 @@ fn advance_current_pursuit_actions(
                 mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 continue;
             }
-            *current_poll = BehaviorPursuitPoll::from_remaining_seconds(action.poll_interval_seconds);
+            *current_poll =
+                BehaviorPursuitPoll::from_remaining_seconds(action.poll_interval_seconds);
             match state.leg {
                 BehaviorPursuitLeg::Route { request_id }
                     if distance_squared < pursuit_radius_m * pursuit_radius_m =>
@@ -315,7 +318,9 @@ fn advance_current_pursuit_actions(
                 if within_hit_radius =>
             {
                 stop_pursuit_navigation(actor, state.leg, destination, &mut commands);
-                commands.entity(actor).remove::<(PendingBehaviorPursuit, BehaviorPursuitPoll)>();
+                commands
+                    .entity(actor)
+                    .remove::<(PendingBehaviorPursuit, BehaviorPursuitPoll)>();
                 instruction.complete(actor, clock.tick, &mut commands);
                 continue;
             }
@@ -428,7 +433,9 @@ fn discard_pursuits_without_tasks(
 ) {
     for (actor, pending, destination) in &pursuers {
         stop_pursuit_navigation(actor, pending.leg, destination, &mut commands);
-        commands.entity(actor).remove::<(PendingBehaviorPursuit, BehaviorPursuitPoll)>();
+        commands
+            .entity(actor)
+            .remove::<(PendingBehaviorPursuit, BehaviorPursuitPoll)>();
     }
 }
 

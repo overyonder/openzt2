@@ -95,6 +95,7 @@ pub(super) fn construct_selected_ui_role_and_fragment_document_lowering_inputs(
         claimed_source_document_roles.insert(path, *role);
         let mut role_source_document =
             specialize_authored_ui_source_document_for_role(source_document, *role)?;
+        let mut edge_pan_source_child = None;
         for (_, composition_path) in resolution_profile
             .role_compositions
             .iter()
@@ -104,6 +105,9 @@ pub(super) fn construct_selected_ui_role_and_fragment_document_lowering_inputs(
             let Some(composition_source_document) = source_documents.get(&composition_path) else {
                 continue;
             };
+            if composition_path == "ui/layout/edgescroll.xml" {
+                edge_pan_source_child = Some(role_source_document.root.children.len());
+            }
             claimed_source_document_roles.insert(composition_path, *role);
             role_source_document
                 .root
@@ -172,6 +176,7 @@ pub(super) fn construct_selected_ui_role_and_fragment_document_lowering_inputs(
             placement_preview: (*role == UiDocumentRole::InGameHud)
                 .then(|| placement_preview.clone())
                 .flatten(),
+            edge_pan_source_child,
             role_targets: role_targets.clone(),
             resolved_dependencies: resolved_dependencies.clone(),
         });
@@ -274,6 +279,7 @@ fn construct_native_adoption_slot_fragment_document(
         image_selections: Vec::new(),
         interaction_cursors: None,
         placement_preview: None,
+        edge_pan_source_child: None,
         role_targets: BTreeMap::new(),
         resolved_dependencies: resolved_dependencies.clone(),
     }))
@@ -324,6 +330,7 @@ fn construct_reusable_row_fragment_document(
         image_selections: Vec::new(),
         interaction_cursors: None,
         placement_preview: None,
+        edge_pan_source_child: None,
         role_targets: BTreeMap::new(),
         resolved_dependencies: resolved_dependencies.clone(),
     })
@@ -359,6 +366,7 @@ fn construct_path_addressed_fragment_document(
         image_selections: selected_image_selections,
         interaction_cursors: None,
         placement_preview: None,
+        edge_pan_source_child: None,
         role_targets: BTreeMap::new(),
         resolved_dependencies: resolved_dependencies.clone(),
     })

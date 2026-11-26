@@ -4,6 +4,7 @@ use super::sampled_animation_motion_projection::{
 use avian3d::prelude::LinearVelocity;
 use avian3d::prelude::RigidBody;
 use bevy::prelude::*;
+use openzt2_interface_state::camera::camera_runtime_state_types::FirstPersonLocomotionTuning;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
@@ -62,10 +63,11 @@ pub(super) fn calculate_direct_locomotion_steering(
         &NavAgent,
         &GlobalTransform,
         &DirectLocomotion,
+        Option<&FirstPersonLocomotionTuning>,
         &mut Steering,
     )>,
 ) {
-    for (navigation_agent, global_transform, direct_locomotion, mut steering) in
+    for (navigation_agent, global_transform, direct_locomotion, tuning, steering) in
         &mut direct_locomotion_agents
     {
         let requested_local_axes = if direct_locomotion.local_axes.is_finite() {
@@ -78,8 +80,14 @@ pub(super) fn calculate_direct_locomotion_steering(
         let mut desired_global_direction = global_forward_direction * requested_local_axes.y
             + global_right_direction * requested_local_axes.x;
         desired_global_direction.y = 0.0;
-        steering.desired_velocity =
-            desired_global_direction.normalize_or_zero() * navigation_agent.max_speed_mps;
+        let desired_velocity = if let Some(tuning) = tuning {
+            desired_global_direction * tuning.maximum_speed_mps
+        } else {
+            desired_global_direction.normalize_or_zero() * navigation_agent.max_speed_mps
+        };
+        steering
+            .map_unchanged(|steering| &mut steering.desired_velocity)
+            .set_if_neq(desired_velocity);
     }
 }
 
@@ -108,6 +116,7 @@ pub(super) fn integrate_non_physics_direct_locomotion(
             &DirectLocomotion,
             &WorldMember,
             Option<&LocomotionAnimationSource>,
+            Option<&FirstPersonLocomotionTuning>,
         ),
         Without<RigidBody>,
     >,
@@ -123,6 +132,7 @@ pub(super) fn integrate_non_physics_direct_locomotion(
         _,
         world_member,
         animation_source,
+        tuning,
     ) in &mut direct_locomotion_agents
     {
         let Ok((terrain_index, navigation_graph)) = roots.get(world_member.root) else {
@@ -134,13 +144,23 @@ pub(super) fn integrate_non_physics_direct_locomotion(
                 source.mean_speed_mps
             });
         let (desired_velocity, _) = super::sampled_animation_motion_projection::project_sampled_animation_motion_to_steering(steering.desired_velocity, animation_mean_speed, fixed_delta_seconds, &local_transform, playback);
-        let requested_velocity_change = desired_velocity - local_velocity.0;
-        local_velocity.0 += requested_velocity_change
-            .clamp_length_max(navigation_agent.acceleration_mps2 * fixed_delta_seconds);
-        if playback.is_none_or(|(motion, controller)| !motion.owns_playback(controller)) {
-            local_velocity.0 = local_velocity
-                .0
-                .clamp_length_max(navigation_agent.max_speed_mps);
+        if let Some(tuning) = tuning {
+            let horizontal = tuning.advance_horizontal_velocity(
+                local_velocity.0.xz(),
+                desired_velocity.xz(),
+                fixed_delta_seconds,
+            );
+            local_velocity.0.x = horizontal.x;
+            local_velocity.0.z = horizontal.y;
+        } else {
+            let requested_velocity_change = desired_velocity - local_velocity.0;
+            local_velocity.0 += requested_velocity_change
+                .clamp_length_max(navigation_agent.acceleration_mps2 * fixed_delta_seconds);
+            if playback.is_none_or(|(motion, controller)| !motion.owns_playback(controller)) {
+                local_velocity.0 = local_velocity
+                    .0
+                    .clamp_length_max(navigation_agent.max_speed_mps);
+            }
         }
         let previous_translation = local_transform.translation;
         let mut next_translation = previous_translation + local_velocity.0 * fixed_delta_seconds;

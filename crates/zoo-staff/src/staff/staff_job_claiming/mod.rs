@@ -18,8 +18,8 @@ use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, Wor
 use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRejections;
 
 use super::{
-    staff_assignment_types::{StaffAssignmentArea, StaffAssignmentTarget},
-    staff_employment_types::{Staff, StaffJobCapabilities, StaffRole},
+    staff_assignment_types::{StaffAssignmentArea, StaffAssignmentTarget, WorkerDutyAssignments},
+    staff_employment_types::{Staff, StaffRole},
     staff_job_claim_ranking::RankedStaffJobClaimCandidate,
     staff_job_eligibility::{
         find_highest_priority_compatible_staff_behavior_task, staff_assignment_accepts_job_target,
@@ -29,7 +29,6 @@ use super::{
         CurrentJob, JobClaim, StaffJob, StaffJobBehaviorTask, StaffJobCancellationPending,
         StaffJobRouting, TankCleaningRequestSite, UnsuccessfulStaffJobCandidates,
     },
-    worker_duty_assignment::{worker_duties_allow_staff_job, WorkerDutyFlags},
 };
 use openzt2_zoo_state::shows::running_show_types::AnimalPerformingShowTrick;
 
@@ -48,12 +47,11 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         (
             Entity,
             &StaffRole,
-            &StaffJobCapabilities,
             &WorldMember,
             &GlobalTransform,
             Option<&StaffAssignmentArea>,
             Option<&StaffAssignmentTarget>,
-            WorkerDutyFlags,
+            &WorkerDutyAssignments,
         ),
         (With<Staff>, With<NavAgent>, Without<CurrentJob>),
     >,
@@ -209,7 +207,6 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
                         let Ok((
                             staff_entity,
                             staff_role,
-                            capabilities,
                             staff_world,
                             staff_transform,
                             assigned_area,
@@ -253,15 +250,8 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
                         };
                         if routing.subject_type.is_some_and(|required| {
                             !staff_subject_matches(catalogue, role_definition, required)
-                        }) || job.kind.is_some_and(|kind| {
-                            !worker_duties_allow_staff_job(
-                                role_definition.role,
-                                kind,
-                                token,
-                                *capabilities,
-                                duties,
-                            )
-                        }) {
+                        }) || !duties.is_assigned(token)
+                        {
                             continue;
                         }
                         let resolve_task = |task_token| {

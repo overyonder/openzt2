@@ -1,8 +1,14 @@
-use bevy::prelude::*;
+use bevy::{
+    ecs::{entity::EntityHashSet, system::SystemParam},
+    prelude::*,
+};
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::{
+    AnimalCrate, ScriptedCrating, UncratedWorldEntity,
+};
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::{
     animal_lifecycle::types::AnimalVariant,
     aquatic::aquatic_simulation_types::TankGeometry,
@@ -44,7 +50,8 @@ pub(super) struct AnimalWaterChanges<'w, 's> {
     removed_indexes: RemovedComponents<'w, 's, TerrainWaterMembershipIndex>,
     removed_source: RemovedComponents<'w, 's, TerrainWaterRegionSource>,
     removed_retirement: RemovedComponents<'w, 's, TerrainWaterRegionRetired>,
-    resumed: RemovedComponents<'w, 's, WorldEntityIsCrated>,
+    resumed: RemovedComponents<'w, 's, AnimalCrate>,
+    script_resumed: RemovedComponents<'w, 's, ScriptedCrating>,
     revived: RemovedComponents<'w, 's, Dead>,
     changed_modes: RemovedComponents<'w, 's, LocomotionMode>,
     enabled: RemovedComponents<'w, 's, bevy::ecs::entity_disabling::Disabled>,
@@ -66,7 +73,7 @@ pub(super) fn project_animal_water_contact(
             Option<&mut LocomotionMode>,
             Option<&mut AnimalTerrainWaterContact>,
         ),
-        (Without<Dead>, Without<WorldEntityIsCrated>),
+        (Without<Dead>, UncratedWorldEntity),
     >,
 ) {
     let refresh_all = species_index.is_changed()
@@ -105,6 +112,7 @@ pub(super) fn project_animal_water_contact(
     let resumed: EntityHashSet = changes
         .resumed
         .read()
+        .chain(changes.script_resumed.read())
         .chain(changes.revived.read())
         .chain(changes.changed_modes.read())
         .chain(changes.enabled.read())

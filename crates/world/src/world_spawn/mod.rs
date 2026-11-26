@@ -12,7 +12,6 @@ pub(crate) mod named_physical_presentation_projection;
 mod persistent_id_assignment;
 mod physical_presentation_state;
 mod prefab_attachment_independent_rotation;
-mod prefab_authored_rotation_cycle_advancement;
 mod prefab_authored_transform_animation_advancement;
 mod prefab_object_presentation_attachment_projection;
 pub mod prefab_presentation_render_tree;
@@ -39,7 +38,6 @@ use crate::world_spawn::named_physical_presentation_projection::{
     project_physical_presentation_caustic_policies, select_named_presentation_fade_states,
 };
 use crate::world_spawn::persistent_id_assignment::assign_requested_persistent_ids;
-use crate::world_spawn::prefab_authored_rotation_cycle_advancement::advance_authored_prefab_rotation_cycles_from_elapsed_real_time;
 use crate::world_spawn::prefab_authored_transform_animation_advancement::advance_authored_prefab_transform_animations_from_elapsed_time;
 use crate::world_spawn::prefab_object_presentation_attachment_projection::{
     initialize_authored_physical_presentation_controllers,
@@ -220,7 +218,6 @@ impl Plugin for WorldSpawnPlugin {
             .add_systems(
                 Update,
                 (
-                    advance_authored_prefab_rotation_cycles_from_elapsed_real_time,
                     advance_authored_prefab_transform_animations_from_elapsed_time,
                     crate::world_spawn::world_entity_crating::synchronize_contained_animal_transforms,
                 )

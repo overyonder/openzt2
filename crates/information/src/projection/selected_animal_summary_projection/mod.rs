@@ -17,8 +17,7 @@ use openzt2_zoo_state::animal_health::types::Rampaging;
 use openzt2_zoo_state::animal_health::types::Tranquilized;
 use openzt2_zoo_state::animal_health::types::Treatment;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
-use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable;
+use openzt2_world_state::world_spawn::world_entity_crating::{AnimalCrate, ScriptedCrating};
 use openzt2_ui::authored_ui_interaction_enabled_binding::UiEnabledBinding;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
@@ -33,7 +32,11 @@ use openzt2_interface_state::information::entity_selection_types::{InfoPanel, Se
 pub(crate) fn project_selected_entity_information_section_visibility(
     information_panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
     selections: Query<Ref<SelectedSubject>>,
-    subjects: Query<(&Inspectable, Has<WorldEntityIsCrated>, Has<Animal>)>,
+    subjects: Query<(
+        &Inspectable,
+        (Has<AnimalCrate>, Has<ScriptedCrating>),
+        Has<Animal>,
+    )>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut visibility_nodes: Query<(&UiDocumentOwner, &UiVisibleBinding, &mut Visibility)>,
@@ -50,7 +53,7 @@ pub(crate) fn project_selected_entity_information_section_visibility(
                 .get(selection.0)
                 .ok()
                 .and_then(|(subject, crated, animal)| {
-                    if crated {
+                    if crated.0 || crated.1 {
                         Some(AssetId::from_key(if animal {
                             "Crate Info"
                         } else {
@@ -109,12 +112,7 @@ pub(crate) fn project_selected_animal_identity_health_and_action_summary(
         Without<super::panel_binding_families::IdentityTextFieldOf>,
     >,
     mut visibility_nodes: Query<(&UiDocumentOwner, &UiVisibleBinding, &mut Visibility)>,
-    mut interaction_nodes: Query<(
-        &UiEnabledBinding,
-        &mut UiInteractionEnabled,
-        Option<&mut UiFocusable>,
-        &mut Pickable,
-    )>,
+    mut interaction_nodes: Query<(&UiEnabledBinding, &mut UiInteractionEnabled, &mut Pickable)>,
 ) {
     let active_localization =
         active_localization.borrow_loaded_localization_view(&localization_assets);
@@ -182,9 +180,7 @@ pub(crate) fn project_selected_animal_identity_health_and_action_summary(
         });
     }
 
-    for (enabled_binding, mut interaction_enabled, focusable, mut pickable) in
-        &mut interaction_nodes
-    {
+    for (enabled_binding, mut interaction_enabled, mut pickable) in &mut interaction_nodes {
         let should_be_enabled = match &enabled_binding.0 {
             UiBooleanPropertyBindingSource::AnimalDiseased => {
                 disease.is_some() && !rampaging && !dead
@@ -194,11 +190,6 @@ pub(crate) fn project_selected_animal_identity_health_and_action_summary(
             _ => continue,
         };
         interaction_enabled.set_if_neq(UiInteractionEnabled(should_be_enabled));
-        if let Some(mut focusable) = focusable {
-            if focusable.enabled != should_be_enabled {
-                focusable.enabled = should_be_enabled;
-            }
-        }
         let next = if should_be_enabled {
             Pickable::default()
         } else {

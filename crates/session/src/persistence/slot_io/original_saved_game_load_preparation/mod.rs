@@ -1,5 +1,7 @@
 use super::{
-    pending_snapshot_application_types::{PendingSnapshotApplication, SnapshotBytes},
+    pending_snapshot_application_types::{
+        PendingSnapshotApplication, SnapshotBytes, SnapshotTerrainAsset,
+    },
     persistence_slot_filesystem_task_types::PersistenceSlotOperation,
     terrain_snapshot_types::TerrainSnapshotRecord,
     world_snapshot_types::WorldSnapshotRecord,
@@ -11,7 +13,6 @@ use bevy::{
 use openzt2_game_assets::{
     original_saved_game_asset_loading::OriginalSavedGameAsset,
     original_saved_game_source::{OpenOriginalSavedGamePackage, OriginalSavedGameSources},
-    saved_world_asset_source::SavedWorldTerrainAsset,
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
     world_asset_preparation::WorldAssetPreparation,
     world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
@@ -33,8 +34,6 @@ pub(in crate::persistence) struct OriginalSavedGameLoadPreparation {
     package: OriginalSavedGamePackagePreparation,
     timestamp: u64,
     world: Option<(WorldSnapshotRecord, TerrainSnapshotRecord)>,
-    saved_terrain: Option<SavedWorldTerrainAsset>,
-    document: Option<Handle<WorldScenarioDocumentAsset>>,
 }
 
 enum OriginalSavedGamePackagePreparation {
@@ -110,8 +109,6 @@ pub(in crate::persistence) fn begin_original_saved_game_loading(
                 package: OriginalSavedGamePackagePreparation::Opening(open),
                 timestamp: record.last_saved_unix_timestamp_milliseconds,
                 world: None,
-                document: None,
-                saved_terrain: None,
             },
             WorldAssetPreparation,
         ));
@@ -125,46 +122,45 @@ pub(super) fn prepare_original_saved_world_assets(
     assets: &Assets<OriginalSavedGameAsset>,
     terrains: &Assets<TerrainAsset>,
     server: &AssetServer,
-    saved_world: &mut super::saved_world_snapshot_preparation::SavedWorldSnapshotPreparation,
+    documents: &Assets<WorldScenarioDocumentAsset>,
 ) -> Result<bool, String> {
-    if let Some(bevy::asset::LoadState::Failed(error)) = server.get_load_state(asset.id()) {
-        return Err(format!("cannot load original saved world: {error}"));
+    if server.load_state(asset.id()).is_failed()
+        || server
+            .recursive_dependency_load_state(asset.id())
+            .is_failed()
+    {
+        return Err("cannot load the original saved world's assets".into());
     }
     let Some(saved) = assets.get(asset) else {
         return Ok(false);
     };
-    if let Some(bevy::asset::LoadState::Failed(error)) = server.get_load_state(saved.terrain.id()) {
-        return Err(format!("cannot load saved terrain: {error}"));
+    if !server.is_loaded_with_dependencies(asset.id()) {
+        return Ok(false);
     }
-    let Some(terrain) = terrains.get(&saved.terrain) else {
+    let (Some(terrain), Some(scenario)) =
+        (terrains.get(&saved.terrain), documents.get(&saved.scenario))
+    else {
         return Ok(false);
     };
     if preparation.world.is_none() {
         preparation.world = Some(
             super::original_saved_game_world_conversion::read_original_saved_world(
-                saved,
+                scenario,
                 terrain,
+                server,
                 preparation.timestamp,
             )
             .map_err(|error| error.to_string())?,
         );
     }
-    let Some((world, terrain)) = &preparation.world else {
-        return Ok(false);
-    };
-    if let Some(saved_terrain) = saved_world
-        .prepare(world, Some(terrain), &mut preparation.document)
-        .map_err(|error| format!("cannot prepare saved-world assets: {error:?}"))?
-    {
-        preparation.saved_terrain = Some(saved_terrain);
-    }
-    Ok(preparation.document.is_some())
+    Ok(true)
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
 pub(in crate::persistence) struct OriginalSavedGamePreparationAssets<'w> {
     originals: Res<'w, Assets<OriginalSavedGameAsset>>,
     terrains: Res<'w, Assets<TerrainAsset>>,
+    documents: Res<'w, Assets<WorldScenarioDocumentAsset>>,
     server: Res<'w, AssetServer>,
     definitions: Res<'w, Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>,
     definitions_index: Res<'w, openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>,
@@ -173,7 +169,7 @@ pub(in crate::persistence) struct OriginalSavedGamePreparationAssets<'w> {
     audio: Res<'w, Assets<openzt2_game_assets::audio::audio_asset_types::AudioAsset>>,
     audio_index: Res<'w, openzt2_game_assets::audio::audio_asset_types::AudioAssets>,
     scripts: Res<'w, Assets<openzt2_game_assets::lua_script::lua_script_asset_loading::LuaScriptAsset>>,
-    script_index: Res<'w, openzt2_game_assets::lua_script::lua_script_archive_path_index::LuaScriptArchivePathIndex>,
+    script_sources: Res<'w, openzt2_game_assets::lua_script::lua_script_sources::LuaScriptSources>,
 }
 
 pub(in crate::persistence) fn complete_original_saved_game_preparation(
@@ -181,7 +177,6 @@ pub(in crate::persistence) fn complete_original_saved_game_preparation(
     mut preparations: Query<(Entity, &mut OriginalSavedGameLoadPreparation)>,
     profile: Res<ProfileOptions>,
     assets: OriginalSavedGamePreparationAssets,
-    mut saved_world: super::saved_world_snapshot_preparation::SavedWorldSnapshotPreparation,
     mut failures: MessageWriter<OriginalSavedGameLoadFailed>,
 ) {
     for (operation, mut preparation) in &mut preparations {
@@ -211,14 +206,8 @@ pub(in crate::persistence) fn complete_original_saved_game_preparation(
                 &assets.originals,
                 &assets.terrains,
                 &assets.server,
-                &mut saved_world,
+                &assets.documents,
             )? {
-                return Ok(None);
-            }
-            if assets
-                .script_index
-                .has_pending_script_loads(&assets.server, &assets.scripts)
-            {
                 return Ok(None);
             }
             let Some(definitions) = assets.definitions_index.get(&assets.definitions) else {
@@ -242,9 +231,9 @@ pub(in crate::persistence) fn complete_original_saved_game_preparation(
                 .world
                 .as_ref()
                 .ok_or_else(|| "prepared original world is absent".to_owned())?;
-            let document = preparation
-                .document
-                .as_ref()
+            let document = assets
+                .documents
+                .get(&saved.scenario)
                 .ok_or_else(|| "prepared saved-world document is absent".to_owned())?;
             super::original_saved_game_snapshot_conversion::encode_original_saved_game_snapshot(
                 saved,
@@ -253,7 +242,7 @@ pub(in crate::persistence) fn complete_original_saved_game_preparation(
                 preparation.profile,
                 document,
                 &assets.scripts,
-                &assets.script_index,
+                &assets.script_sources,
                 definitions,
                 species,
                 crowd,
@@ -271,16 +260,22 @@ pub(in crate::persistence) fn complete_original_saved_game_preparation(
                 commands.entity(operation).despawn();
             }
             Ok(Some((bytes, economy))) => {
+                let OriginalSavedGamePackagePreparation::Loading { asset, .. } =
+                    &preparation.package
+                else {
+                    continue;
+                };
+                let Some(saved) = assets.originals.get(asset) else {
+                    continue;
+                };
                 let mut operation = commands.entity(operation);
-                if let Some(terrain) = preparation.saved_terrain.take() {
-                    operation.insert(terrain);
-                }
                 operation.remove::<OriginalSavedGameLoadPreparation>().insert((
                 PendingSnapshotApplication {
                     source: openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource::Original(preparation.source),
-                    saved_world_document: preparation.document.clone(),
+                    saved_world_document: Some(saved.scenario.clone()),
                 },
                 SnapshotBytes(bytes),
+                SnapshotTerrainAsset(saved.terrain.clone()),
                 economy,
             ));
             }

@@ -21,10 +21,10 @@ use super::{
 pub(super) const MAXIMUM_PROFILE_COUNT: usize = 1024;
 pub(super) const MAXIMUM_PROFILE_DISPLAY_NAME_BYTE_COUNT: usize = 64;
 const PROFILE_INDEX_MAGIC_BYTES: [u8; 8] = *b"OZT2PROF";
-const PROFILE_INDEX_FORMAT_VERSION: u32 = 5;
+const PROFILE_INDEX_FORMAT_VERSION: u32 = 6;
 // Bound the complete index by the independently admitted profile payloads.
 pub(super) const MAXIMUM_PROFILE_INDEX_BYTE_COUNT: usize = 64 + MAXIMUM_PROFILE_COUNT * (
-    42 + 20 + 1 + 4 * (4 + MAXIMUM_ENCODED_PROFILE_SETTINGS_BYTE_COUNT)
+    42 + 20 + 1 + 5 * (4 + MAXIMUM_ENCODED_PROFILE_SETTINGS_BYTE_COUNT)
     + openzt2_zoo_state::progression::profile_scenario_variables::MAXIMUM_PROFILE_SCENARIO_VARIABLE_BYTES
     + 2 + MAXIMUM_PROFILE_DISPLAY_NAME_BYTE_COUNT
 );
@@ -43,6 +43,7 @@ pub(super) fn encode_profile_index_for_test(
                 profile_identifier: profile_record.profile_identifier,
                 locale_identifier: AssetId::default(),
                 controller_input_enabled: true,
+                attributes: Default::default(),
             },
             challenge_progress: ProfileChallengeCompletionCounts::default(),
             scenario_variables: Default::default(),
@@ -200,6 +201,10 @@ pub(super) fn encode_stored_profile_index(
         profile_index_bytes.push(u8::from(
             stored_profile_record_and_settings.modder_tools.enabled,
         ));
+        append_length_prefixed_canonical_json_profile_settings_value(
+            &mut profile_index_bytes,
+            &stored_profile_record_and_settings.options.attributes,
+        )?;
         profile_index_bytes.extend_from_slice(
             &(stored_profile_record_and_settings
                 .record
@@ -398,6 +403,14 @@ pub(super) fn decode_stored_profile_index(
         } else {
             ModderToolsSettings::default()
         };
+        let attributes = if profile_index_format_version >= 6 {
+            decode_length_prefixed_canonical_json_profile_settings_value(
+                profile_index_bytes,
+                &mut profile_index_byte_cursor,
+            )?
+        } else {
+            Default::default()
+        };
         let profile_display_name_byte_count = read_little_endian_u16_from_profile_index(
             profile_index_bytes,
             profile_index_byte_cursor,
@@ -431,6 +444,7 @@ pub(super) fn decode_stored_profile_index(
                 profile_identifier,
                 locale_identifier: AssetId(locale_identifier_bytes),
                 controller_input_enabled,
+                attributes,
             },
             challenge_progress: profile_challenge_completion_counts,
             scenario_variables,

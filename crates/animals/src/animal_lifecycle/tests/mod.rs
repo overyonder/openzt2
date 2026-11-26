@@ -114,20 +114,17 @@ fn pregnant_and_non_adult_animals_are_not_released() {
     app.update();
     assert!(app.world().get_entity(juvenile).is_ok());
     assert!(app.world().get_entity(pregnant).is_ok());
-    assert!(
-        app.world()
-            .resource::<Messages<AnimalReleased>>()
-            .is_empty()
-    );
+    assert!(app
+        .world()
+        .resource::<Messages<AnimalReleased>>()
+        .is_empty());
 }
 
 #[test]
 fn outgoing_adoption_removes_animal_and_crate_without_wild_release_credit() {
     use super::animal_adoption_contracts::PlaceAnimalForAdoption;
     use bevy::ecs::relationship::Relationship;
-    use openzt2_world_state::world_spawn::world_entity_crating::{
-        AnimalCrate, WorldEntityIsCrated,
-    };
+    use openzt2_world_state::world_spawn::world_entity_crating::{AnimalCrate, ScriptedCrating};
 
     let mut app = App::new();
     app.add_message::<PlaceAnimalForAdoption>()
@@ -137,7 +134,7 @@ fn outgoing_adoption_removes_animal_and_crate_without_wild_release_credit() {
             Update,
             super::outgoing_animal_adoption_execution::transfer_animals_out_for_adoption,
         );
-    let animal = app.world_mut().spawn((Animal, WorldEntityIsCrated)).id();
+    let animal = app.world_mut().spawn((Animal, ScriptedCrating)).id();
     let presentation = app.world_mut().spawn(ChildOf(animal)).id();
     let crate_entity = app.world_mut().spawn_empty().id();
     app.world_mut()
@@ -170,9 +167,8 @@ fn outgoing_adoption_removes_animal_and_crate_without_wild_release_credit() {
         app.world().get::<AnimalFather>(child).unwrap().0,
         restricted
     );
-    assert!(
-        app.world()
-            .resource::<Messages<AnimalReleased>>()
-            .is_empty()
-    );
+    assert!(app
+        .world()
+        .resource::<Messages<AnimalReleased>>()
+        .is_empty());
 }

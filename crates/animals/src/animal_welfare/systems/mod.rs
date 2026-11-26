@@ -131,12 +131,18 @@ pub(crate) fn initialize_animal_needs(
             / 10;
         let mut trigger_mask = 0;
         for (index, need) in needs.iter().enumerate() {
-            if need.trigger_wellness_threshold.is_some_and(|threshold| initial[index] <= i32::from(threshold) * Q16_ONE) {
+            if need
+                .trigger_wellness_threshold
+                .is_some_and(|threshold| initial[index] <= i32::from(threshold) * Q16_ONE)
+            {
                 trigger_mask |= 1 << index;
             }
         }
         if let (Some(row), Some(value)) = (reproduction_row, reproduction) {
-            if row.trigger_wellness_threshold.is_some_and(|threshold| value <= i32::from(threshold) * Q16_ONE) {
+            if row
+                .trigger_wellness_threshold
+                .is_some_and(|threshold| value <= i32::from(threshold) * Q16_ONE)
+            {
                 trigger_mask |= 1 << REPRODUCTION_TRIGGER_INDEX;
             }
             commands.entity(entity).insert(ReproductionNeed(value));

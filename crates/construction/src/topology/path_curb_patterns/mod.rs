@@ -108,7 +108,7 @@ impl FromWorld for PathCurbPatternAsset {
 type CurbEdge = [IVec3; 2];
 
 impl PathCurbPatterns {
-    pub fn pair(
+    pub(super) fn pair(
         &self,
         centre: IVec3,
         direction: u8,

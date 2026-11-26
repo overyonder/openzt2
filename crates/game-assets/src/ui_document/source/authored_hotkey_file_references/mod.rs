@@ -204,7 +204,7 @@ mod tests {
             [37, 27, 39]
         );
         assert_eq!(
-            source.root.hotkeys[1].event.target_child.as_deref(),
+            source.root.hotkeys[1].events[0].target_child.as_deref(),
             Some("TextButton Cancel")
         );
     }

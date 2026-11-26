@@ -9,11 +9,11 @@ use openzt2_world_state::{
 };
 use openzt2_zoo_state::{
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState,
         running_actions::{
-            AuthoredTourRide, RunBehaviorTour, RunningBehaviorInstruction, WhenBehaviorAction,
-            mark_behavior_task_for_failure_and_stop_navigation,
+            mark_behavior_task_for_failure_and_stop_navigation, AuthoredTourRide, RunBehaviorTour,
+            RunningBehaviorInstruction, WhenBehaviorAction,
         },
+        BehaviorTaskExecutionState,
     },
     locomotion::locomotion_types::{
         Arrived, DockAt, NavAgent, NavigationFailed, NavigationRequestGeneration,

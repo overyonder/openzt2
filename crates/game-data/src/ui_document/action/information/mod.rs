@@ -124,6 +124,7 @@ pub enum UiInformationAction {
     PopulateEntityEditorDataRoots,
     SelectGraph {
         graph: InformationGraphSeries,
+        label_document: AssetId,
     },
     SelectGraphType {
         graph_type: InformationGraphType,

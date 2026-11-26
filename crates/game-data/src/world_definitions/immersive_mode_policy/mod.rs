@@ -32,6 +32,13 @@ pub struct ImmersiveModePolicy {
     pub allowed_actions: ImmersiveModeActionFlags,
     pub interaction_cursor: AssetId,
     pub interaction_prefab: AssetId,
+    #[serde(default)]
+    pub guest_navigation_marker: AssetId,
+    #[serde(default)]
+    pub guest_ground_cursor: AssetId,
+    #[serde(default)]
+    pub first_person_movement: Option<FirstPersonModeMovement>,
+
     pub camera: AssetId,
     pub restore_camera_on_exit: bool,
     pub pause_simulation: bool,
@@ -43,4 +50,13 @@ pub struct ImmersiveModePolicy {
     /// Frustum-scale delta per wheel event authored by `ZTPhotoMode`.
     #[serde(default)]
     pub photo_zoom_step: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct FirstPersonModeMovement {
+    pub move_speed_mps: f32,
+    pub keyboard_rotate_speed_rps: f32,
+    pub turn_speed_out_rps: f32,
+    pub turn_speed_in_rps: f32,
+    pub primary_pointer_pan: Option<[f32; 2]>,
 }

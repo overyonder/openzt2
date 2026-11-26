@@ -8,12 +8,12 @@ use crate::world_scenario::world_scenario_source_reference_resolution::{
 };
 
 use openzt2_game_data::{
-    AssetId,
     world_scenario::{
         StartingFenceRecord, StartingPathRecord, StartingTopologyNodeRecord,
         StartingZooEntityTransform, StartingZooRecord, StartingZooSpawnEntityFlags,
         StartingZooSpawnEntityRecord,
     },
+    AssetId,
 };
 
 use crate::source_coordinate_conversion::{

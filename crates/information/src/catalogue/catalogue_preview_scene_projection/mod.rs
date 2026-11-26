@@ -1,16 +1,16 @@
 use bevy::{
     asset::RenderAssetUsages,
     camera::{
-        ClearColorConfig, PerspectiveProjection, RenderTarget, SubCameraView,
-        visibility::RenderLayers,
+        visibility::RenderLayers, ClearColorConfig, PerspectiveProjection, RenderTarget,
+        SubCameraView,
     },
     ecs::{entity_disabling::Disabled, query::Allow, relationship::RelationshipTarget},
     prelude::*,
     render::render_resource::{TextureFormat, TextureUsages},
 };
 use openzt2_game_data::{
-    AssetId, ui_document::node_property_binding::UiImagePropertyBindingSource,
-    world_definitions::world_objects::WorldObjectKind,
+    ui_document::node_property_binding::UiImagePropertyBindingSource,
+    world_definitions::world_objects::WorldObjectKind, AssetId,
 };
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
@@ -619,6 +619,7 @@ pub(crate) fn apply_authored_catalogue_preview_initial_animation_repetition_poli
             } else {
                 AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
             },
+            action_settings: None,
         });
     }
 }

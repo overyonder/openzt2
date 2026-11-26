@@ -282,6 +282,7 @@ pub(super) fn project_tranquilizer_heads_up_display_to_authored_ui_nodes(
                 for image_entity in image_entities {
                     if let Ok(mut image) = images.get_mut(image_entity) {
                         image
+                            .reborrow()
                             .map_unchanged(|image| &mut image.image)
                             .set_if_neq(handle.clone());
                         image

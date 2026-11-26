@@ -18,7 +18,7 @@ use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIden
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use crate::catalogue::catalogue_type_list_policy_operations::{
-    CatalogueTypeListMemoryPolicy, choose_remembered_or_first_included_catalogue_entry,
+    choose_remembered_or_first_included_catalogue_entry, CatalogueTypeListMemoryPolicy,
 };
 use crate::catalogue::catalogue_world_availability_context::resolve_catalogue_world_session_mode_and_scenario_availability;
 use openzt2_interface_state::information::catalogue_types::PurchaseChoice;
@@ -253,11 +253,10 @@ mod tests {
             });
         }
         app.update();
-        assert!(
-            app.world()
-                .resource::<Messages<PurchaseChoice>>()
-                .is_empty()
-        );
+        assert!(app
+            .world()
+            .resource::<Messages<PurchaseChoice>>()
+            .is_empty());
 
         // Removing the second row makes an unread second row press unable to
         // suppress the stale On event; a delayed choice would expose either
@@ -266,11 +265,10 @@ mod tests {
             .entity_mut(row_two)
             .remove::<CatalogueRowEntry>();
         app.update();
-        assert!(
-            app.world()
-                .resource::<Messages<PurchaseChoice>>()
-                .is_empty()
-        );
+        assert!(app
+            .world()
+            .resource::<Messages<PurchaseChoice>>()
+            .is_empty());
     }
 
     #[test]

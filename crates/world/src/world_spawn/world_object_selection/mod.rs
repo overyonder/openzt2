@@ -8,7 +8,7 @@ use openzt2_interface_state::{
     ui::pointer_capture_types::UiPointerCapture,
 };
 use openzt2_world_state::world_spawn::{
-    world_entity_crating::WorldEntityIsCrated, world_entity_view_filter::HiddenByWorldViewFilter,
+    world_entity_crating::CratedWorldEntity, world_entity_view_filter::HiddenByWorldViewFilter,
     world_membership_types::WorldMember,
 };
 use openzt2_zoo_state::{
@@ -73,7 +73,7 @@ pub(super) fn select_world_object_on_pointer_press(
     suppressed: Query<
         (),
         Or<(
-            With<WorldEntityIsCrated>,
+            CratedWorldEntity,
             With<HiddenByWorldViewFilter>,
             With<RelocatingPlacedObject>,
         )>,

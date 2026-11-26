@@ -54,7 +54,7 @@ pub(super) fn index_winning_fossil_definitions(
     };
     index.pieces = definitions.fossil_pieces().copied().collect();
     index.slots = definitions.fossil_slots().copied().collect();
-    let mut seen = HashSet::default();
+    let mut seen = HashSet::<AssetId>::default();
     index.sets = index
         .pieces
         .iter()
@@ -71,21 +71,37 @@ pub(super) fn index_winning_fossil_definitions(
     index.cash_rewards.clear();
     if let Some(policy) = definitions.fossil_placement() {
         let objects = definitions.objects().collect::<Vec<_>>();
-        let parents = objects.iter().flat_map(|object| {
-            object.behavior_type_identifiers.iter().copied().filter(|&kind| kind != object.id)
-        }).collect::<HashSet<_>>();
+        let parents = objects
+            .iter()
+            .flat_map(|object| {
+                object
+                    .behavior_type_identifiers
+                    .iter()
+                    .copied()
+                    .filter(|&kind| kind != object.id)
+            })
+            .collect::<HashSet<_>>();
         let developer = AssetId::from_key("ztdevcomponent");
-        let groups = |types: &[AssetId], needs_placement| {
-            types.iter().map(|&kind| {
-                objects.iter().copied().filter(|object| {
-                    (object.id == kind || object.behavior_type_identifiers.contains(&kind))
-                        && !parents.contains(&object.id)
-                        && (!needs_placement || definitions.find_placeable(object.id).is_some())
-                }).map(|object| FossilRewardCandidate {
-                    definition: object.id,
-                    developer_only: object.behavior_type_identifiers.contains(&developer),
-                }).collect::<Vec<_>>()
-            }).collect::<Vec<_>>()
+        let groups = |types: &[AssetId], needs_placement: bool| {
+            types
+                .iter()
+                .map(|&kind| {
+                    objects
+                        .iter()
+                        .copied()
+                        .filter(|object| {
+                            (object.id == kind || object.behavior_type_identifiers.contains(&kind))
+                                && !parents.contains(&object.id)
+                                && (!needs_placement
+                                    || definitions.find_placeable(object.id).is_some())
+                        })
+                        .map(|object| FossilRewardCandidate {
+                            definition: object.id,
+                            developer_only: object.behavior_type_identifiers.contains(&developer),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
         };
         index.placeable_rewards = groups(&policy.placeable_objects, true);
         index.cash_rewards = groups(&policy.non_placeable_objects, false);

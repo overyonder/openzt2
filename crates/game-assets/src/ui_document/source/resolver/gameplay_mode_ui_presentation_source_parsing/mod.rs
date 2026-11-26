@@ -185,3 +185,211 @@ pub(super) fn parse_authored_placement_preview_from_gameplay_mode_document(
         grid_srgba: color(placement, "grid")?,
     })
 }
+
+use bevy::{asset::LoadContext, prelude::*};
+use openzt2_game_data::ui_document::document::{UiDocument, UiDocumentRole};
+use std::io;
+
+use crate::{
+    source_coordinate_conversion::{
+        conjugate_source_z_up_rotation_into_bevy_y_up_basis,
+        convert_row_major_rotation_matrix_to_quaternion,
+        convert_source_z_up_vector_to_bevy_y_up_coordinates,
+    },
+    source_document::{
+        blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
+    },
+    ui_document::ui_document_asset_types_and_borrowing_queries::{
+        FameStarDisplay, FameStarEffect, FameStarModel,
+    },
+};
+
+use super::super::rail_camera::source_value_reading::{
+    invalid_source_data, optional_source_boolean_attribute, parse_finite_source_number,
+    read_source_rotation_matrix, read_source_vector_attributes, required_finite_source_number,
+    required_source_attribute, source_element_child,
+};
+
+pub(in crate::ui_document::source) async fn load_authored_fame_star_display(
+    source_documents: &[OrderedSourceDocument],
+    documents: &[UiDocument],
+    context: &mut LoadContext<'_>,
+) -> io::Result<Option<FameStarDisplay>> {
+    let Some(hud) = documents
+        .iter()
+        .find(|document| document.role == UiDocumentRole::InGameHud)
+    else {
+        return Ok(None);
+    };
+    let Some(display) = source_documents
+        .iter()
+        .find(|document| document.path.key() == "ui/modes/modes.xml")
+        .and_then(|mode| {
+            find_nested_ordered_source_document_node_by_name(&mode.root.children, "ZTStarsDisplay")
+        })
+    else {
+        return Ok(None);
+    };
+    let (index, region) = hud
+        .nodes
+        .iter()
+        .enumerate()
+        .find(|(_, node)| node.name.eq_ignore_ascii_case("zoo fame stars"))
+        .ok_or_else(|| invalid_source_data("fame star display has no HUD region"))?;
+    let camera = load_fame_star_xml(context, "ui/fx/cameraobject.xml").await?;
+    let attachments =
+        find_nested_ordered_source_document_node_by_name(&camera.root.children, "extraNodes")
+            .ok_or_else(|| invalid_source_data("fame star camera has no attachment nodes"))?;
+    let mut wells = Vec::new();
+    for node in attachments.element_children() {
+        let Some(index) = node
+            .attribute("name")
+            .and_then(|name| name.strip_prefix("star"))
+            .and_then(|index| index.parse::<usize>().ok())
+        else {
+            continue;
+        };
+        let position = source_element_child(node, "position")
+            .ok_or_else(|| invalid_source_data("fame star anchor has no position"))?;
+        let translation = Vec3::from_array(convert_source_z_up_vector_to_bevy_y_up_coordinates(
+            read_source_vector_attributes(position)?,
+        ));
+        let rotation = source_element_child(node, "rotation")
+            .map(read_source_rotation_matrix)
+            .transpose()?
+            .map(|matrix| {
+                convert_row_major_rotation_matrix_to_quaternion(
+                    conjugate_source_z_up_rotation_into_bevy_y_up_basis(matrix),
+                )
+            })
+            .unwrap_or(Quat::IDENTITY);
+        wells.push((
+            index,
+            Transform::from_translation(translation).with_rotation(rotation),
+        ));
+    }
+    wells.sort_by_key(|(index, _)| *index);
+    let Some((_, left)) = wells.first() else {
+        return Err(invalid_source_data("fame star camera has no star anchors"));
+    };
+    let right = &wells.last().expect("star anchors are present").1;
+    let step =
+        left.translation.distance(right.translation) / wells.len().saturating_sub(1).max(1) as f32;
+    let width = step * wells.len() as f32;
+    let height = width * region.rect[3] / region.rect[2];
+    if !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return Err(invalid_source_data("fame star view has invalid dimensions"));
+    }
+    let center = (left.translation + right.translation) * 0.5;
+    let camera_position = center - Vec3::X * center.x;
+    let dictionary = load_fame_star_xml(context, "ui/fx/zoofamedict.xml").await?;
+    let full =
+        load_fame_star_model(context, display, &dictionary.root, "star", Some("starfull")).await?;
+    let half = load_fame_star_model(
+        context,
+        display,
+        &dictionary.root,
+        "halfstar",
+        Some("starhalffull"),
+    )
+    .await?;
+    let appear = load_fame_star_model(
+        context,
+        display,
+        &dictionary.root,
+        "appear",
+        display.attribute("appear"),
+    )
+    .await?;
+    let disappear = load_fame_star_model(
+        context,
+        display,
+        &dictionary.root,
+        "disappear",
+        display.attribute("disappear"),
+    )
+    .await?;
+    Ok(Some(FameStarDisplay {
+        wells_node_index: index as u32,
+        well_transforms: wells.into_iter().map(|(_, transform)| transform).collect(),
+        viewport_transform: Transform::from_translation(camera_position)
+            .looking_at(center, Vec3::NEG_Z),
+        viewport_size_m: Vec2::new(width, height),
+        animation_delay_seconds: required_finite_source_number(display, "animationDelay")?,
+        full,
+        half,
+        appear,
+        disappear,
+    }))
+}
+
+async fn load_fame_star_model(
+    context: &mut LoadContext<'_>,
+    display: &OrderedSourceDocumentNode,
+    dictionary: &OrderedSourceDocumentNode,
+    slot: &str,
+    cue: Option<&str>,
+) -> io::Result<FameStarModel> {
+    let source = source_element_child(display, slot)
+        .and_then(|variant| source_element_child(variant, "BFPhysObj"))
+        .ok_or_else(|| {
+            invalid_source_data(format!("fame star slot {slot} has no physical object"))
+        })?;
+    let scene = source_element_child(source, "BFSceneGraphComponent").ok_or_else(|| {
+        invalid_source_data(format!("fame star slot {slot} has no scene component"))
+    })?;
+    let controller = source_element_child(source, "BFAnimatedObjectControllerComponent")
+        .ok_or_else(|| {
+            invalid_source_data(format!("fame star slot {slot} has no animation controller"))
+        })?;
+    let model = context.load(fame_star_scene_path(scene)?);
+    let mut effects = Vec::new();
+    if let Some(conditions) = cue
+        .and_then(|cue| source_element_child(dictionary, cue))
+        .and_then(|cue| source_element_child(cue, "Conditions"))
+    {
+        for entry in conditions
+            .element_children()
+            .filter(|node| node.name.eq_ignore_ascii_case("BFParticleDefinition"))
+        {
+            let effect =
+                load_fame_star_xml(context, required_source_attribute(entry, "xmlFile")?).await?;
+            let scene = source_element_child(&effect.root, "BFSceneGraphComponent")
+                .ok_or_else(|| invalid_source_data("fame star effect has no scene component"))?;
+            effects.push(FameStarEffect {
+                prefab: context.load(fame_star_scene_path(scene)?),
+                duration_seconds: entry
+                    .attribute("removeTime")
+                    .filter(|value| !value.trim().is_empty())
+                    .map(parse_finite_source_number)
+                    .transpose()?,
+            });
+        }
+    }
+    Ok(FameStarModel {
+        model,
+        scale: required_finite_source_number(scene, "scale")?,
+        duration_seconds: required_finite_source_number(controller, "duration")?,
+        auto_start: optional_source_boolean_attribute(controller, "autoStart")?.unwrap_or(false),
+        looping: optional_source_boolean_attribute(controller, "loop")?.unwrap_or(false),
+        effects,
+    })
+}
+
+fn fame_star_scene_path(scene: &OrderedSourceDocumentNode) -> io::Result<String> {
+    let model = AssetPath::new(required_source_attribute(scene, "modelfile")?).key();
+    Ok(format!("{model}#Scene"))
+}
+
+async fn load_fame_star_xml(
+    context: &mut LoadContext<'_>,
+    path: &str,
+) -> io::Result<OrderedSourceDocument> {
+    let path = AssetPath::new(path);
+    let bytes = context
+        .read_asset_bytes(path.key())
+        .await
+        .map_err(io::Error::other)?;
+    parse_blue_fang_source_document(path, &bytes)
+        .map_err(|error| invalid_source_data(error.to_string()))
+}

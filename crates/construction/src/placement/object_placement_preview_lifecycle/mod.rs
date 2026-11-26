@@ -363,6 +363,7 @@ pub(super) fn apply_authored_initial_animal_placement_preview_animation_repetiti
             } else {
                 AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
             },
+            action_settings: None,
         });
     }
 }

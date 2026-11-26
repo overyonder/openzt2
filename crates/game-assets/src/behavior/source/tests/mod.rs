@@ -18,10 +18,16 @@ fn radial_docking_preserves_target_radius_arrival_radius_and_heading_tolerance()
     else {
         panic!("both radial docks expected");
     };
-    assert_eq!(shelter.approach, openzt2_game_data::behavior::action::docking::BehaviorDockApproach::Radial(3.0));
+    assert_eq!(
+        shelter.approach,
+        openzt2_game_data::behavior::action::docking::BehaviorDockApproach::Radial(3.0)
+    );
     assert_eq!(shelter.arrival_radius_m, None);
     assert_eq!(shelter.rotation_tolerance_radians, std::f32::consts::PI);
-    assert_eq!(view.approach, openzt2_game_data::behavior::action::docking::BehaviorDockApproach::Radial(10.0));
+    assert_eq!(
+        view.approach,
+        openzt2_game_data::behavior::action::docking::BehaviorDockApproach::Radial(10.0)
+    );
     assert_eq!(view.arrival_radius_m, Some(3.0));
 }
 
@@ -284,7 +290,10 @@ fn bashing_a_fence_docks_on_it_plays_out_the_bash_and_breaks_it() {
     else {
         panic!("a fence dock, the bash set and the morph expected");
     };
-    assert_eq!(dock.approach, openzt2_game_data::behavior::action::docking::BehaviorDockApproach::Fence);
+    assert_eq!(
+        dock.approach,
+        openzt2_game_data::behavior::action::docking::BehaviorDockApproach::Fence
+    );
     assert_eq!(dock.subject_node_name.as_deref(), Some("Node_Front"));
     assert_eq!(
         *interrupt,

@@ -12,9 +12,8 @@ pub struct TankDefinition {
     pub max_depth_cm: u16,
     pub capacity_litres_per_cell: u32,
     pub filtration_per_day: u32,
-    /// Material asset path for an opaque wall panel.
-    #[serde(default)]
-    pub opaque_wall_material: Option<String>,
+    pub wall_materials: [AssetId; 3],
+    pub wall_materials_low: [AssetId; 3],
 }
 #[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct AquaticRequirement {

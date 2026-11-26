@@ -19,7 +19,7 @@ pub(super) struct NavigationPathSurfaceCollider;
 use openzt2_zoo_state::{
     locomotion::{
         locomotion_types::ActiveTerrainDerivedNavigationGraph,
-        terrain_derived_navigation_graph_types::NavigationPathSurface,
+        terrain_derived_navigation_graph_types::{NavigationPathGeometry, NavigationPathSurface},
     },
     terrain::{
         terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex},
@@ -39,91 +39,91 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
         ),
         With<WorldRoot>,
     >,
-    definitions: Res<WorldDefinitions>,
-    assets: Res<Assets<WorldDefinitionAsset>>,
-    paths: Query<(
-        Entity,
-        &PathTile,
-        &TileSurface,
-        &GlobalTransform,
-        &WorldMember,
-    )>,
-    changes: Query<
-        (),
-        (
-            With<PathTile>,
-            Or<(
-                Changed<PathTile>,
-                Changed<TileSurface>,
-                Changed<GlobalTransform>,
-            )>,
-        ),
-    >,
-    (mut removed_paths, mut removed_surfaces): (
-        RemovedComponents<PathTile>,
-        RemovedComponents<TileSurface>,
-    ),
+    paths: Query<(Entity, &NavigationPathGeometry, &WorldMember)>,
+    changed_paths: Query<Entity, Or<(Changed<NavigationPathGeometry>, Changed<WorldMember>)>>,
+    mut removed_paths: RemovedComponents<NavigationPathGeometry>,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+    terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>, &WorldMember)>,
     mut path_changes: MessageWriter<NavigationPathGraphChanged>,
     mut installations: MessageReader<NavigationGraphReplaced>,
     mut terrain_changes: MessageReader<TerrainNavigationChanged>,
     mut restored_terrain: MessageReader<TerrainNavigationRestored>,
     phase: Res<State<GamePhase>>,
 ) {
-    let removed = removed_paths.read().chain(removed_surfaces.read()).count() != 0;
-    let graph_replaced = installations.read().count() != 0;
-    let terrain_changed =
-        (terrain_changes.read().count() != 0) | (restored_terrain.read().count() != 0);
+    let graph_replaced = installations.read().last().is_some();
+    let terrain_edits = terrain_changes
+        .read()
+        .map(|edit| (edit.chunk, edit.min, edit.max))
+        .chain(
+            restored_terrain
+                .read()
+                .map(|edit| (edit.chunk, edit.min, edit.max)),
+        );
     let Ok((root, mut graph, mut capacity, terrain_index)) = roots.single_mut() else {
+        for _ in terrain_edits {}
+        removed_paths.clear();
         return;
     };
-    if !graph_replaced
-        && !terrain_changed
-        && !definitions.is_changed()
-        && !assets.is_changed()
-        && changes.is_empty()
-        && !removed
-    {
-        return;
+    let mut changed: std::collections::BTreeMap<_, _> =
+        removed_paths.read().map(|entity| (entity, None)).collect();
+    if graph_replaced {
+        changed.clear();
+        changed.extend(
+            paths
+                .iter()
+                .filter(|(_, _, member)| member.root == root)
+                .map(|(entity, geometry, _)| (entity, Some(geometry))),
+        );
+    } else {
+        changed.extend(changed_paths.iter().map(|entity| {
+            let geometry = paths
+                .get(entity)
+                .ok()
+                .filter(|(_, _, member)| member.root == root)
+                .map(|(_, geometry, _)| geometry);
+            (entity, geometry)
+        }));
     }
-    let Some(definitions) = definitions.get(&assets) else {
-        return;
-    };
-    let mut elevated = Vec::new();
-    let mut ground = Vec::new();
-    for (entity, path, surface, transform, member) in &paths {
+    let navigation = graph
+        .bypass_change_detection()
+        .terrain_derived_navigation_graph_mut();
+    let mut terrain_cells = std::collections::BTreeSet::new();
+    for (chunk, min, max) in terrain_edits {
+        let Ok((chunk, _, member)) = terrain_chunks.get(chunk) else {
+            continue;
+        };
         if member.root != root {
             continue;
         }
-        let Some(definition) = definitions.find_path(path.definition) else {
+        let bounds =
+            super::terrain_edit_navigation_refresh::navigation_sample_edit_bounds(chunk, min, max);
+        let size = f32::from(navigation.terrain_cell_size_centimetres) * 0.01;
+        if size <= 0.0 {
             continue;
-        };
-        let Some(projected) = NavigationPathSurface::new(
-            entity,
-            *transform,
-            f32::from(definition.width_cm) * 0.01,
-            surface.height_cm,
-        ) else {
-            continue;
-        };
-        if definition.elevated {
-            elevated.push(projected);
-        } else {
-            ground.push(projected);
+        }
+        let first = (Vec2::new(bounds.min.x, -bounds.max.y) / size)
+            .floor()
+            .as_uvec2();
+        let last = (Vec2::new(bounds.max.x, -bounds.min.y) / size)
+            .floor()
+            .as_uvec2();
+        for z in first.y..=last.y {
+            for x in first.x..=last.x {
+                terrain_cells.insert([x, z]);
+            }
         }
     }
-    let changes = graph
-        .bypass_change_detection()
-        .terrain_derived_navigation_graph_mut()
-        .replace_navigation_path_surfaces(elevated, ground, |point| {
-            let (chunk, edited) = terrain_chunks
-                .get(terrain_chunk_at(terrain_index, point)?)
-                .ok()?;
-            let terrain = terrain_assets.get(&chunk.asset)?;
-            Some(sample_terrain(chunk, terrain, edited, point)?.height_m)
-        });
-    if !changes.ground && !changes.elevated {
+    if changed.is_empty() && terrain_cells.is_empty() {
+        return;
+    }
+    let changes = navigation.update_navigation_path_surfaces(changed, terrain_cells, |point| {
+        let (chunk, edited, _) = terrain_chunks
+            .get(terrain_chunk_at(terrain_index, point)?)
+            .ok()?;
+        let terrain = terrain_assets.get(&chunk.asset)?;
+        Some(sample_terrain(chunk, terrain, edited, point)?.height_m)
+    });
+    if changes.ground_nodes.is_empty() && changes.elevated_nodes.is_empty() {
         return;
     }
     graph.set_changed();
@@ -137,7 +137,7 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
     if *phase.get() == GamePhase::InGame {
         path_changes.write(NavigationPathGraphChanged {
             root,
-            elevated: changes.elevated,
+            elevated: !changes.elevated_nodes.is_empty(),
         });
     }
 }

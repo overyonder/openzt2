@@ -5,7 +5,7 @@ use openzt2_interface_state::photos::photo_album_types::{AlbumMember, AlbumPhoto
 use openzt2_interface_state::photos::photo_capture_types::Photo;
 
 use openzt2_game_data::ui_document::{
-    action::{UiActionRecord, photography::UiPhotoAction, presentation::UiPresentationAction},
+    action::{photography::UiPhotoAction, presentation::UiPresentationAction, UiActionRecord},
     node::*,
     node_property_binding::*,
     widget_live_collection::UiWidgetLiveCollectionSource,
@@ -32,10 +32,10 @@ use openzt2_world_state::world_spawn::{
 
 use super::album_operations::{ordered_photo_album_entities, photo_rank_for_album_display_slot};
 use super::photo_album_types::{
-    ActivePhotoAlbum, EnlargedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS, PHOTO_CAMERA_ROLL_CAPACITY,
-    PhotoAlbumCapacityPages, PhotoAlbumChoiceRow, PhotoAlbumPage, PhotoCameraRoll,
-    PhotoCameraRollRow, PhotoMoveTarget, SelectedAlbumPhoto, WorldActivePhotoAlbum,
-    WorldPhotoCameraRoll,
+    ActivePhotoAlbum, EnlargedAlbumPhoto, PhotoAlbumCapacityPages, PhotoAlbumChoiceRow,
+    PhotoAlbumPage, PhotoCameraRoll, PhotoCameraRollRow, PhotoMoveTarget, SelectedAlbumPhoto,
+    WorldActivePhotoAlbum, WorldPhotoCameraRoll, INITIAL_PHOTO_ALBUM_SPREADS,
+    PHOTO_CAMERA_ROLL_CAPACITY,
 };
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPhotoActions;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPresentationActions;

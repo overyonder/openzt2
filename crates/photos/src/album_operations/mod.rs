@@ -10,8 +10,8 @@ use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::photo_album_types::{
-    ActivePhotoAlbum, DeletePhotoRequest, PHOTO_ALBUM_PAGE_SIZE, PHOTO_CAMERA_ROLL_CAPACITY,
-    PhotoAlbumCapacityPages, PhotoAlbumPage, PhotoCameraRoll, PhotoMove, SelectedAlbumPhoto,
+    ActivePhotoAlbum, DeletePhotoRequest, PhotoAlbumCapacityPages, PhotoAlbumPage, PhotoCameraRoll,
+    PhotoMove, SelectedAlbumPhoto, PHOTO_ALBUM_PAGE_SIZE, PHOTO_CAMERA_ROLL_CAPACITY,
 };
 
 pub(super) fn calculate_active_photo_album_page_offset(

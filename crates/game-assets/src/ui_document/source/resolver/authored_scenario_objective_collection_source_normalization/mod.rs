@@ -21,7 +21,11 @@ pub(super) fn normalize_authored_scenario_objective_collection(
         return;
     }
 
-    let template_owner = format!("{:032x}_{}", u128::from_le_bytes(document.0), node.span.start);
+    let template_owner = format!(
+        "{:032x}_{}",
+        u128::from_le_bytes(document.0),
+        node.span.start
+    );
     let row_template_name = format!("{OBJECTIVE_ROW_TEMPLATE_PREFIX}{template_owner}");
     let objective_row_template =
         create_authored_scenario_objective_row_template(node, &row_template_name);

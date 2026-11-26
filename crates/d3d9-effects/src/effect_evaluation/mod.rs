@@ -2,7 +2,10 @@ use std::path::Path;
 
 use crate::{
     effect_compilation::compile_d3d9_effect_source_to_fx2_bytecode,
-    effect_types::{D3d9EffectIncludeResolver, D3d9EffectParameterAssignment, EvaluatedD3d9Effect},
+    effect_types::{
+        CompiledD3d9EffectBytecode, D3d9EffectIncludeResolver, D3d9EffectParameterAssignment,
+        EvaluatedD3d9Effect,
+    },
     error::D3d9EffectProcessingError,
 };
 
@@ -30,9 +33,21 @@ pub fn compile_and_evaluate_d3d9_effect_source(
 ) -> Result<EvaluatedD3d9Effect, D3d9EffectProcessingError> {
     let compiled_effect_bytecode =
         compile_d3d9_effect_source_to_fx2_bytecode(effect_path, effect_source, include_resolver)?;
+    evaluate_compiled_d3d9_effect(&compiled_effect_bytecode, parameter_assignments)
+}
+
+/// Evaluates a compiled FX2 effect with the requested parameter values.
+///
+/// # Errors
+///
+/// Returns errors when the effect or parameter values cannot be evaluated.
+pub fn evaluate_compiled_d3d9_effect(
+    compiled_effect_bytecode: &CompiledD3d9EffectBytecode,
+    parameter_assignments: &[D3d9EffectParameterAssignment<'_>],
+) -> Result<EvaluatedD3d9Effect, D3d9EffectProcessingError> {
     let effect_allocation =
         mojoshader_effect_allocation::open_compiled_d3d9_effect_bytecode_with_mojoshader(
-            &compiled_effect_bytecode,
+            compiled_effect_bytecode,
         )?;
     parameter_application::apply_d3d9_effect_parameter_assignments_to_mojoshader_effect(
         effect_allocation.native_effect_pointer,

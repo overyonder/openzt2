@@ -7,11 +7,5 @@ use std::time::Duration;
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct UiTimedEventRecord {
     pub due: Duration,
-    pub action: UiTimedEventAction,
-}
-
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
-pub enum UiTimedEventAction {
-    Ui(UiActionRecord),
-    ScenarioScript(String),
+    pub action: UiActionRecord,
 }

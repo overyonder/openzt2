@@ -1,18 +1,5 @@
 use bevy::prelude::*;
-use openzt2_game_data::ui_document::overview_map_presentation::{
-    UiMapColorsRecord, UiOverviewCanvas,
-};
 use openzt2_game_data::AssetId;
-
-/// One authored overview-map layer and its Bevy image projection.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OverviewMapCanvas {
-    pub surface: Entity,
-    pub layer: u32,
-    pub source: UiOverviewCanvas,
-    pub palette: UiMapColorsRecord,
-    pub painted: bool,
-}
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExportOverviewMap {

@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use openzt2_game_data::ui_document::action::staff_management::UiWorkerDuty;
+use openzt2_game_data::AssetId;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 #[relationship(relationship_target = StaffAssignedToArea)]
@@ -27,22 +27,28 @@ pub struct KeeperAssignmentSelection(pub Option<u32>);
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrainerAssignmentSelection(pub Option<u32>);
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CleansFilters;
+/// Player overrides of the worker's default authored duty assignments.
+#[derive(Component, Debug, Default, PartialEq, Eq)]
+pub struct WorkerDutyAssignments(std::collections::BTreeSet<AssetId>);
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CleansRecycling;
+impl WorkerDutyAssignments {
+    pub fn is_assigned(&self, task: AssetId) -> bool {
+        !self.0.contains(&task)
+    }
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct EmptiesTrash;
-
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct SweepsTrash;
+    pub fn set_assigned(&mut self, task: AssetId, assigned: bool) {
+        if assigned {
+            self.0.remove(&task);
+        } else {
+            self.0.insert(task);
+        }
+    }
+}
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SetStaffWorkerDutyAssignment {
     pub worker: Entity,
-    pub duty: UiWorkerDuty,
+    pub task: AssetId,
     pub assigned: bool,
 }
 

@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::{
-    AssetId, localization::LocalizationCatalog,
-    world_definitions::guest_simulation_definitions::PersonNamePool,
+    localization::LocalizationCatalog,
+    world_definitions::guest_simulation_definitions::PersonNamePool, AssetId,
 };
 use std::collections::BTreeMap;
 

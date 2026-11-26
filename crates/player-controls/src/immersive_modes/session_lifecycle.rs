@@ -77,7 +77,7 @@ pub(super) fn release_session(
 }
 
 fn end_training_for_dead_subject(
-    death: On<Add, Dead>,
+    death: On<Add<Dead>>,
     subjects: Query<&FirstPersonTrainingSessions>,
     mut commands: Commands,
 ) {
@@ -85,7 +85,7 @@ fn end_training_for_dead_subject(
 }
 
 fn end_training_for_removed_animal(
-    removal: On<Remove, Animal>,
+    removal: On<Remove<Animal>>,
     subjects: Query<&FirstPersonTrainingSessions>,
     mut commands: Commands,
 ) {

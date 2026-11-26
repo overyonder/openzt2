@@ -1,7 +1,7 @@
 //! Fossil recovery and assembly as focused ECS facts and operations.
 
-mod extinct_animal_world_hydration;
 mod behavior_artifact_execution;
+mod extinct_animal_world_hydration;
 mod fossil_assembly;
 mod fossil_definition_index;
 mod fossil_dig_target_geometry;
@@ -30,6 +30,7 @@ impl Plugin for ExtinctAnimalsPlugin {
         fossil_sonar::register_fossil_sonar_projection(app);
         fossil_find_effect::register(app);
         behavior_artifact_execution::register(app);
+        app.add_observer(fossil_discovery::discover_authored_fossil);
         app.init_resource::<fossil_definition_index::FossilDefinitionIndex>()
             .add_message::<DiscoverFossilAtSiteRequest>()
             .add_message::<PlaceFossilPieceInAssemblyRequest>()

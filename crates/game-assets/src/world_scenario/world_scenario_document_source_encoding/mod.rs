@@ -1,8 +1,8 @@
 //! Binary encoding of canonical world source documents.
 
 use super::world_scenario_document_source::WorldScenarioDocumentSource;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_scenario::WORLD_SCENARIO_VERSION;
+use openzt2_game_data::AssetId;
 use std::{collections::BTreeSet, io};
 
 const MAGIC: &[u8; 8] = b"OZTWORLD";

@@ -3,7 +3,8 @@ use bevy::camera::visibility::VisibilitySystems;
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use openzt2_world_state::world_spawn::{
-    world_entity_crating::WorldEntityIsCrated, world_entity_view_filter::HiddenByWorldViewFilter,
+    world_entity_crating::{AnimalCrate, ScriptedCrating},
+    world_entity_view_filter::HiddenByWorldViewFilter,
 };
 use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject;
 
@@ -36,16 +37,17 @@ fn publish_model_rendering_suppression_sources(
         Entity,
         Or<(
             Added<RelocatingPlacedObject>,
-            Added<WorldEntityIsCrated>,
+            Or<(Added<AnimalCrate>, Added<ScriptedCrating>)>,
             Added<HiddenByWorldViewFilter>,
         )>,
     >,
     mut relocation_ended: RemovedComponents<RelocatingPlacedObject>,
-    mut uncrated: RemovedComponents<WorldEntityIsCrated>,
+    mut uncrated: RemovedComponents<AnimalCrate>,
+    mut script_uncrated: RemovedComponents<ScriptedCrating>,
     mut filter_released: RemovedComponents<HiddenByWorldViewFilter>,
     sources: Query<(
         Has<RelocatingPlacedObject>,
-        Has<WorldEntityIsCrated>,
+        (Has<AnimalCrate>, Has<ScriptedCrating>),
         Has<HiddenByWorldViewFilter>,
         Has<Propagate<ModelRenderingSuppressed>>,
     )>,
@@ -56,14 +58,14 @@ fn publish_model_rendering_suppression_sources(
         added
             .iter()
             .chain(relocation_ended.read())
-            .chain(uncrated.read())
+            .chain(uncrated.read().chain(script_uncrated.read()))
             .chain(filter_released.read()),
     );
     for &entity in changed.iter() {
         let Ok((relocating, crated, filtered, propagated)) = sources.get(entity) else {
             continue;
         };
-        match (relocating || crated || filtered, propagated) {
+        match (relocating || crated.0 || crated.1 || filtered, propagated) {
             (true, false) => {
                 commands
                     .entity(entity)
@@ -118,11 +120,7 @@ mod tests {
         register_inherited_model_render_suppression(&mut app);
         let animal = app
             .world_mut()
-            .spawn((
-                WorldEntityIsCrated,
-                HiddenByWorldViewFilter,
-                Visibility::Hidden,
-            ))
+            .spawn((ScriptedCrating, HiddenByWorldViewFilter))
             .id();
         let gate = app
             .world_mut()
@@ -130,7 +128,12 @@ mod tests {
             .id();
         let mesh = app
             .world_mut()
-            .spawn((Mesh3d::default(), RenderLayers::layer(3), ChildOf(gate)))
+            .spawn((
+                Mesh3d::default(),
+                RenderLayers::layer(3),
+                Visibility::Hidden,
+                ChildOf(gate),
+            ))
             .id();
 
         app.update();
@@ -151,14 +154,14 @@ mod tests {
         );
         app.world_mut()
             .entity_mut(animal)
-            .remove::<WorldEntityIsCrated>();
+            .remove::<ScriptedCrating>();
         app.update();
         assert_eq!(
             app.world().get::<Visibility>(gate),
             Some(&Visibility::Inherited)
         );
         assert_eq!(
-            app.world().get::<Visibility>(animal),
+            app.world().get::<Visibility>(mesh),
             Some(&Visibility::Hidden)
         );
         assert_eq!(

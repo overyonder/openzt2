@@ -2,6 +2,7 @@
 
 use std::io;
 
+use crate::asset_source::generated_asset_publication::GeneratedAssetPublication;
 use bevy::{asset::LoadContext, prelude::*};
 
 use super::{
@@ -19,6 +20,26 @@ pub fn create_material_asset_from_evaluated_d3d9_effect(
     texture_asset_paths: Vec<(String, String)>,
     evaluated_pass_label_prefix: &str,
     load_context: &mut LoadContext<'_>,
+    texture_coordinate_animations: &std::sync::Arc<
+        [super::runtime::texture_coordinate_animation::TextureCoordinateAnimation],
+    >,
+    reflection_projections: &[(usize, usize, [f32; 16])],
+) -> io::Result<MaterialAsset> {
+    publish_material_asset_from_evaluated_d3d9_effect(
+        evaluated_d3d9_effect,
+        texture_asset_paths,
+        evaluated_pass_label_prefix,
+        &mut GeneratedAssetPublication::Labeled(load_context),
+        texture_coordinate_animations,
+        reflection_projections,
+    )
+}
+
+pub(crate) fn publish_material_asset_from_evaluated_d3d9_effect(
+    evaluated_d3d9_effect: d3d9_effects::effect_types::EvaluatedD3d9Effect,
+    texture_asset_paths: Vec<(String, String)>,
+    evaluated_pass_label_prefix: &str,
+    load_context: &mut GeneratedAssetPublication<'_, '_>,
     texture_coordinate_animations: &std::sync::Arc<
         [super::runtime::texture_coordinate_animation::TextureCoordinateAnimation],
     >,
@@ -49,6 +70,7 @@ pub fn create_material_asset_from_evaluated_d3d9_effect(
                 &format!("{evaluated_pass_label_prefix}-technique-{technique_index}"),
                 texture_coordinate_animations,
                 reflection_projections,
+                None,
             )
             .map(
                 |pass_material_assets| EvaluatedTechniquePassMaterialAssets {
@@ -72,6 +94,7 @@ pub fn create_material_asset_from_evaluated_d3d9_effect(
         })
         .collect();
     Ok(MaterialAsset {
+        netimmerse_material_animations: Default::default(),
         netimmerse_texture_binding: None,
         evaluated_d3d9_effect,
         _source_dependencies: Box::default(),

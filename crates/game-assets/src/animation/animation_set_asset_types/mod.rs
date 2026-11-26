@@ -52,6 +52,14 @@ pub struct AnimationClipSourceAsset {
     pub loop_bounds: Option<std::ops::Range<f32>>,
 }
 
+#[derive(EntityEvent, Clone)]
+pub struct AuthoredAnimationKeyframeEvent {
+    pub entity: Entity,
+    pub timeline: Arc<[AnimationTimelineKey]>,
+    pub first_key: usize,
+    pub end_key: usize,
+}
+
 #[derive(Debug)]
 pub struct AnimationTimelineKey {
     pub milliseconds: u32,

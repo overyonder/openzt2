@@ -21,7 +21,7 @@ use openzt2_world_state::{
     },
     world_spawn::{
         persistent_id_types::{PersistentId, PersistentIdAllocator},
-        world_entity_crating::WorldEntityIsCrated,
+        world_entity_crating::ScriptedCrating,
         world_membership_types::{WorldMember, WorldRoot},
     },
 };
@@ -294,7 +294,7 @@ fn apply_entity_commands(
                 );
             }
             ScenarioEntityCommand::Crate(entity) if animals.contains(*entity) => {
-                commands.entity(*entity).insert(WorldEntityIsCrated);
+                commands.entity(*entity).insert(ScriptedCrating);
             }
             _ => {}
         }

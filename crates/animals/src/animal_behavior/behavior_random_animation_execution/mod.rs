@@ -82,6 +82,7 @@ pub(super) fn start_next_random_behavior_animation(
                     blend_duration_milliseconds: 0,
                     playback_speed_permille: 1000,
                     playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
+                    action_settings: None,
                 });
                 commands
                     .entity(actor)

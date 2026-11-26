@@ -46,9 +46,6 @@ pub(super) struct WorldPhotoCameraRoll(Entity);
 pub(super) struct PhotoPointerPress(pub Option<(Entity, Entity)>);
 
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct PhotoHelpShown;
-
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct PhotoAlbumPage(pub u32);
 
 #[derive(Component, Default, PartialEq, Eq)]

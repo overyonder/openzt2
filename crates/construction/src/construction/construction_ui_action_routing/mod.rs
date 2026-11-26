@@ -30,7 +30,7 @@ use openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushPreview;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_world_state::world_spawn::world_entity_crating::RemoveWorldEntityFromCrate;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::ScriptedCrating;
 
 use crate::topology::topology_construction_preview_types::FencePreview;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiConstructionActions;
@@ -190,7 +190,10 @@ pub(super) fn route_construction_ui_actions(
     >,
     relocating: Query<Entity, With<RelocatingPlacedObject>>,
     mut pending_rotations: Query<&mut PlacementRotationRequest>,
-    mut previews: Query<(Entity, Option<&mut TerrainBrushPreview>), With<ConstructionPreview>>,
+    (mut previews, mut placement_ranges): (
+        Query<(Entity, Option<&mut TerrainBrushPreview>), With<ConstructionPreview>>,
+        Query<&mut crate::placement::biome_automatic_object_placement_edit_preparation::BiomeAutomaticPlacementRanges>,
+    ),
     mut commands: Commands,
 ) {
     for activation in activations.read() {
@@ -340,21 +343,8 @@ pub(super) fn route_construction_ui_actions(
                         }
                     }
                 }
-                UiConstructionAction::SetTerrainCursorSize { direction } => {
-                    let Some(radius_m) = policy
-                        .adjust_selected_terrain_brush_radius_by_authored_half_metre_step(
-                            *selected_tool,
-                            *direction,
-                        )
-                    else {
-                        continue;
-                    };
-                    for (_, preview) in &mut previews {
-                        if let Some(mut preview) = preview {
-                            preview.radius_m = radius_m;
-                        }
-                    }
-                }
+                UiConstructionAction::SetTerrainCursorSize { .. }
+                | UiConstructionAction::SetTerrainFlattenSpeed { .. } => {}
                 UiConstructionAction::SetPlacementObject { definition } => {
                     let definition = *definition;
                     let catalogue = active_definitions.get(&definitions);
@@ -404,7 +394,7 @@ pub(super) fn route_construction_ui_actions(
                         .subject()
                         .filter(|entity| placeables.get(*entity).is_ok())
                     {
-                        commands.entity(entity).insert(WorldEntityIsCrated);
+                        commands.entity(entity).insert(ScriptedCrating);
                     }
                 }
                 UiConstructionAction::SetBiome { biome } => {
@@ -459,6 +449,20 @@ pub(super) fn route_construction_ui_actions(
                 }
                 UiConstructionAction::SetBiomePaintTrees { enabled } => {
                     policy.biome_paint_trees = *enabled;
+                }
+                UiConstructionAction::SetBiomeAutomaticPlacementTable { ranges } => {
+                    use crate::placement::biome_automatic_object_placement_edit_preparation::BiomeAutomaticPlacementRanges;
+                    for (entity, brush) in &mut previews {
+                        if brush.is_none() {
+                            continue;
+                        }
+                        let next = BiomeAutomaticPlacementRanges(ranges.clone());
+                        if let Ok(mut current) = placement_ranges.get_mut(entity) {
+                            current.set_if_neq(next);
+                        } else {
+                            commands.entity(entity).insert(next);
+                        }
+                    }
                 }
                 UiConstructionAction::SetBiomeAutomaticPlacementVariation { variation } => {
                     policy.biome_automatic_placement_variation = *variation;
@@ -519,23 +523,6 @@ pub(super) fn route_construction_ui_actions(
                                 preview.kind = TerrainBrushKind::Flatten {
                                     height_cm: policy.terrain_flatten_height_cm,
                                 };
-                            }
-                        }
-                    }
-                }
-                UiConstructionAction::SetTerrainFlattenSpeed {
-                    strength_tenths_per_second,
-                } => {
-                    policy.terrain_flatten_strength_tenths_per_second = strength_tenths_per_second
-                        .unsigned_abs()
-                        .min(u32::from(u16::MAX))
-                        as u16;
-                    let strength =
-                        f32::from(policy.terrain_flatten_strength_tenths_per_second) / 10.0;
-                    for (_, preview) in &mut previews {
-                        if let Some(mut preview) = preview {
-                            if matches!(preview.kind, TerrainBrushKind::Flatten { .. }) {
-                                preview.strength_per_s = strength;
                             }
                         }
                     }

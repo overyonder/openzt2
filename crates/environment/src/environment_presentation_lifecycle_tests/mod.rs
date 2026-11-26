@@ -79,7 +79,7 @@ fn registered_world_exit_flushes_members_before_environment_and_surviving_camera
 
     let mut application = App::new();
     application
-        .add_plugins((WorldSpawnPlugin, EnvironmentPlugin))
+        .add_plugins((AssetPlugin::default(), WorldSpawnPlugin, EnvironmentPlugin))
         .edit_schedule(OnExit(GamePhase::InGame), |schedule| {
             schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
         });

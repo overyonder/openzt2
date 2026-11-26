@@ -29,7 +29,7 @@ pub(crate) fn new_rng() -> Pcg32 {
 pub struct Random(pub Pcg32);
 
 /// Marks an effect whose application owns ticking and writing its spawner.
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub struct ExternalEffectSpawner;
 
 /// Utility trait to help implementing [`std::hash::Hash`] for [`CpuValue`] of

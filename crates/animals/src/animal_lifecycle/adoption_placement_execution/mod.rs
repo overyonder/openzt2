@@ -430,7 +430,7 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
                 .saturating_mul(i64::from(availability.multiplier_permille))
                 / 1000;
             if unlimited_zoo_cash.as_ref().is_none_or(|policy| !policy.0)
-                && zoo_cash.0.0 < adoption_cost.0
+                && zoo_cash.0 .0 < adoption_cost.0
             {
                 PlacementValidity::Invalid(PlacementFailure::Unaffordable)
             } else {
@@ -488,7 +488,7 @@ pub(super) fn confirm_selected_species_adoption_into_habitat(
     else {
         return;
     };
-    let Some((valid_preview, site)) = previews.iter().find(|(preview, site)| {
+    let Some((valid_preview, site)) = previews.iter().find(|(preview, _)| {
         preview.definition == requested_prefab.0
             && matches!(preview.validity, PlacementValidity::Valid { .. })
     }) else {

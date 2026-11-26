@@ -10,7 +10,7 @@ use openzt2_game_assets::{
         SpawnCompleteParticleEffectDocument,
     },
     scene_prefab::ScenePrefabAsset,
-    ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
+    ui_document::ui_document_asset_types_and_borrowing_queries::{FameStarModel, UiDocumentAsset},
 };
 use openzt2_interface_state::ui::authored_ui_node_projection_components::{
     UiDocumentOwner, UiDocumentRoot, UiNodeId,
@@ -175,8 +175,8 @@ pub(super) fn present_fame_stars(
         };
         let steady_model = match filling {
             Filling::Empty => None,
-            Filling::Half => Some(&display.half.model),
-            Filling::Full => Some(&display.full.model),
+            Filling::Half => Some(&display.half),
+            Filling::Full => Some(&display.full),
         };
         if fame.is_changed()
             || well.is_added()
@@ -185,7 +185,14 @@ pub(super) fn present_fame_stars(
             || documents.is_changed()
         {
             if filling != well.filling {
-                let steady = steady_model.and_then(|model| prefabs.get(model));
+                let steady = steady_model.and_then(|model| {
+                    let prefab = prefabs.get(&model.model)?;
+                    Some((
+                        model,
+                        prefab,
+                        resolve_fame_star_effects(model, &prefabs, &effects)?,
+                    ))
+                });
                 if steady_model.is_some() && steady.is_none() {
                     continue;
                 }
@@ -198,14 +205,11 @@ pub(super) fn present_fame_stars(
                     let Some(model) = prefabs.get(&transition.model) else {
                         continue;
                     };
-                    if transition
-                        .effects
-                        .iter()
-                        .any(|cue| !effects.contains(&cue.effect))
-                    {
+                    let Some(cues) = resolve_fame_star_effects(transition, &prefabs, &effects)
+                    else {
                         continue;
-                    }
-                    Some(model)
+                    };
+                    Some((model, cues))
                 } else {
                     None
                 };
@@ -213,34 +217,21 @@ pub(super) fn present_fame_stars(
                     commands.entity(previous).try_despawn();
                 }
                 let has_transition = transition_model.is_some();
-                if let Some(prefab) = transition_model {
-                    let model =
-                        spawn_fame_star_model(&mut commands, entity, prefab, Visibility::Inherited);
+                if let Some((prefab, cues)) = transition_model {
+                    let model = spawn_fame_star_model(
+                        &mut commands,
+                        entity,
+                        prefab,
+                        transition,
+                        Visibility::Inherited,
+                    );
                     commands
                         .entity(model)
                         .insert(FameStarTransient(Timer::from_seconds(
                             transition.duration_seconds.max(0.0),
                             TimerMode::Once,
                         )));
-                    for cue in &transition.effects {
-                        let effect = spawn_complete_particle_effect_document(
-                            &mut commands,
-                            &SpawnCompleteParticleEffectDocument {
-                                particle_effect_asset: cue.effect.clone(),
-                                parent_entity: Some(entity),
-                                inherit_parent_rotation: true,
-                                effect_transform: Transform::IDENTITY,
-                                manual_particle_count: 0,
-                            },
-                        );
-                        commands.entity(effect).insert((
-                            RenderLayers::layer(STAR_RENDER_LAYER),
-                            FameStarTransient(Timer::from_seconds(
-                                cue.duration_seconds.max(0.0),
-                                TimerMode::Once,
-                            )),
-                        ));
-                    }
+                    spawn_fame_star_effects(&mut commands, entity, cues);
                 }
                 well.filling = filling;
                 let delay = if has_transition {
@@ -249,17 +240,22 @@ pub(super) fn present_fame_stars(
                     0.0
                 };
                 well.reveal = Timer::from_seconds(delay, TimerMode::Once);
-                well.stable = steady.map(|prefab| {
-                    spawn_fame_star_model(
+                well.stable = steady.map(|(model, prefab, cues)| {
+                    let stable = spawn_fame_star_model(
                         &mut commands,
                         entity,
                         prefab,
+                        model,
                         if delay > 0.0 {
                             Visibility::Hidden
                         } else {
                             Visibility::Inherited
                         },
-                    )
+                    );
+                    if animate {
+                        spawn_fame_star_effects(&mut commands, stable, cues);
+                    }
+                    stable
                 });
             }
         }
@@ -288,10 +284,15 @@ fn spawn_fame_star_model(
     commands: &mut Commands,
     well: Entity,
     prefab: &ScenePrefabAsset,
+    model: &FameStarModel,
     visibility: Visibility,
 ) -> Entity {
     let holder = commands
-        .spawn((ChildOf(well), Transform::IDENTITY, visibility))
+        .spawn((
+            ChildOf(well),
+            Transform::from_scale(Vec3::splat(model.scale)),
+            visibility,
+        ))
         .id();
     let (_, renderables, _) = spawn_prefab_render_tree(commands, prefab, holder, false);
     for entity in renderables {
@@ -300,6 +301,55 @@ fn spawn_fame_star_model(
             .insert(RenderLayers::layer(STAR_RENDER_LAYER));
     }
     holder
+}
+
+fn resolve_fame_star_effects(
+    model: &FameStarModel,
+    prefabs: &Assets<ScenePrefabAsset>,
+    effects: &Assets<ParticleEffectDocumentAsset>,
+) -> Option<Vec<(Handle<ParticleEffectDocumentAsset>, Option<f32>)>> {
+    use openzt2_game_data::scene_prefab::ScenePrefabAssetDependencyKind;
+
+    let mut ready = Vec::new();
+    for cue in &model.effects {
+        let prefab = prefabs.get(&cue.prefab)?;
+        for dependency in &prefab.canonical_scene_prefab_document().dependencies {
+            if dependency.asset_kind != ScenePrefabAssetDependencyKind::Effect {
+                continue;
+            }
+            let handle = prefab.loaded_particle_effect_asset_handle(dependency.asset_id)?;
+            effects.get(handle)?;
+            ready.push((handle.clone(), cue.duration_seconds));
+        }
+    }
+    Some(ready)
+}
+
+fn spawn_fame_star_effects(
+    commands: &mut Commands,
+    owner: Entity,
+    cues: Vec<(Handle<ParticleEffectDocumentAsset>, Option<f32>)>,
+) {
+    for (effect, duration) in cues {
+        let instance = spawn_complete_particle_effect_document(
+            commands,
+            &SpawnCompleteParticleEffectDocument {
+                particle_effect_asset: effect,
+                parent_entity: Some(owner),
+                inherit_parent_rotation: true,
+                effect_transform: Transform::IDENTITY,
+                manual_particle_count: 0,
+            },
+        );
+        let mut instance = commands.entity(instance);
+        instance.insert(RenderLayers::layer(STAR_RENDER_LAYER));
+        if let Some(duration) = duration {
+            instance.insert(FameStarTransient(Timer::from_seconds(
+                duration.max(0.0),
+                TimerMode::Once,
+            )));
+        }
+    }
 }
 
 pub(super) fn expire_fame_star_transients(
@@ -337,7 +387,7 @@ pub(super) fn set_fame_star_camera_visibility(
     scenes: Query<&FameStarSceneFor>,
     owners: Query<&InheritedVisibility>,
 ) {
-    for (parent, mut camera) in &mut cameras {
+    for (parent, camera) in &mut cameras {
         let Ok(owner) = scenes.get(parent.parent()) else {
             continue;
         };

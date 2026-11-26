@@ -6,9 +6,9 @@ use openzt2_world_state::simulation_time::simulation_control_queries::simulation
 use openzt2_zoo_state::animal_health::types::Dead;
 
 use super::{
-    GamePhase,
     animal_age_resolution::resolve_animal_life_stage_from_elapsed_age_ticks,
     types::{Age, Animal, AnimalLifeStage, AuthoredAnimalLifeStageStartTicks},
+    GamePhase,
 };
 
 use std::collections::BTreeSet;

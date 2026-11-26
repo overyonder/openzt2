@@ -29,6 +29,9 @@ pub(super) struct TerrainDirtyRegion {
 pub(super) struct TerrainDirtyFlags(pub(crate) u8);
 
 impl TerrainDirtyFlags {
+    pub(super) const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
     pub(super) const HEIGHT: Self = Self(1);
     pub(super) const SURFACE: Self = Self(2);
     pub(super) const WATER: Self = Self(4);

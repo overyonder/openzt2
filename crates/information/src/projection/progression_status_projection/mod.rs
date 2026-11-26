@@ -3,10 +3,10 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::{
-    AssetId,
     ui_document::node_property_binding::{
         UiBooleanPropertyBindingSource, UiIntegerPropertyBindingSource, UiTextPropertyBindingSource,
     },
+    AssetId,
 };
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;

@@ -18,8 +18,8 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::{
-    AssetId, animation::animation_text_key::AuthoredAnimationTextAction,
-    world_definitions::world_objects::WorldObjectPropertyFlags,
+    animation::animation_text_key::AuthoredAnimationTextAction,
+    world_definitions::world_objects::WorldObjectPropertyFlags, AssetId,
 };
 
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;

@@ -14,9 +14,12 @@ use openzt2_world_state::{
         simulation_clock_types::ZooClock,
     },
     world_spawn::{
-        persistent_id_types::PersistentId, starting_animal_hydration::PendingStartingAnimal,
-        world_entity_crating::WorldEntityIsCrated, world_hydration_types::WorldHydration,
-        world_load_failure::WorldLoadFailure, world_membership_types::WorldMember,
+        persistent_id_types::PersistentId,
+        starting_animal_hydration::PendingStartingAnimal,
+        world_entity_crating::{AnimalCrate, ScriptedCrating},
+        world_hydration_types::WorldHydration,
+        world_load_failure::WorldLoadFailure,
+        world_membership_types::WorldMember,
     },
 };
 use openzt2_zoo_state::{
@@ -37,7 +40,7 @@ pub(super) fn hydrate_starting_animals(
             &PersistentId,
             &WorldMember,
             &Transform,
-            Has<WorldEntityIsCrated>,
+            (Has<AnimalCrate>, Has<ScriptedCrating>),
         ),
         Without<Animal>,
     >,
@@ -84,7 +87,7 @@ pub(super) fn hydrate_starting_animals(
             .insert(ScriptedAnimalInitialization {
                 needs: saved.initial_needs.clone(),
             });
-        if crated {
+        if crated.0 || crated.1 {
             commands.entity(entity).insert(Visibility::Hidden);
         }
     }

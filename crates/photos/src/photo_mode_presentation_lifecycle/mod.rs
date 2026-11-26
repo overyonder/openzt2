@@ -14,7 +14,9 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
-use openzt2_ui::animation::UiShowHideAnimation;
+use openzt2_ui::animation::{
+    UiAnimationPlaybackOperation, UiAnimationPlaybackRequest, UiShowHideAnimation,
+};
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -82,12 +84,14 @@ pub(super) fn initialize_authored_photo_mode_transient_surface_visibility_after_
             &Name,
             &UiDocumentOwner,
             &mut Visibility,
-            Option<&mut UiShowHideAnimation>,
+            Has<UiShowHideAnimation>,
         ),
         Added<UiDocumentOwner>,
     >,
+    mut animations: MessageWriter<UiAnimationPlaybackRequest>,
+    profile: Option<Res<openzt2_interface_state::persistence::profile_types::ProfileOptions>>,
 ) {
-    for (entity, name, document_owner, mut visibility, animation) in &mut projected_nodes {
+    for (entity, name, document_owner, mut visibility, animates) in &mut projected_nodes {
         let Ok(document_lifecycle_owner) = document_roots.get(document_owner.0) else {
             continue;
         };
@@ -97,9 +101,22 @@ pub(super) fn initialize_authored_photo_mode_transient_surface_visibility_after_
         match name.as_str() {
             "cursor_mode_screen" => {
                 visibility.set_if_neq(Visibility::Inherited);
-                if let Some(mut animation) = animation {
-                    animation.start_authored_visibility_transition(true);
+                if animates {
+                    animations.write(UiAnimationPlaybackRequest {
+                        entity,
+                        operation: UiAnimationPlaybackOperation::Transition(true),
+                    });
                 }
+            }
+            "help2 screen" | "help2 screen text"
+                if profile.as_ref().is_some_and(|profile| {
+                    profile
+                        .attributes
+                        .get("photohelpshown")
+                        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+                }) =>
+            {
+                visibility.set_if_neq(Visibility::Hidden);
             }
             "photo challenges layout" => {
                 commands.entity(entity).insert(PhotoChallengeGoals);

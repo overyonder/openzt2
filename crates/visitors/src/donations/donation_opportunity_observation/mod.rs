@@ -7,7 +7,7 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_data::{AssetId};
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::{AnimalCrate, ScriptedCrating};
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::{Animal, SpeciesHandle, AnimalVariant};
 use openzt2_zoo_state::economy::money_types::Money;
@@ -26,7 +26,7 @@ pub(super) fn hydrate_animal_donation_opportunities(
             &AnimalVariant,
             Option<&DonationOpportunity>,
             Has<Dead>,
-            Has<WorldEntityIsCrated>,
+            (Has<AnimalCrate>, Has<ScriptedCrating>),
         ),
         With<Animal>,
     >,
@@ -37,7 +37,7 @@ pub(super) fn hydrate_animal_donation_opportunities(
     for (entity, handle, variant, current, dead, crated) in &animals {
         let definition = species.find(handle.species);
         let policy = definition.and_then(|definition| definition.donation);
-        if dead || crated || policy.is_none() {
+        if dead || crated.0 || crated.1 || policy.is_none() {
             if current.is_some() {
                 commands.entity(entity).remove::<DonationOpportunity>();
             }

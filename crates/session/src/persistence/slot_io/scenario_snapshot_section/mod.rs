@@ -16,10 +16,7 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_assets::{
-    lua_script::{
-        lua_script_archive_path_index::LuaScriptArchivePathIndex,
-        lua_script_asset_loading::LuaScriptAsset,
-    },
+    lua_script::{lua_script_asset_loading::LuaScriptAsset, lua_script_sources::LuaScriptSources},
     world_scenario::{
         world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios,
         world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
@@ -538,7 +535,7 @@ pub(in crate::persistence) struct ScenarioSnapshotApplication<'w, 's> {
     scenarios: Option<Res<'w, WorldScenarios>>,
     assets: Option<Res<'w, Assets<WorldScenarioDocumentAsset>>>,
     scripts: Option<Res<'w, Assets<LuaScriptAsset>>>,
-    script_index: Option<Res<'w, LuaScriptArchivePathIndex>>,
+    script_sources: Option<Res<'w, LuaScriptSources>>,
     existing_groups: Query<'w, 's, &'static ScenarioObjectiveGroups>,
     existing: Query<
         'w,
@@ -762,7 +759,7 @@ fn prepare_current_runtime(
             .as_deref()
             .ok_or(Failure::CorruptSnapshotSection)?,
         parameters
-            .script_index
+            .script_sources
             .as_deref()
             .ok_or(Failure::CorruptSnapshotSection)?,
     )
@@ -989,17 +986,6 @@ fn spawn_restored_objectives(
             .collect(),
         policies,
     );
-}
-
-pub(super) fn scripts_are_pending(
-    parameters: &ScenarioSnapshotApplication,
-    server: &AssetServer,
-) -> bool {
-    parameters
-        .script_index
-        .as_deref()
-        .zip(parameters.scripts.as_deref())
-        .is_some_and(|(index, scripts)| index.has_pending_script_loads(server, scripts))
 }
 
 #[cfg(test)]

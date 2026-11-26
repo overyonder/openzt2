@@ -12,8 +12,8 @@ pub struct WorldEnvironment {
     pub definition: AssetId,
 }
 
-#[derive(Resource, Default, Clone, Debug, PartialEq)]
-pub enum WaterEnvironmentMapSample {
+#[derive(Default, Clone, Debug, PartialEq)]
+pub enum EnvironmentMapTexture {
     #[default]
     Unresolved,
     Unauthored,
@@ -21,7 +21,13 @@ pub enum WaterEnvironmentMapSample {
     Texture(Handle<Image>),
 }
 
-impl WaterEnvironmentMapSample {
+#[derive(Component, Default, Clone, Debug, PartialEq)]
+pub struct EnvironmentMapSamples {
+    pub water: EnvironmentMapTexture,
+    pub object: EnvironmentMapTexture,
+}
+
+impl EnvironmentMapTexture {
     pub fn texture(&self) -> Option<&Handle<Image>> {
         match self {
             Self::Texture(texture) => Some(texture),

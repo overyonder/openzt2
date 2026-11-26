@@ -114,6 +114,7 @@ fn immersive_mode_captures_once_and_restore_is_exact() {
             zoom_speed_samples: [[0.0; 2]; 8],
             zoom_speed_sample_count: 0,
             sub_zero_zoom_multiplier: 1.0,
+            first_person_motion: None,
             ground_acceleration_mps2: 0.0,
         }],
         ..default()

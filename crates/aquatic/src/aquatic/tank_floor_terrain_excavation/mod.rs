@@ -213,7 +213,7 @@ pub(super) fn excavate_changed_tank_floors(
                 },
             ))
             .id();
-        commands.trigger(CommitTerrainEdit {
+        commands.write_message(CommitTerrainEdit {
             transaction,
             application: EditApplication::InitialCommit,
         });

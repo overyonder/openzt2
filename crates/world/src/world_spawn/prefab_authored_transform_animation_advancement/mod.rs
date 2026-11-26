@@ -1,8 +1,8 @@
+use crate::animation_playback::player_clock_lanes::PrefabRealTimeAnimation;
 use bevy::{animation::AnimatedBy, prelude::*};
 use openzt2_game_assets::scene_prefab::transform_animation_lowering::{
     PrefabMotion, PrefabMotionRotation, PrefabTransformClocks,
 };
-use openzt2_world_state::world_spawn::prefab_authored_rotation_cycle_advancement::PrefabRealTimeRotationClock;
 
 pub(super) fn insert_prefab_motion(
     entity: &mut EntityCommands<'_>,
@@ -16,8 +16,8 @@ pub(super) fn insert_prefab_motion(
     }
     entity.insert(PrefabTransformClocks(motion.transform_clocks.clone()));
     if let Some(node) = motion.spin {
-        player.start(node).pause();
-        entity.insert(PrefabRealTimeRotationClock { node, origin: None });
+        player.start(node).repeat().pause();
+        entity.insert(PrefabRealTimeAnimation(node));
     }
     if motion.has_rotation {
         entity.insert(PrefabMotionRotation {

@@ -1,4 +1,5 @@
 use bevy::ecs::schedule::SystemCondition;
+use openzt2_game_data::{ui_document::node::UiNodeHelpDefinition, AssetId};
 use std::{io, path::Path};
 
 use bevy::{
@@ -38,6 +39,7 @@ pub enum GraphicsDetailPreset {
 #[derive(Asset, TypePath)]
 pub struct GraphicsSettingsPresets {
     settings: [GraphicsSettings; 3],
+    detail_rows: Vec<GraphicsDetailRow>,
     particle_budgets: [Option<u32>; 3],
     renderer_budget_tier: ThreeLevelGraphicsDetail,
 }
@@ -46,6 +48,10 @@ impl GraphicsSettingsPresets {
     #[cfg(feature = "testing")]
     pub fn from_test_source(bytes: &[u8]) -> io::Result<Self> {
         parse_graphics_settings_presets(bytes)
+    }
+
+    pub fn detail_rows(&self) -> &[GraphicsDetailRow] {
+        &self.detail_rows
     }
 
     pub fn settings(
@@ -155,126 +161,254 @@ fn lower_graphics_settings_presets(
                 "graphics settings table has no settings rows",
             )
         })?;
+    let mut presets = ThreeLevelGraphicsDetail::VALUES.map(|tier| GraphicsSettings {
+        water_reflections: false,
+        particle_budget_tier: Some(tier),
+        ..GraphicsSettings::default()
+    });
+    let mut detail_rows = Vec::new();
+    for source in settings.element_children() {
+        let Some(row) = lower_graphics_detail_row(source)? else {
+            continue;
+        };
+        for (preset, column) in presets.iter_mut().zip(["low", "medium", "high"]) {
+            if let Some(value) = source.attribute_named_any(&[column, "disabled"]) {
+                let value = value.parse().map_err(|_| invalid_setting(source, column))?;
+                row.apply_value(value, preset);
+            }
+        }
+        if row.label != AssetId::default() {
+            detail_rows.push(row);
+        }
+    }
     Ok(GraphicsSettingsPresets {
-        settings: [
-            lower_graphics_settings_preset(settings, "low", ThreeLevelGraphicsDetail::Low)?,
-            lower_graphics_settings_preset(settings, "medium", ThreeLevelGraphicsDetail::Medium)?,
-            lower_graphics_settings_preset(settings, "high", ThreeLevelGraphicsDetail::High)?,
-        ],
+        settings: presets,
+        detail_rows,
         particle_budgets: [None; 3],
         renderer_budget_tier: ThreeLevelGraphicsDetail::High,
     })
 }
 
-fn lower_graphics_settings_preset(
-    settings: &OrderedSourceDocumentNode,
-    column: &str,
-    tier: ThreeLevelGraphicsDetail,
-) -> io::Result<GraphicsSettings> {
-    use ThreeLevelGraphicsDetail::{High, Low, Medium};
-    let mut result = GraphicsSettings {
-        water_reflections: false,
-        particle_budget_tier: Some(tier),
-        ..GraphicsSettings::default()
-    };
-    for row in settings.element_children() {
-        let Some(index) = row.attribute_named_any(&[column]) else {
-            continue;
-        };
-        let name = row.name.to_ascii_lowercase();
-        let invalid = || {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "invalid graphics preset setting {}={index:?} for {column}",
-                    row.name
-                ),
-            )
-        };
-        let index = index.parse::<usize>().map_err(|_| invalid())?;
-        let detail = || [Low, Medium, High].get(index).copied().ok_or_else(invalid);
-        let four_levels = || {
-            [
-                FourLevelGraphicsDetail::Low,
-                FourLevelGraphicsDetail::Medium,
-                FourLevelGraphicsDetail::High,
-                FourLevelGraphicsDetail::Ultra,
-            ]
-            .get(index)
-            .copied()
-            .ok_or_else(invalid)
-        };
-        let flag = || [false, true].get(index).copied().ok_or_else(invalid);
-        match name.as_str() {
-            "environmentdetail" => result.environment_detail = detail()?,
-            "lightingdetail" => result.lighting_detail = detail()?,
-            "shadowdetail" => {
-                result.shadow_detail = [
-                    ShadowDetail::Off,
-                    ShadowDetail::Medium,
-                    ShadowDetail::High,
-                    ShadowDetail::Ultra,
-                ]
-                .get(index)
-                .copied()
-                .ok_or_else(invalid)?
-            }
-            "speculareffects" => result.specular_effects = flag()?,
-            "terrainresolution" => result.terrain_resolution = detail()?,
-            "terraintexturesize" => result.terrain_texture_size = detail()?,
-            "waterdetail" => result.water_detail = four_levels()?,
-            "detailobjects" => {
-                result.detail_objects = [
-                    EnvironmentalDetailObjectDensity::Off,
-                    EnvironmentalDetailObjectDensity::Medium,
-                    EnvironmentalDetailObjectDensity::High,
-                ]
-                .get(index)
-                .copied()
-                .ok_or_else(invalid)?
-            }
-            "objectdetail" => result.object_detail = detail()?,
-            "objecttexturedetail" => result.object_texture_detail = detail()?,
-            "animationdetail" => result.animation_detail = detail()?,
-            "viewdistance" => result.view_distance = detail()?,
-            "maxoverheadzoom" => result.max_overhead_zoom = detail()?,
-            "screendetail" => result.screen_detail = flag()?,
-            "uitextshadows" => result.ui_text_shadows = flag()?,
-            "uitexttextures" => result.ui_text_textures = flag()?,
-            "shaderdetail" => result.shader_detail = detail()?,
-            "waterreflections" => result.water_reflections = flag()?,
-            _ => {}
-        }
-        if let Some(setting) = row
-            .element_children()
-            .filter(|child| child.name.eq_ignore_ascii_case("setting"))
-            .nth(index)
-        {
-            for field in setting.element_children() {
-                let Some(value) = field.attribute_named_any(&["value"]) else {
-                    continue;
-                };
-                let boolean = || parse_source_bool(value).ok_or_else(invalid);
-                match field.name.to_ascii_lowercase().as_str() {
-                    "ambientson" => result.ambient_effects = boolean()?,
-                    "skyboxquality" => {
-                        result.skybox_quality = value.parse().map_err(|_| invalid())?
-                    }
-                    "physanimon" => result.physical_animations = boolean()?,
-                    "propattachon" => result.prop_attachments = boolean()?,
-                    "texturereplaceon" => result.texture_replacement = boolean()?,
-                    "waterreflectionson" => result.water_reflections = boolean()?,
-                    _ => {}
-                }
-            }
-        }
+pub struct GraphicsDetailRow {
+    pub setting_widget: String,
+    pub label: AssetId,
+    pub thumb_help: UiNodeHelpDefinition,
+    pub up_help: UiNodeHelpDefinition,
+    pub down_help: UiNodeHelpDefinition,
+    pub minimum: i64,
+    pub maximum: i64,
+    pub increment: f32,
+    access: GraphicsField,
+    choices: Vec<GraphicsDetailChoice>,
+}
+
+struct GraphicsDetailChoice {
+    label: AssetId,
+    writes: Vec<GraphicsDependentWrite>,
+}
+
+#[derive(Clone, Copy)]
+struct GraphicsField {
+    read: fn(&GraphicsSettings) -> i64,
+    write: fn(&mut GraphicsSettings, i64),
+    maximum: i64,
+}
+
+impl GraphicsDetailRow {
+    pub fn selected_value(&self, settings: &GraphicsSettings) -> i64 {
+        (self.access.read)(settings).clamp(self.minimum, self.maximum)
     }
-    result.effects = if result.environment_detail == Low {
-        GraphicsEffectQuality::Low
-    } else {
-        GraphicsEffectQuality::High
+
+    pub fn value_label(&self, value: i64) -> AssetId {
+        self.choices
+            .get(value.clamp(self.minimum, self.maximum) as usize)
+            .map_or(AssetId::default(), |choice| choice.label)
+    }
+
+    pub fn apply_value(&self, value: i64, settings: &mut GraphicsSettings) {
+        let value = value.clamp(self.minimum, self.maximum);
+        (self.access.write)(settings, value);
+        if let Some(choice) = self.choices.get(value as usize) {
+            for &(write, value) in &choice.writes {
+                write(settings, value);
+            }
+        }
+        settings.effects = if settings.environment_detail == ThreeLevelGraphicsDetail::Low {
+            GraphicsEffectQuality::Low
+        } else {
+            GraphicsEffectQuality::High
+        };
+    }
+}
+
+type GraphicsDependentWrite = (fn(&mut GraphicsSettings, i64), i64);
+
+fn graphics_field(name: &str) -> Option<GraphicsField> {
+    macro_rules! field {
+        ($field:ident, bool) => {
+            GraphicsField {
+                read: |settings| i64::from(settings.$field),
+                write: |settings, value| settings.$field = value != 0,
+                maximum: 1,
+            }
+        };
+        ($field:ident, $ty:ident) => {
+            GraphicsField {
+                read: |settings| settings.$field as i64,
+                write: |settings, value| settings.$field = $ty::VALUES[value as usize],
+                maximum: ($ty::VALUES.len() - 1) as i64,
+            }
+        };
+    }
+    use ThreeLevelGraphicsDetail as Detail;
+    Some(match name {
+        "environmentdetail" => field!(environment_detail, Detail),
+        "lightingdetail" => field!(lighting_detail, Detail),
+        "shadowdetail" => field!(shadow_detail, ShadowDetail),
+        "speculareffects" => field!(specular_effects, bool),
+        "terrainresolution" => field!(terrain_resolution, Detail),
+        "terraintexturesize" => field!(terrain_texture_size, Detail),
+        "waterdetail" => field!(water_detail, FourLevelGraphicsDetail),
+        "detailobjects" => field!(detail_objects, EnvironmentalDetailObjectDensity),
+        "objectdetail" => field!(object_detail, Detail),
+        "objecttexturedetail" => field!(object_texture_detail, Detail),
+        "animationdetail" => field!(animation_detail, Detail),
+        "viewdistance" => field!(view_distance, Detail),
+        "maxoverheadzoom" => field!(max_overhead_zoom, Detail),
+        "screendetail" => field!(screen_detail, bool),
+        "uitextshadows" => field!(ui_text_shadows, bool),
+        "uitexttextures" => field!(ui_text_textures, bool),
+        "shaderdetail" => field!(shader_detail, Detail),
+        "waterreflections" => field!(water_reflections, bool),
+        _ => return None,
+    })
+}
+
+fn lower_graphics_detail_row(
+    source: &OrderedSourceDocumentNode,
+) -> io::Result<Option<GraphicsDetailRow>> {
+    let Some(access) = graphics_field(&source.name.to_ascii_lowercase()) else {
+        return Ok(None);
     };
-    Ok(result)
+    let text = |name| {
+        source
+            .attribute_named_any(&[name])
+            .unwrap_or_default()
+            .trim()
+    };
+    let bound = |name, default| -> io::Result<i64> {
+        if text(name).is_empty() {
+            return Ok(default);
+        }
+        text(name)
+            .parse::<i64>()
+            .map(|value| value.clamp(0, access.maximum))
+            .map_err(|_| invalid_setting(source, name))
+    };
+    let minimum = bound("min", 0)?;
+    let maximum = bound("max", access.maximum)?.max(minimum);
+    let increment = if text("increment").is_empty() {
+        1.0
+    } else {
+        text("increment")
+            .parse::<f32>()
+            .ok()
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .ok_or_else(|| invalid_setting(source, "increment"))?
+    };
+    let mut choices = Vec::new();
+    for choice in source
+        .element_children()
+        .filter(|child| child.name.eq_ignore_ascii_case("setting"))
+    {
+        let mut writes = Vec::new();
+        for field in choice.element_children() {
+            let Some(value) = field.attribute_named_any(&["value"]) else {
+                continue;
+            };
+            let boolean = || {
+                parse_source_bool(value)
+                    .map(i64::from)
+                    .ok_or_else(|| invalid_setting(field, "value"))
+            };
+            let write: GraphicsDependentWrite = match field.name.to_ascii_lowercase().as_str() {
+                "ambientson" => (
+                    |settings, value| settings.ambient_effects = value != 0,
+                    boolean()?,
+                ),
+                "skyboxquality" => (
+                    |settings, value| settings.skybox_quality = value as u8,
+                    i64::from(
+                        value
+                            .parse::<u8>()
+                            .map_err(|_| invalid_setting(field, "value"))?,
+                    ),
+                ),
+                "physanimon" => (
+                    |settings, value| settings.physical_animations = value != 0,
+                    boolean()?,
+                ),
+                "propattachon" => (
+                    |settings, value| settings.prop_attachments = value != 0,
+                    boolean()?,
+                ),
+                "texturereplaceon" => (
+                    |settings, value| settings.texture_replacement = value != 0,
+                    boolean()?,
+                ),
+                "waterreflectionson" => (
+                    |settings, value| settings.water_reflections = value != 0,
+                    boolean()?,
+                ),
+                _ => continue,
+            };
+            writes.push(write);
+        }
+        choices.push(GraphicsDetailChoice {
+            label: localization_key(choice.attribute_named_any(&["locid"]).unwrap_or_default()),
+            writes,
+        });
+    }
+    Ok(Some(GraphicsDetailRow {
+        setting_widget: text("settingWidget").to_owned(),
+        label: localization_key(text("labelLocID")),
+        thumb_help: detail_help(text("thumbids")),
+        up_help: detail_help(text("upids")),
+        down_help: detail_help(text("downids")),
+        minimum,
+        maximum,
+        increment,
+        access,
+        choices,
+    }))
+}
+
+fn localization_key(text: &str) -> AssetId {
+    if text.is_empty() {
+        AssetId::default()
+    } else {
+        AssetId::from_key(&text.to_ascii_lowercase())
+    }
+}
+
+fn detail_help(prefix: &str) -> UiNodeHelpDefinition {
+    if prefix.is_empty() {
+        return UiNodeHelpDefinition::default();
+    }
+    UiNodeHelpDefinition {
+        name: localization_key(&format!("{prefix}_name")),
+        short: localization_key(&format!("{prefix}_short")),
+        long: localization_key(&format!("{prefix}_long")),
+        help: localization_key(&format!("{prefix}_help")),
+        lower: localization_key(&format!("{prefix}_lower")),
+    }
+}
+
+fn invalid_setting(source: &OrderedSourceDocumentNode, field: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("invalid graphics setting {} {field}", source.name),
+    )
 }
 
 pub(super) struct GraphicsSettingsPresetAssetPlugin;

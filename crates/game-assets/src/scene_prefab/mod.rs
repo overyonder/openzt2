@@ -133,6 +133,20 @@ impl ScenePrefabAsset {
         self.animations.iter().map(|(_, handle)| handle)
     }
 
+    pub fn authored_animation_start_for_renderable(
+        &self,
+        row: usize,
+        renderable: &openzt2_game_data::scene_prefab::PrefabRenderable,
+    ) -> Option<&openzt2_game_data::scene_prefab::PrefabAnimationStart> {
+        let entity = self.canonical_scene_prefab_document().entities.get(row)?;
+        entity
+            .renderables
+            .iter()
+            .any(|candidate| std::ptr::eq(candidate, renderable))
+            .then_some(entity.animation_start.as_ref())
+            .flatten()
+    }
+
     pub fn motion_for_row(&self, index: usize) -> Option<&PrefabMotion> {
         let position = self
             .motion

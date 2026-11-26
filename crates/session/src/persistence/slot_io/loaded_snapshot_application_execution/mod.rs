@@ -14,11 +14,7 @@ use bevy::{
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
     behavior::behavior_asset_types::BehaviorDocumentAsset,
-    lua_script::{
-        lua_script_archive_path_index::LuaScriptArchivePathIndex,
-        lua_script_asset_loading::LuaScriptAsset,
-    },
-    saved_world_asset_source::SavedWorldTerrainAsset,
+    lua_script::lua_script_asset_loading::LuaScriptAsset,
     scene_prefab::ScenePrefabAsset,
     species::species_asset_types::{SpeciesAsset, SpeciesAssets},
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
@@ -87,7 +83,7 @@ use super::{
         PendingSnapshotApplication, PrepareSnapshotBaseline, RestoreRuntimeContinuation,
         RestoreSavedFenceEdges, RestoreSnapshotSections, RestoreSnapshotTerrain,
         RestoreTransportIdentities, RestoreTransportState, ResumeSnapshotActors, SnapshotBytes,
-        SnapshotRestoreFailed, SnapshotRestored, SnapshotSectionRestore,
+        SnapshotRestoreFailed, SnapshotRestored, SnapshotSectionRestore, SnapshotTerrainAsset,
     },
     persistence_failure_message_publication::publish_persistence_failure_for_slot_operation,
     photo_snapshot_application::restore_snapshot_photo_challenge_completion,

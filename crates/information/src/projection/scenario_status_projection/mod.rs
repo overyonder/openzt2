@@ -13,10 +13,10 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
-    AssetId,
     ui_document::node_property_binding::{
         UiBooleanPropertyBindingSource, UiIntegerPropertyBindingSource, UiTextPropertyBindingSource,
     },
+    AssetId,
 };
 use openzt2_interface_state::ui::authored_ui_node_projection_components::{
     UiValue, UiValueBinding, UiVisibleBinding,

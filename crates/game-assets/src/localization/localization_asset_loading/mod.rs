@@ -1,5 +1,5 @@
 use bevy::{
-    asset::{AssetApp, AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetApp, AssetLoader, LoadContext},
     prelude::*,
 };
 
@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     asset_source::archive_entry_asset_path::{
-        ARCHIVE_ENTRY_ASSET_EXTENSION, archive_entry_asset_source_path,
+        archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION,
     },
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,

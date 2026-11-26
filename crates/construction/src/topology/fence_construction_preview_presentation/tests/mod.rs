@@ -29,7 +29,11 @@ use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 
 fn fence_preview_app() -> App {
     let mut app = App::new();
-    app.init_resource::<Assets<WorldDefinitionAsset>>()
+    app.add_plugins((bevy::app::TaskPoolPlugin::default(), AssetPlugin::default()))
+        .init_asset::<super::super::elevated_path_layout::ElevatedPathModeDefinition>()
+        .init_asset_loader::<super::super::elevated_path_layout::ElevatedPathModeLoader>()
+        .init_resource::<super::super::elevated_path_layout::ElevatedPathModeAsset>()
+        .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
         .init_resource::<Assets<TerrainAsset>>()
         .add_message::<PointerInput>()

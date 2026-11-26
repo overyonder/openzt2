@@ -15,17 +15,17 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
 };
 use openzt2_zoo_state::{
     animal_behavior::interaction_container_membership::{
-        DockedAtInteractionContainer, InteractionContainerMemberships,
         requests::{InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest},
+        DockedAtInteractionContainer, InteractionContainerMemberships,
     },
     aquatic::aquatic_simulation_types::{TankGeometry, TankWallTopHeight},
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, PendingBehaviorDockingCompletion, PendingBehaviorTaskFailure,
         running_actions::{
             BehaviorStepFixedSet, RunBehaviorDockNow, RunBehaviorDockSpline,
             RunBehaviorDockTankWall, RunBehaviorUsePortal, RunningBehaviorInstruction,
             WhenBehaviorAction,
         },
+        BehaviorTaskExecutionState, PendingBehaviorDockingCompletion, PendingBehaviorTaskFailure,
     },
     habitat::habitat_types::{HabitatMember, HabitatRegion},
     locomotion::locomotion_types::{
@@ -42,7 +42,7 @@ use openzt2_zoo_state::{
 use super::{
     behavior_container_admission::BehaviorAdmissionInstruction,
     behavior_named_nodes::NamedNodeTransforms,
-    behavior_object_attachment_execution::{ContainedObject, detach::detach_object},
+    behavior_object_attachment_execution::{detach::detach_object, ContainedObject},
     behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
 };
 
@@ -1248,6 +1248,7 @@ fn finish_special_docks(
                     playback_speed_permille: 1000,
                     playback_repetition_policy:
                         AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy,
+                    action_settings: None,
                 });
             }
             if let Some((exit, exit_pose)) = portal_exit(waiting.target, world.root) {

@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use openzt2_game_data::AssetId;
 
 /// Current raw base ambient register for this water row's material passes.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
@@ -36,13 +35,6 @@ pub struct TerrainWaterSuspensionEmitter {
     pub emission_index: usize,
     pub initial_fill: bool,
     pub particle_radius: f32,
-}
-
-#[derive(Component)]
-pub struct TerrainWaterBubbleEmitter {
-    pub emitter: AssetId,
-    pub emission_index: usize,
-    pub remaining_seconds: f32,
 }
 
 /// A derived emission volume; terrain membership and source rows remain authoritative.

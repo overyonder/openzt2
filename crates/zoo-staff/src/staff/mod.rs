@@ -11,7 +11,6 @@ mod spawned_staff_identification;
 mod staff_animal_health_job_execution;
 mod staff_assignment_cleanup;
 mod staff_assignment_interaction;
-mod staff_behavior_capability_projection;
 use openzt2_zoo_state::staff::staff_assignment_types;
 pub(crate) mod staff_behavior_fact_completion_execution;
 use openzt2_zoo_state::staff::staff_employment_types;
@@ -102,11 +101,6 @@ impl Plugin for StaffPlugin {
                 FixedUpdate,
                 (
                     spawned_staff_identification::identify_spawned_staff_from_world_definition,
-                    staff_behavior_capability_projection::project_loaded_behavior_capabilities_onto_staff
-                        .after(spawned_staff_identification::identify_spawned_staff_from_world_definition),
-                    worker_duty_assignment::initialize_supported_worker_duties
-                        .after(staff_behavior_capability_projection::project_loaded_behavior_capabilities_onto_staff)
-                        .after_ignore_deferred(staff_job_eligibility::index_winning_staff_token_tasks),
                     staff_navigation_agent_projection::project_authored_staff_locomotion_onto_staff_entities
                         .after(spawned_staff_identification::identify_spawned_staff_from_world_definition),
                     tank_cleaning_requests::request_keeper_cleaning_for_dirty_tanks
@@ -122,7 +116,6 @@ impl Plugin for StaffPlugin {
                     staff_job_claiming::claim_highest_ranked_compatible_jobs_for_available_staff
                         .after(staff_job_completion_and_cancellation::mark_explicit_staff_job_cancellations)
                         .after_ignore_deferred(staff_job_eligibility::index_winning_staff_token_tasks)
-                        .after(worker_duty_assignment::initialize_supported_worker_duties)
                         .after(staff_navigation_agent_projection::project_authored_staff_locomotion_onto_staff_entities)
                         .after_ignore_deferred(staff_request_candidate_cleanup::clear_unsuccessful_candidates_at_authored_manager_interval),
                     idle_staff_task_selection::interrupt_idle_staff_tasks_for_claimed_jobs
@@ -143,7 +136,7 @@ impl Plugin for StaffPlugin {
                     idle_staff_task_selection::retire_inactive_staff_tank_exits,
                     idle_staff_task_selection::settle_staff_tank_exit_navigation
                         .run_if(on_message::<openzt2_zoo_state::locomotion::locomotion_types::Arrived>
-                            .or(on_message::<openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed>)),
+                            .or_eager(on_message::<openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed>)),
                     update_waiting_behavior_actors
                         .pipe(idle_staff_task_selection::start_staff_exit_tank_gate_actions)
                         .after(idle_staff_task_selection::retire_inactive_staff_tank_exits)

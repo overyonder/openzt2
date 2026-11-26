@@ -13,7 +13,7 @@ use openzt2_zoo_state::terrain::{
 use super::{
     canvas_hydration_operations::OverviewCanvasPolicy,
     map_rasterization_operations::{
-        OverviewTerrainWaterRaster, PendingOverviewMapPixels, blank_overview_map_pixels,
+        blank_overview_map_pixels, OverviewTerrainWaterRaster, PendingOverviewMapPixels,
     },
     overview_map_pixel_operations::rasterize_world_sample_area_into_overview_map_pixels,
 };

@@ -540,41 +540,53 @@ fn lower_guest_view_scoring_policy(record: &RecordView<'_, '_>) -> Result<openzt
         Ok(value)
     };
     let number = |name, default| Ok::<_, BindError>(optional(name)?.unwrap_or(default));
-    let education_donation = if let Some(divisor) = optional("f_DonationDivisor")?.filter(|divisor| *divisor > 0.0) {
-        Some(GuestEducationDonationPolicy {
-            divisor,
-            minimum: number("f_MinDonation", 0.0)?,
-            maximum: optional("f_MaxDonation")?,
-            happiness_threshold: optional("f_DonationThreshold")?,
-            bonus_factor: number("f_EdDonationBonusFactor", 1.0)?,
-            timeout: optional("f_DonationTimeout")?,
-        })
-    } else {
-        None
-    };
-    let tour_state = authored_type_family_elements_named(record, "BFAIStateVar").into_iter()
-        .find(|state| state.attribute_named_any(&["Name"])
-            .is_some_and(|name| source_document_names_are_semantically_equal(name, "tour")));
-    let tour_need = tour_state.map(|state| {
-        let state_value = |name, default| {
-            state.attribute_named_any(&[name]).filter(|value| !value.trim().is_empty())
-                .map(|value| parse::<f32>(value, record, name)).transpose()
-                .map(|value| value.unwrap_or(default))
+    let education_donation =
+        if let Some(divisor) = optional("f_DonationDivisor")?.filter(|divisor| *divisor > 0.0) {
+            Some(GuestEducationDonationPolicy {
+                divisor,
+                minimum: number("f_MinDonation", 0.0)?,
+                maximum: optional("f_MaxDonation")?,
+                happiness_threshold: optional("f_DonationThreshold")?,
+                bonus_factor: number("f_EdDonationBonusFactor", 1.0)?,
+                timeout: optional("f_DonationTimeout")?,
+            })
+        } else {
+            None
         };
-        let minimum = state_value("Value", state_value("ValueMin", 0.0)?)?;
-        let maximum = state_value("Value", state_value("ValueMax", minimum)?)?;
-        let adjustment = authored_type_family_elements_named(record, "BFAINeedAdjusts").into_iter()
-            .filter(|adjustment| adjustment.attribute_named_any(&["Name"]).is_none())
-            .find_map(|adjustment| adjustment.attribute_named_any(&["tour"]))
-            .map(|value| parse::<f32>(value, record, "tour adjustment"))
-            .transpose()?.unwrap_or_default();
-        Ok::<_, BindError>(GuestTourNeedPolicy {
-            start: [minimum, maximum],
-            adjustment,
-            trigger: state_value("TriggerThreshold", 0.0)?,
-            cessation: state_value("CessationThreshold", -100.0)?,
+    let tour_state = authored_type_family_elements_named(record, "BFAIStateVar")
+        .into_iter()
+        .find(|state| {
+            state
+                .attribute_named_any(&["Name"])
+                .is_some_and(|name| source_document_names_are_semantically_equal(name, "tour"))
+        });
+    let tour_need = tour_state
+        .map(|state| {
+            let state_value = |name, default| {
+                state
+                    .attribute_named_any(&[name])
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| parse::<f32>(value, record, name))
+                    .transpose()
+                    .map(|value| value.unwrap_or(default))
+            };
+            let minimum = state_value("Value", state_value("ValueMin", 0.0)?)?;
+            let maximum = state_value("Value", state_value("ValueMax", minimum)?)?;
+            let adjustment = authored_type_family_elements_named(record, "BFAINeedAdjusts")
+                .into_iter()
+                .filter(|adjustment| adjustment.attribute_named_any(&["Name"]).is_none())
+                .find_map(|adjustment| adjustment.attribute_named_any(&["tour"]))
+                .map(|value| parse::<f32>(value, record, "tour adjustment"))
+                .transpose()?
+                .unwrap_or_default();
+            Ok::<_, BindError>(GuestTourNeedPolicy {
+                start: [minimum, maximum],
+                adjustment,
+                trigger: state_value("TriggerThreshold", 0.0)?,
+                cessation: state_value("CessationThreshold", -100.0)?,
+            })
         })
-    }).transpose()?;
+        .transpose()?;
     Ok(GuestAnimalViewScoringPolicy {
         species_discount: number("f_ViewSpeciesDiscount", 1.0)?,
         minimum_species_discount: number("f_ViewSpeciesDiscountCap", 0.0)?,

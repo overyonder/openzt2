@@ -1,11 +1,11 @@
 use std::io;
 
 use openzt2_game_data::{
-    AssetId,
     behavior::{
         action::{specialized::*, wander::BehaviorGroundLocomotionSpeed},
         action_record::BehaviorAction,
     },
+    AssetId,
 };
 
 use super::{

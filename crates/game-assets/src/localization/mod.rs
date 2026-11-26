@@ -17,7 +17,7 @@ use bevy::prelude::*;
 
 use localization_asset_loading::register_localization_catalog_asset_and_loader;
 use localization_precedence_index::{
-    LocalizationPrecedenceIndex, index_loaded_localization_entries_after_asset_events,
+    index_loaded_localization_entries_after_asset_events, LocalizationPrecedenceIndex,
 };
 
 pub struct LocalizationAssetPlugin;

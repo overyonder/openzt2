@@ -457,6 +457,7 @@ pub enum SourceUiEventTrigger {
     Leave,
     Activate,
     DoubleClick,
+    SecondaryPress,
     AnimationCompleted,
     Show,
     Hide,
@@ -521,7 +522,7 @@ pub struct SourceUiHotkey {
     pub allow_repeat: Option<bool>,
     pub file: Option<AssetPath>,
     pub node: Option<String>,
-    pub event: SourceUiEvent,
+    pub events: Vec<SourceUiEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

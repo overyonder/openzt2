@@ -16,6 +16,8 @@ pub struct UiDocument {
     pub role: UiDocumentRole,
     pub logical_size: [f32; 2],
     pub nodes: Vec<UiNodeDefinition>,
+    #[serde(default)]
+    pub edge_pan_surface_node_index: Option<u32>,
     pub gameplay_interaction_cursors: UiGameplayInteractionCursorDefinition,
     pub construction_placement_preview: UiConstructionPlacementPreviewDefinition,
     pub image_selection_groups: Vec<UiImageSelectionGroupDefinition>,
@@ -36,6 +38,7 @@ pub enum UiDependencyKind {
     Scene,
     Document,
     Audio,
+    Script,
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

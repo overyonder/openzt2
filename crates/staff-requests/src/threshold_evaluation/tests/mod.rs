@@ -218,9 +218,9 @@ fn a_filter_is_cleaned_at_the_thresholds_of_its_chosen_schedule() {
             cleanup_interval_seconds: 2.0,
             cleanup_rate: 750.0,
             maximum_dirt_capacity: 75_000.0,
+            full_filter_message: None,
             maintenance_thresholds: Some([[20.0, 10.0], [50.0, 10.0], [80.0, 10.0]]),
         },
-        seconds_until_cleanup: 0.0,
         dirt_percent: 0.0,
     };
     let thresholds = |schedule| {

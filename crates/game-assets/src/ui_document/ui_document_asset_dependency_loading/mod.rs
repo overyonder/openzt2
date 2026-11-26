@@ -8,10 +8,11 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use super::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use super::ui_document_asset_types_and_borrowing_queries::{FameStarDisplay, UiDocumentAsset};
 
 pub(super) fn create_ui_document_asset_and_load_typed_dependencies(
     canonical_ui_document: UiDocument,
+    fame_stars: Option<FameStarDisplay>,
     same_source_fragment_labels: &BTreeMap<AssetId, String>,
     load_context: &mut LoadContext<'_>,
 ) -> UiDocumentAsset {
@@ -87,6 +88,7 @@ pub(super) fn create_ui_document_asset_and_load_typed_dependencies(
     script_handles.sort_unstable_by_key(|(asset_id, _)| asset_id.0);
     UiDocumentAsset {
         canonical_ui_document,
+        fame_stars,
         texture_image_handles: texture_image_handles.into_boxed_slice(),
         interactive_texture_metadata_handles: interactive_texture_metadata_handles
             .into_boxed_slice(),

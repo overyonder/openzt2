@@ -2,10 +2,7 @@
 
 use std::io;
 
-use bevy::{
-    asset::LoadContext, image::ImageLoaderSettings, prelude::*, render::storage::ShaderBuffer,
-    shader::Shader,
-};
+use bevy::{prelude::*, render::storage::ShaderBuffer, shader::Shader};
 
 use super::{
     d3d9_shader_and_vertex_layout_mapping::map_d3d9_shader_input_to_bevy_vertex_attribute,
@@ -36,6 +33,7 @@ use super::{
     programmable_vertex_fixed_function_fragment_interface::create_fixed_function_fragment_shader_for_programmable_vertex_outputs,
     resolved_effect_transform_bindings::ResolvedEffectTransformSemantic,
 };
+use crate::asset_source::generated_asset_publication::GeneratedAssetPublication;
 use crate::material::authored_material_parameter_lowering::{
     MaterialEffectParameterValue, OwnedMaterialEffectParameter,
 };
@@ -44,12 +42,13 @@ pub(in crate::material) fn create_effect_pass_material_assets_from_evaluated_tec
     technique: &d3d9_effects::effect_types::EvaluatedD3d9EffectTechnique,
     parameter_descriptions: &[d3d9_effects::effect_types::D3d9EffectParameterDescription],
     parameters: &[OwnedMaterialEffectParameter],
-    context: &mut LoadContext<'_>,
+    context: &mut GeneratedAssetPublication<'_, '_>,
     labelled_asset_prefix: &str,
     texture_coordinate_animations: &std::sync::Arc<
         [super::texture_coordinate_animation::TextureCoordinateAnimation],
     >,
     reflection_projections: &[(usize, usize, [f32; 16])],
+    containment_cull_faces: Option<&[[Option<bevy::render::render_resource::Face>; 4]]>,
 ) -> io::Result<Box<[Handle<EffectPassMaterial>]>> {
     collect_evaluated_d3d9_pass_states(technique)?
         .iter()
@@ -65,6 +64,7 @@ pub(in crate::material) fn create_effect_pass_material_assets_from_evaluated_tec
                 texture_coordinate_animations,
                 reflection_projections,
                 technique.evaluated_passes.len() == 1,
+                containment_cull_faces.and_then(|faces| faces.get(index).copied()),
             )
         })
         .collect()
@@ -119,7 +119,7 @@ fn create_effect_pass_material_asset(
     state: &EvaluatedD3d9PassState,
     parameter_descriptions: &[d3d9_effects::effect_types::D3d9EffectParameterDescription],
     parameters: &[OwnedMaterialEffectParameter],
-    context: &mut LoadContext<'_>,
+    context: &mut GeneratedAssetPublication<'_, '_>,
     labelled_asset_prefix: &str,
     index: usize,
     texture_coordinate_animations: &std::sync::Arc<
@@ -127,6 +127,7 @@ fn create_effect_pass_material_asset(
     >,
     reflection_projections: &[(usize, usize, [f32; 16])],
     standalone_pass: bool,
+    containment_cull_faces: Option<[Option<bevy::render::render_resource::Face>; 4]>,
 ) -> io::Result<Handle<EffectPassMaterial>> {
     let (vertex, fragment) = match (
         state.vertex_shader.as_deref(),
@@ -255,9 +256,9 @@ fn create_effect_pass_material_asset(
             let label = format!("{labelled_asset_prefix}-{index}-fixed-fragment");
             create_fixed_function_fragment_shader_for_programmable_vertex_outputs(
                 vertex,
-                format!("{}#{label}.wesl", context.path()),
+                format!("{}#{label}.wesl", context.source_path().display()),
             )
-            .map(|shader| context.add_labeled_asset(label, shader))
+            .map(|shader| context.publish(label, shader))
         })
         .transpose()?;
     let vertex_entry = if vertex.is_some() { "main" } else { "vertex" };
@@ -273,9 +274,9 @@ fn create_effect_pass_material_asset(
                 Some(InstanceIndexInput::VertexBuiltin),
                 forward_instance_index,
                 None,
-                format!("{}#{label}", context.path()),
+                format!("{}#{label}", context.source_path().display()),
             )?;
-            context.add_labeled_asset(label, asset)
+            context.publish(label, asset)
         }
     };
     let programmable_fragment = fragment.is_some();
@@ -299,9 +300,9 @@ fn create_effect_pass_material_asset(
                 )),
                 false,
                 Some(&state.samplers.map(|sampler| sampler.lod_bias())),
-                format!("{}#{label}", context.path()),
+                format!("{}#{label}", context.source_path().display()),
             )?;
-            context.add_labeled_asset(label, asset)
+            context.publish(label, asset)
         }
     };
     let blend = state.blend()?;
@@ -363,14 +364,8 @@ fn create_effect_pass_material_asset(
         };
         let samples_texture_with_srgb_decode =
             state.samplers[stage].samples_texture_with_srgb_decode();
-        textures[stage] = Some(
-            context
-                .load_builder()
-                .with_settings(move |settings: &mut ImageLoaderSettings| {
-                    settings.is_srgb = samples_texture_with_srgb_decode;
-                })
-                .load(path.to_string()),
-        );
+        textures[stage] =
+            Some(context.load_image(path.to_owned(), samples_texture_with_srgb_decode));
     }
     // Base.fx exposes this renderer-owned semantic but deliberately does not
     // assign the Lighting state inside its pass. Explicit FX states still win.
@@ -524,11 +519,11 @@ fn create_effect_pass_material_asset(
         let label = format!("{labelled_asset_prefix}-{index}-fixed-function");
         let source = fixed_function_source_with_texture_transforms(&gpu_transforms)
             .map_err(|error| io::Error::new(error.kind(), format!("{label}: {error}")))?;
-        let shader = context.add_labeled_asset(
+        let shader = context.publish(
             label.clone(),
             Shader::from_wesl(
                 super::morph_fragment_opacity::fixed_function_source_with_morph_opacity(&source),
-                format!("{}#{label}.wesl", context.path()),
+                format!("{}#{label}.wesl", context.source_path().display()),
             ),
         );
         (shader.clone(), shader)
@@ -548,6 +543,8 @@ fn create_effect_pass_material_asset(
         .transpose()?;
     let material = EffectPassMaterial {
         particle_alpha_test,
+        camera_containment_cull_faces: containment_cull_faces,
+        camera_containment_flags: 0,
         morph_opacity: Vec4::X,
         texture_coordinate_animation_geometry: None,
         texture_coordinate_animations: std::sync::Arc::clone(texture_coordinate_animations),
@@ -576,11 +573,11 @@ fn create_effect_pass_material_asset(
             values: state.pixel_bools,
         },
         uniform_buffer_assets: EffectPassUniformBufferAssets {
-            fixed_function: context.add_labeled_asset(
+            fixed_function: context.publish(
                 format!("{labelled_asset_prefix}-{index}-fixed-function-uniform"),
                 shader_buffer_from_uniform_value(&fixed_function),
             ),
-            vertex_floats: context.add_labeled_asset(
+            vertex_floats: context.publish(
                 format!("{labelled_asset_prefix}-{index}-vertex-float-uniform"),
                 shader_buffer_from_packed_registers(&pack_programmable_shader_registers(
                     &D3d9FloatShaderRegisters {
@@ -595,19 +592,19 @@ fn create_effect_pass_material_asset(
                     vertex_uniform_upload_order.as_deref(),
                 )),
             ),
-            vertex_integers: context.add_labeled_asset(
+            vertex_integers: context.publish(
                 format!("{labelled_asset_prefix}-{index}-vertex-integer-uniform"),
                 shader_buffer_from_uniform_value(&D3d9IntegerShaderRegisters {
                     values: state.vertex_ints,
                 }),
             ),
-            vertex_booleans: context.add_labeled_asset(
+            vertex_booleans: context.publish(
                 format!("{labelled_asset_prefix}-{index}-vertex-boolean-uniform"),
                 shader_buffer_from_uniform_value(&D3d9BooleanShaderRegisters {
                     values: state.vertex_bools,
                 }),
             ),
-            pixel_floats: context.add_labeled_asset(
+            pixel_floats: context.publish(
                 format!("{labelled_asset_prefix}-{index}-pixel-float-uniform"),
                 shader_buffer_from_packed_registers(&pack_programmable_shader_registers(
                     &D3d9FloatShaderRegisters {
@@ -622,25 +619,25 @@ fn create_effect_pass_material_asset(
                     pixel_uniform_upload_order.as_deref(),
                 )),
             ),
-            pixel_integers: context.add_labeled_asset(
+            pixel_integers: context.publish(
                 format!("{labelled_asset_prefix}-{index}-pixel-integer-uniform"),
                 shader_buffer_from_uniform_value(&D3d9IntegerShaderRegisters {
                     values: state.pixel_ints,
                 }),
             ),
-            pixel_booleans: context.add_labeled_asset(
+            pixel_booleans: context.publish(
                 format!("{labelled_asset_prefix}-{index}-pixel-boolean-uniform"),
                 shader_buffer_from_uniform_value(&D3d9BooleanShaderRegisters {
                     values: state.pixel_bools,
                 }),
             ),
-            fixed_transforms: context.add_labeled_asset(
+            fixed_transforms: context.publish(
                 format!("{labelled_asset_prefix}-{index}-fixed-transform-uniform"),
                 shader_buffer_from_uniform_value(&D3d9FixedFunctionTransforms {
                     values: state.texture_transforms,
                 }),
             ),
-            transform_inputs: context.add_labeled_asset(
+            transform_inputs: context.publish(
                 format!("{labelled_asset_prefix}-{index}-transform-inputs"),
                 ShaderBuffer::from(transform_inputs.clone()),
             ),
@@ -676,5 +673,5 @@ fn create_effect_pass_material_asset(
         vertex_uniform_upload_order,
         pixel_uniform_upload_order,
     };
-    Ok(context.add_labeled_asset(format!("{labelled_asset_prefix}-{index}"), material))
+    Ok(context.publish(format!("{labelled_asset_prefix}-{index}"), material))
 }

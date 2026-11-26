@@ -1,3 +1,4 @@
+use super::tour_view_scoring::TourObservationDwell;
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 

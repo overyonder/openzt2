@@ -57,7 +57,15 @@ pub struct PrefabEntity {
     pub rotation_cycles: Vec<PrefabRotationCycle>,
     #[serde(default)]
     pub transform_animations: Vec<PrefabTransformAnimation>,
+    #[serde(default)]
+    pub visibility_animation: Option<PrefabVisibilityAnimation>,
+    #[serde(default)]
+    pub morph_animation: Option<PrefabMorphAnimation>,
+    #[serde(default)]
+    pub render_lod_policy: Option<PrefabRenderLodPolicy>,
     pub renderables: Vec<PrefabRenderable>,
+    #[serde(default)]
+    pub animation_start: Option<PrefabAnimationStart>,
     pub colliders: Vec<PrefabCollider>,
     /// Distance ranges for renderables grouped under this authored entity.
     pub lods: Vec<PrefabLod>,
@@ -100,7 +108,9 @@ pub struct PrefabTransform {
 /// never needs to interpret NIF controller graphs.
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]
 pub struct PrefabRotationCycle {
-    pub radians_per_second: [f32; 3],
+    pub clock: PrefabControllerClock,
+    pub key_time_s: f32,
+    pub angles_xzy: [f32; 3],
 }
 
 /// An authored keyframe controller that drives an entity's local transform.
@@ -113,6 +123,35 @@ pub struct PrefabTransformAnimation {
     pub translation_m: Option<[PrefabScalarCurve; 3]>,
     pub rotation: Option<PrefabRotationCurve>,
     pub uniform_scale: Option<PrefabScalarCurve>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq)]
+pub struct PrefabVisibilityAnimation {
+    pub clock: PrefabControllerClock,
+    pub keys: Vec<(f32, bool)>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq)]
+pub struct PrefabMorphAnimation {
+    pub clock: PrefabControllerClock,
+    pub weight_curves: Vec<PrefabScalarCurve>,
+    pub refresh_bound: bool,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq)]
+pub struct PrefabRenderLodPolicy {
+    pub source: PrefabRenderLodSource,
+    pub metric_entity: u32,
+    pub initial_tier: u16,
+    pub tier_count: u16,
+    pub switch_distance_squared: Vec<f32>,
+    pub minimum_switch_distance_squared: Vec<f32>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrefabRenderLodSource {
+    BlueFang,
+    NetImmerseBone,
 }
 
 /// Source controller timing: `scaled = elapsed * frequency + phase`, then
@@ -174,6 +213,13 @@ pub struct PrefabRenderable {
     pub material_name: String,
 }
 
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq)]
+pub struct PrefabAnimationStart {
+    pub clip_key: String,
+    pub looping: bool,
+    pub time_seconds: f32,
+}
+
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrefabRenderableMaterialOverride {
     pub slot: u16,
@@ -197,6 +243,7 @@ pub enum PrefabColliderSource {
     Box { half_extent_m: [f32; 3] },
     Capsule { radius_m: f32, half_height_m: f32 },
     ConvexHull { points_m: Vec<[f32; 3]> },
+    HalfSpace { normal: [f32; 3] },
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]
@@ -222,12 +269,16 @@ pub struct PrefabBillboard {
     pub faces_positive_z: bool,
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq)]
 pub struct PrefabLight {
     pub kind: PrefabLightKind,
     pub color_srgb: [f32; 3],
     pub intensity: f32,
     pub range_m: f32,
+    #[serde(default)]
+    pub attenuation: Option<[f32; 3]>,
+    #[serde(default)]
+    pub affected_rows: Option<Vec<u32>>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]

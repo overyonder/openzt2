@@ -9,6 +9,8 @@ use openzt2_game_assets::material::runtime::effect_pass_gpu_data::D3d9FixedFunct
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::D3D9_MAX_ACTIVE_DIRECTIONAL_LIGHTS;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::FIXED_FUNCTION_WORLD_LIGHT_BUFFER;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::FIXED_FUNCTION_WORLD_LIGHT_CONTEXT_COUNT;
+use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentTerrainAmbientLight;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
 
@@ -45,7 +47,11 @@ pub(super) fn upload_fixed_function_world_light_registers(
 pub(super) fn project_fixed_function_world_light_registers(
     graphics: Res<GraphicsSettings>,
     ambient_light: Single<Ref<LinearWorldAmbient>>,
-    terrain_ambient: Res<EnvironmentTerrainAmbientLight>,
+    (terrain_ambients, cameras): (
+        Query<(Ref<EnvironmentTerrainAmbientLight>, &WorldMember)>,
+        Query<(Ref<Camera>, Ref<WorldMember>), With<ZooCamera>>,
+    ),
+    mut removed_terrain_ambient: RemovedComponents<EnvironmentTerrainAmbientLight>,
     camera_ambient_lights: Query<(
         Ref<Camera>,
         Ref<Camera3d>,
@@ -66,6 +72,16 @@ pub(super) fn project_fixed_function_world_light_registers(
     mut removed_layers: RemovedComponents<RenderLayers>,
     mut published: Single<&mut FixedFunctionWorldLightRegisters>,
 ) {
+    let active_camera = cameras.iter().find(|(camera, _)| camera.is_active);
+    let terrain_ambient = active_camera.as_ref().and_then(|(_, active)| {
+        terrain_ambients
+            .iter()
+            .find(|(_, member)| member.root == active.root)
+            .map(|(ambient, _)| ambient)
+    });
+    let terrain_changed = (removed_terrain_ambient.read().last().is_some())
+        || terrain_ambient.as_ref().is_some_and(Ref::is_changed)
+        || active_camera.is_some_and(|(camera, member)| camera.is_changed() || member.is_changed());
     let removed_inputs = (removed_cameras.read().count() != 0)
         | (removed_camera_components.read().count() != 0)
         | (removed_ambient_lights.read().count() != 0)
@@ -85,7 +101,7 @@ pub(super) fn project_fixed_function_world_light_registers(
     if !published.is_added()
         && !removed_inputs
         && !ambient_light.is_changed()
-        && !terrain_ambient.is_changed()
+        && !terrain_changed
         && !graphics.is_changed()
         && !camera_ambient_lights
             .iter()
@@ -133,7 +149,7 @@ pub(super) fn project_fixed_function_world_light_registers(
     }
     // Environment ambient already carries the authored channels; the shader
     // combines them before converting its final output to linear.
-    if let Some(ambient) = terrain_ambient.0 {
+    if let Some(ambient) = terrain_ambient.and_then(|ambient| ambient.0) {
         contexts.values[TERRAIN_RENDER_LAYER].ambient_color_and_directional_light_count =
             ambient.extend(0.0);
     }

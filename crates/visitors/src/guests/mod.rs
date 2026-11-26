@@ -10,6 +10,7 @@ mod guest_animation_owner_projection;
 mod guest_arrival_calculations;
 pub(crate) mod guest_arrival_execution;
 mod guest_arrival_population;
+mod guest_behavior_departure_execution;
 mod guest_behavior_fact_execution;
 mod guest_definition_queries;
 pub(crate) mod guest_destination_and_viewing_execution;
@@ -26,8 +27,8 @@ mod guest_target_eligibility;
 mod guest_task_need_facts;
 mod guest_task_progress_diagnostics;
 mod guest_task_target_loss;
-mod guest_view_animals_execution;
 mod guest_tour_need_execution;
+mod guest_view_animals_execution;
 mod guest_view_event_meter_application;
 mod guest_viewing_lifecycle;
 pub(crate) mod view_event_execution;
@@ -66,13 +67,20 @@ impl Plugin for GuestsPlugin {
             activated_behavior_actor, update_waiting_behavior_actors,
         };
         app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorViewAnimals>.pipe(guest_view_animals_execution::watch_animals_for_current_view_actions));
-        app.add_systems(FixedUpdate, (
-            guest_tour_need_execution::initialize_tour_need.after(initialize_spawned_guests)
-                .before(guest_self_task_selection::select_idle_guest_tasks),
-            guest_tour_need_execution::adjust_due_tour_needs.after(tick_guest_need_cadences)
-                .before(guest_self_task_selection::select_idle_guest_tasks)
-                .run_if(on_message::<GuestNeedAdjustmentDue>),
-        ).in_set(FixedGameSet::Think).run_if(in_state(GamePhase::InGame)));
+        app.add_systems(
+            FixedUpdate,
+            (
+                guest_tour_need_execution::initialize_tour_need
+                    .after(initialize_spawned_guests)
+                    .before(guest_self_task_selection::select_idle_guest_tasks),
+                guest_tour_need_execution::adjust_due_tour_needs
+                    .after(tick_guest_need_cadences)
+                    .before(guest_self_task_selection::select_idle_guest_tasks)
+                    .run_if(on_message::<GuestNeedAdjustmentDue>),
+            )
+                .in_set(FixedGameSet::Think)
+                .run_if(in_state(GamePhase::InGame)),
+        );
 
         app.register_required_components::<Guest, openzt2_zoo_state::locomotion::locomotion_types::CaffeineFlags>()
             .register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, guest_arrival_population::ArrivalPopulation>()

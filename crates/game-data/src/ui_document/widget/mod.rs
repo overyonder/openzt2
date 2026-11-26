@@ -28,6 +28,7 @@ pub enum UiWidgetRecord {
         source: UiWidgetLiveCollectionSource,
         /// Typed UI fragment document used for each live row.
         row_document: AssetId,
+        group_document: AssetId,
         opener_node: AssetId,
         drop_list_display_node: AssetId,
         count_component: AssetId,

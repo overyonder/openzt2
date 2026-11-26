@@ -104,6 +104,7 @@ mod tests {
             image_selections: Vec::new(),
             interaction_cursors: None,
             placement_preview: None,
+            edge_pan_source_child: None,
             role_targets: BTreeMap::new(),
             resolved_dependencies: Default::default(),
         })
@@ -464,6 +465,23 @@ pub(super) fn lower_node(
         region: lower_region(effective.region.as_ref(), input)?,
         text,
         cursor,
+        money_text_format: match &effective.widget {
+            SourceUiWidgetData::Text(text) => text.text_format.as_deref()
+                .filter(|format| format.starts_with("openzt2:money:"))
+                .map(|format| {
+                    use authored_ui_node_property_binding_resolution::{
+                        parse_authored_money_format_boolean_option as flag,
+                        resolve_authored_money_format_localization_key as key,
+                    };
+                    openzt2_game_data::ui_document::node::MoneyTextFormat {
+                        positive: key(format, "positive"),
+                        negative: key(format, "negative"),
+                        omit_cents: flag(format, "no-cents"),
+                        omit_minus: flag(format, "no-minus"),
+                    }
+                }),
+            _ => None,
+        },
         text_format: effective.text_format.as_deref().map_or_else(AssetId::default, |format| {
             if format.starts_with("openzt2:money:") {
                 authored_ui_node_property_binding_resolution::resolve_authored_money_format_localization_key(format, "positive")

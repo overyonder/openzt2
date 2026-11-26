@@ -5,12 +5,13 @@ use bevy::{
 };
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::{
-    application_schedule::FixedGameSet,
-    world_spawn::world_membership_types::WorldMember,
+    application_schedule::FixedGameSet, world_spawn::world_membership_types::WorldMember,
 };
 
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
-use openzt2_zoo_state::locomotion::locomotion_types::{NavAgent, SpatialCell, SpatialCellMembers, SpatialGrid};
+use openzt2_zoo_state::locomotion::locomotion_types::{
+    NavAgent, SpatialCell, SpatialCellMembers, SpatialGrid,
+};
 
 const OVERFLOW_CELL_SIZE_M: f32 = 8.0;
 

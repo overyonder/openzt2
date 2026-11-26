@@ -16,7 +16,7 @@ use crate::{
     },
 };
 use bevy::{
-    asset::{AssetLoader, LoadContext, LoadedAsset, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext, LoadedAsset},
     prelude::*,
 };
 use std::io;

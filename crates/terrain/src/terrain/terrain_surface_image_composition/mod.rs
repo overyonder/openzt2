@@ -7,6 +7,8 @@ use bevy::{
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_data::terrain::TerrainBiome;
+#[cfg(test)]
+use openzt2_game_data::terrain::TerrainWaterDepth;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterMembershipIndex;
 
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainPaintedTexture;
@@ -40,8 +42,8 @@ fn classify_terrain_surface_water(
     let Some(level) = water_level_m else {
         return TerrainSurfaceWater::Dry;
     };
-    let shore_offset = f64::from(biome.water_shore_offset_mm.unwrap_or(0) as f32 * 0.001);
-    let shallow_depth = f64::from(biome.shallow_water_depth_mm.unwrap_or(0) as f32 * 0.001);
+    let shore_offset = f64::from(biome.water_shore_offset_mm.unwrap_or(0)) / 1000.0;
+    let shallow_depth = f64::from(biome.shallow_water_depth_mm.unwrap_or(0)) / 1000.0;
     if f64::from(height_m) > f64::from(level) + shore_offset - shallow_depth {
         TerrainSurfaceWater::Shore
     } else {

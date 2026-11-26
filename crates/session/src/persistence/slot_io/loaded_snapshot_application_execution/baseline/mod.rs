@@ -31,7 +31,7 @@ pub(super) fn prepare_snapshot_baseline(
         With<PrepareSnapshotBaseline>,
     >,
     profile: Res<ProfileOptions>,
-    mut preparation: SavedWorldSnapshotPreparation,
+    preparation: SavedWorldSnapshotPreparation,
 ) {
     let Ok((operation, decoded, mut pending)) = operations.single_mut() else {
         return;
@@ -67,7 +67,7 @@ pub(super) fn retire_world_once_saved_assets_are_ready(
         Ref<AwaitingSavedWorldDocument>,
         &DecodedSnapshot,
         &PendingSnapshotApplication,
-        Option<&SavedWorldTerrainAsset>,
+        Option<&SnapshotTerrainAsset>,
     )>,
     server: Res<AssetServer>,
     mut documents: MessageReader<AssetEvent<WorldScenarioDocumentAsset>>,
@@ -85,7 +85,7 @@ pub(super) fn retire_world_once_saved_assets_are_ready(
         return;
     };
     let document = pending.saved_world_document.as_ref().map(Handle::id);
-    let terrain = terrain.map(|terrain| terrain.handle.id());
+    let terrain = terrain.map(|terrain| terrain.0.id());
     let document_ready = documents.read().fold(false, |ready, event| {
         ready || document.is_some_and(|id| event.is_loaded_with_dependencies(id))
     });

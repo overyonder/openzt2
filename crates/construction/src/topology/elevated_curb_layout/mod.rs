@@ -70,7 +70,7 @@ impl<'w, 's> ElevatedCurbSurfaces<'w, 's> {
             })
     }
 
-    pub fn nearest(
+    pub(super) fn nearest(
         &self,
         point: Vec3,
         grid: TopologyGrid,
@@ -93,7 +93,7 @@ impl<'w, 's> ElevatedCurbSurfaces<'w, 's> {
             .map(|(cell, _)| cell)
     }
 
-    pub fn height(
+    pub(super) fn height(
         &self,
         cell: IVec3,
         grid: TopologyGrid,
@@ -106,7 +106,7 @@ impl<'w, 's> ElevatedCurbSurfaces<'w, 's> {
             .min_by(f32::total_cmp)
     }
 
-    pub fn route(
+    pub(super) fn route(
         &self,
         from: IVec3,
         to: IVec3,
@@ -115,7 +115,7 @@ impl<'w, 's> ElevatedCurbSurfaces<'w, 's> {
         index: &TopologyIndex,
         definitions: WorldDefinitionsView<'_>,
     ) -> Option<Vec<IVec3>> {
-        let mut previous = HashMap::from_iter([(from, from)]);
+        let mut previous = HashMap::<IVec3, IVec3>::from_iter([(from, from)]);
         let mut pending = VecDeque::from([from]);
         while let Some(cell) = pending.pop_front() {
             if cell == to {

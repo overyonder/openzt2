@@ -18,7 +18,8 @@ pub fn first_missing_prefab_collider_model_asset_id(
             PrefabColliderSource::Model { model, .. } => Some(AssetId(model.0)),
             PrefabColliderSource::Box { .. }
             | PrefabColliderSource::Capsule { .. }
-            | PrefabColliderSource::ConvexHull { .. } => None,
+            | PrefabColliderSource::ConvexHull { .. }
+            | PrefabColliderSource::HalfSpace { .. } => None,
         })
         .find(|model| {
             prefab

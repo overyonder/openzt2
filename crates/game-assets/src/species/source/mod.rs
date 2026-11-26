@@ -16,12 +16,12 @@ use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::resolved_source_record_index::SourceIndex;
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::species::ConservationStatus;
 use openzt2_game_data::species::Species;
 use openzt2_game_data::species::SpeciesDocument;
 use openzt2_game_data::species::SpeciesFlags;
 use openzt2_game_data::species::SpeciesVariantBinding;
+use openzt2_game_data::AssetId;
 use std::collections::BTreeSet;
 
 pub mod adoption;

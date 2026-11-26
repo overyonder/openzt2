@@ -34,11 +34,11 @@ use openzt2_zoo_state::{
     animal_health::types::{AnimalDied, Dead, DeathCause},
     animal_lifecycle::{animal_birth_and_release_contracts::AnimalBorn, types::Animal},
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
         running_actions::{
             BehaviorInstructionId, RunBehaviorMorphEntity, RunBehaviorTermination,
             RunningBehaviorInstruction,
         },
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     habitat::habitat_types::HabitatMember,
 };

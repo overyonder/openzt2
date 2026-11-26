@@ -132,7 +132,12 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
         })
         .add_systems(
             TankPointerStep,
-            (PointerInput::receive, update_tank_geometry_gesture).chain(),
+            (
+                PointerInput::receive,
+                update_tank_geometry_gesture,
+                openzt2_construction::construction::construction_transaction_preparation::begin_construction_transaction_from_valid_preview,
+            )
+                .chain(),
         )
         .add_systems(TankProjectionStep, reconcile_authored_show_tank_eligibility)
         .add_systems(
@@ -160,7 +165,8 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
             max_depth_cm: 500,
             capacity_litres_per_cell: 1000,
             filtration_per_day: 0,
-            opaque_wall_material: None,
+            wall_materials: [AssetId::default(); 3],
+            wall_materials_low: [AssetId::default(); 3],
         }],
         tank_surface_policy: Some(TankSurfacePolicy {
             water_height_offset_cm: 0,

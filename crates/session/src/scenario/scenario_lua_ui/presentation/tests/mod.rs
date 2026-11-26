@@ -16,6 +16,7 @@ fn node(name: &str, parent: u32, key: &str) -> UiNodeDefinition {
         region: default(),
         text: String::new(),
         cursor: default(),
+        money_text_format: None,
         text_format: default(),
         help: default(),
         cacheable_from_lua: false,
@@ -41,6 +42,7 @@ fn child_lookup_scopes_duplicate_text_names_to_the_requested_surface() {
         id: default(),
         role: UiDocumentRole::ScenarioWin,
         logical_size: [1024.0, 768.0],
+        edge_pan_surface_node_index: None,
         nodes: vec![
             node("root", 0, "root"),
             node("Scenario Win  Layout", 0, "win"),

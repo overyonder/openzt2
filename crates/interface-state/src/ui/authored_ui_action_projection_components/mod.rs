@@ -9,11 +9,11 @@ use openzt2_game_data::ui_document::{
         persistence::UiPersistenceActionRecord, photography::UiPhotoActionRecord,
         presentation::UiPresentationActionRecord,
         research::UiStartResearchForSelectedCatalogueItemActionRecord,
-        scenarios::UiScenarioActionRecord, shell_navigation::UiShellActionRecord,
-        simulation_time::UiSimulationActionRecord, staff_management::UiStaffActionRecord,
-        transportation::UiTransportActionRecord, UiActionRecord,
+        scenarios::UiScenarioActionRecord, script::UiScriptActionRecord,
+        shell_navigation::UiShellActionRecord, simulation_time::UiSimulationActionRecord,
+        staff_management::UiStaffActionRecord, transportation::UiTransportActionRecord,
+        UiActionRecord,
     },
-    timed_presentation::UiTimedEventAction,
     widget::UiWidgetRecord,
 };
 
@@ -61,7 +61,7 @@ fn canonical_ui_action_records_for_projection_source(
             .nodes
             .get(node as usize)
             .and_then(|node| node.hotkeys.get(hotkey as usize))
-            .map_or(&[], |hotkey| std::slice::from_ref(&hotkey.action)),
+            .map_or(&[], |hotkey| hotkey.actions.as_slice()),
         UiActionSource::TimedEvent { node, event } => canonical_ui_document
             .nodes
             .get(node as usize)
@@ -71,10 +71,7 @@ fn canonical_ui_action_records_for_projection_source(
                 };
                 events.get(event as usize)
             })
-            .map_or(&[], |event| match &event.action {
-                UiTimedEventAction::Ui(action) => std::slice::from_ref(action),
-                UiTimedEventAction::ScenarioScript(_) => &[],
-            }),
+            .map_or(&[], |event| std::slice::from_ref(&event.action)),
     }
 }
 
@@ -138,3 +135,4 @@ define_ui_action_projection_component!(
     Persistence
 );
 define_ui_action_projection_component!(UiSimulationActions, UiSimulationActionRecord, Simulation);
+define_ui_action_projection_component!(UiScriptActions, UiScriptActionRecord, Script);

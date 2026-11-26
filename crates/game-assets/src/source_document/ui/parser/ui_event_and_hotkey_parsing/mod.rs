@@ -68,6 +68,7 @@ pub(super) fn parse_authored_ui_event_trigger(tag: &str) -> Option<SourceUiEvent
         "leave" => SourceUiEventTrigger::Leave,
         "activate" => SourceUiEventTrigger::Activate,
         "doubleclick" => SourceUiEventTrigger::DoubleClick,
+        "rightmousedown" => SourceUiEventTrigger::SecondaryPress,
         "animationcompleted" => SourceUiEventTrigger::AnimationCompleted,
         "show" => SourceUiEventTrigger::Show,
         "hide" => SourceUiEventTrigger::Hide,
@@ -207,7 +208,7 @@ pub(super) fn parse_authored_ui_hotkeys(node: &OrderedSourceDocumentNode) -> Vec
                     .map(AssetPath::new),
                 node: optional_nonempty_source_attribute(child, "node")
                     .or_else(|| optional_nonempty_source_attribute(node, "node")),
-                event,
+                events: vec![event],
             }
         })
         .collect()

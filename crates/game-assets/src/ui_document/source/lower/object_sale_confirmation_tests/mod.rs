@@ -31,6 +31,7 @@ fn lower_authored_test_document(
         image_selections: Vec::new(),
         interaction_cursors: None,
         placement_preview: None,
+        edge_pan_source_child: None,
         role_targets,
         resolved_dependencies: Default::default(),
     })

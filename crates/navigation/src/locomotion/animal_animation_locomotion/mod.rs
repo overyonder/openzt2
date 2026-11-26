@@ -91,7 +91,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
         (
             With<Animal>,
             Without<openzt2_zoo_state::animal_health::types::Dead>,
-            Without<openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated>,
+            openzt2_world_state::world_spawn::world_entity_crating::UncratedWorldEntity,
         ),
     >,
     mut playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
@@ -451,6 +451,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
                 blend_duration_milliseconds: 0,
                 playback_speed_permille: rate,
                 playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,
+                action_settings: None,
             });
             ownership.move_request_id = Some(request.id);
             ownership.requested_generation = controller.playback_generation;
@@ -479,6 +480,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
                         } else {
                             AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
                         },
+                        action_settings: None,
                     });
                 }
             }

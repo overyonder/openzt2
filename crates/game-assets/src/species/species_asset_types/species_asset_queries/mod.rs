@@ -1,10 +1,10 @@
 use super::{
-    SpeciesAsset, SpeciesAssets, SpeciesDocumentRow, SpeciesView, normalized_species_model_path,
+    normalized_species_model_path, SpeciesAsset, SpeciesAssets, SpeciesDocumentRow, SpeciesView,
 };
 use bevy::prelude::*;
 use openzt2_game_data::{
-    AssetId,
     species::{NeedKind, Species, SpeciesVariant, SpeciesVariantBinding},
+    AssetId,
 };
 
 impl SpeciesAssets {

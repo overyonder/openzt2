@@ -1,12 +1,14 @@
-use std::sync::Arc;
-
 use bevy::prelude::*;
+use openzt2_game_assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
+use openzt2_game_data::ui_document::action::script::UiScriptActionRecord;
 
 #[derive(Message)]
-pub struct RunTimedScenarioUiAction {
+pub struct RunAuthoredUiScript {
     pub action: Entity,
     pub document_root: Entity,
-    pub command: Arc<str>,
+    pub invocation: UiScriptActionRecord,
+    pub handle: Option<Handle<LuaScriptAsset>>,
+    pub timed: bool,
 }
 
 #[derive(Message)]

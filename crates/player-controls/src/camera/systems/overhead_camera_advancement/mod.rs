@@ -56,7 +56,7 @@ pub(in crate::camera) fn advance_overhead_camera_controls(
     if !dt.is_finite() || dt <= 0.0 {
         return;
     }
-    for (mode, mut rig, tuning, bounds, mut intent) in &mut cameras {
+    for (mode, mut rig, tuning, bounds, intent) in &mut cameras {
         if *mode != CameraMode::Overhead {
             continue;
         }

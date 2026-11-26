@@ -14,7 +14,7 @@ pub(crate) fn apply_overhead_camera_zoom_graphics_setting(
     graphics: Res<GraphicsSettings>,
     mut cameras: Query<(&mut CameraTuning, &mut OverheadRig, Ref<CameraMode>), With<ZooCamera>>,
 ) {
-    for (mut tuning, mut rig, mode) in &mut cameras {
+    for (tuning, rig, mode) in &mut cameras {
         if *mode != CameraMode::Overhead
             || !(graphics.is_changed() || mode.is_changed() || tuning.is_changed())
         {

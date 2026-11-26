@@ -1,8 +1,8 @@
 use bevy::prelude::*;
-use openzt2_game_data::world_scenario::{ScenarioRecordFlags, ScenarioScriptPhase};
+use openzt2_game_data::world_scenario::ScenarioRecordFlags;
 
-use openzt2_game_assets::lua_script::lua_script_archive_path_index::LuaScriptArchivePathIndex;
 use openzt2_game_assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
+use openzt2_game_assets::lua_script::lua_script_sources::LuaScriptSources;
 use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_world_state::game_session_types::WorldSessionMode;
@@ -19,7 +19,6 @@ use super::{
     scenario_lua_command_publication::ScenarioLuaOutputs,
     scenario_lua_query_fact_collection::ScenarioLuaQueryFactSources,
     scenario_lua_types::ScenarioLuaContext,
-    scenario_lua_virtual_machine::execute_loaded_scenario_lua_script_binding,
 };
 
 /// Script directory of the challenges `checkchallenges` offers to a new zoo.
@@ -36,7 +35,7 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
     scenarios: Res<WorldScenarios>,
     scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,
-    script_index: Res<LuaScriptArchivePathIndex>,
+    script_sources: Res<LuaScriptSources>,
     mut runtime: Query<&mut ScenarioLuaContext>,
     (fact_sources, direct): (
         ScenarioLuaQueryFactSources,
@@ -72,9 +71,7 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
     if selection.mode != WorldSessionMode::Challenge {
         return;
     }
-    if scenarios.has_pending_document_loads(&asset_server, &scenario_assets)
-        || script_index.has_pending_script_loads(&asset_server, &scripts)
-    {
+    if scenarios.has_pending_document_loads(&asset_server, &scenario_assets) {
         return;
     }
     let Some(scenarios) = scenarios.get(&scenario_assets) else {
@@ -106,8 +103,8 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
     if clock.tick < next_evaluation.0 {
         return;
     }
-    next_evaluation.0 = next_tick;
     if !offers.is_empty() {
+        next_evaluation.0 = next_tick;
         return;
     }
     let mut candidates = scenarios
@@ -116,17 +113,21 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
         .filter_map(|scenario| {
             let handle = scenarios.handle_for_scenario(scenario.id)?;
             let asset = scenario_assets.get(handle)?;
-            let binding = asset
-                .document
-                .scenario_script_bindings
-                .iter()
-                .find(|binding| {
-                    binding.scenario == scenario.id
-                        && binding.phase == ScenarioScriptPhase::Validate
-                })?;
-            Some((handle.clone(), binding.clone()))
+            let (binding, path, script) = asset.validation_script(scenario.id)?;
+            Some((handle, binding, path, script))
         })
         .collect::<Vec<_>>();
+    if candidates.iter().any(|(_, _, _, script)| {
+        scripts.get(*script).is_none()
+            && !matches!(
+                asset_server.get_load_state(script.id()),
+                Some(bevy::asset::LoadState::Failed(_))
+            )
+    }) {
+        return;
+    }
+    next_evaluation.0 = next_tick;
+    candidates.retain(|(_, _, _, script)| scripts.get(*script).is_some());
     // `checkchallenges` decides the instant challenge once, on its first
     // evaluation after priming. Every later pick comes from the others.
     let offer_instant_challenge = if instant_decided {
@@ -145,7 +146,7 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
         );
         allowed
     };
-    candidates.retain(|(_, binding)| {
+    candidates.retain(|(_, binding, _, _)| {
         binding
             .script
             .to_ascii_lowercase()
@@ -161,7 +162,7 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
         return;
     }
     let candidate_count = candidates.len();
-    let (handle, binding) = candidates
+    let (handle, binding, script_path, script_handle) = candidates
         .swap_remove(rng.generate_next_challenge_selection_value() as usize % candidate_count);
     let spawn_sources = std::cell::RefCell::new(spawn_sources);
     let spawn_animal = |kind, position, rotation, reserved: &[_]| {
@@ -181,16 +182,17 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
         .iter()
         .find(|(_, candidate, member)| candidate.0 == binding.scenario && member.root == root)
         .map(|(entity, _, _)| entity);
-    let source = ScenarioDocument(handle);
+    let source = ScenarioDocument(handle.clone());
     let execute = |context: &mut ScenarioLuaContext| {
-        execute_loaded_scenario_lua_script_binding(
-            context,
-            &source,
-            &scenario_assets,
+        context.execute(
+            Some(handle.id()),
+            script_path,
+            script_handle,
             &scripts,
-            &script_index,
-            &binding,
+            &script_sources,
+            binding,
             queries,
+            None,
         )
     };
     let result = if let Some(mut context) = owner.and_then(|entity| runtime.get_mut(entity).ok()) {

@@ -58,7 +58,7 @@ pub(crate) struct BehaviorViewEventEmitted {
 }
 
 #[derive(Component)]
-struct ViewThoughtTimeout(Timer);
+pub(super) struct ViewThoughtTimeout(Timer);
 
 pub(super) fn expire_view_thoughts(
     time: Res<Time<Fixed>>,

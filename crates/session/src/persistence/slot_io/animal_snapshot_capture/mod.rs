@@ -7,8 +7,9 @@ use super::{
     },
 };
 use bevy::{ecs::resource::IsResource, prelude::*};
+use openzt2_animals::animal_welfare::need_timing_types::NeedAdjustmentCadence;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::{AnimalCrate, ScriptedCrating};
 use openzt2_zoo_state::animal_behavior::animal_lineage::{
     AnimalFather, AnimalMate, AnimalMother, PregnancyFather,
 };
@@ -19,7 +20,7 @@ use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_health::types::DeathCause;
 use openzt2_zoo_state::animal_lifecycle::types::*;
 use openzt2_zoo_state::animal_welfare::types::*;
-use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
+use openzt2_zoo_state::locomotion::locomotion_types::CaffeineFlags;
 
 /// Whole animal entities. Resources are entities too, so exclude them to keep
 /// this read access disjoint from resource writes in the same system.
@@ -51,8 +52,8 @@ pub(super) fn capture_animal_snapshot_records(
         let welfare = if let Some(welfare) = animal.get::<AnimalWelfare>() {
             Some(AnimalWelfareSnapshotRecord {
                 need_adjustment_timer: animal
-                    .get::<AnimalNeedAdjustmentTimer>()
-                    .map(|timer| (timer.remaining_ns, timer.random.to_raw())),
+                    .get::<NeedAdjustmentCadence>()
+                    .map(NeedAdjustmentCadence::saved_remaining),
                 needs: [
                     required_animal_component::<Hunger>(animal)?.0,
                     required_animal_component::<Thirst>(animal)?.0,
@@ -140,12 +141,13 @@ pub(super) fn capture_animal_snapshot_records(
                 pending.sort_unstable_by_key(|token| (token.available_at, token.name.0));
                 pending
             },
-            crated: animal.contains::<WorldEntityIsCrated>(),
+            crated: (animal.contains::<AnimalCrate>() || animal.contains::<ScriptedCrating>()),
             crate_identifier: None,
             release_restricted: animal.contains::<ReleaseRestricted>(),
-            caffeinated: animal
-                .get::<CaffeineMode>()
-                .map(|mode| *mode == CaffeineMode::Caffeinated),
+            caffeinated: animal.get::<CaffeineFlags>().map(|flags| flags.caffeinated),
+            decaffeinated: animal
+                .get::<CaffeineFlags>()
+                .map(|flags| flags.decaffeinated),
             crating_restricted: animal.contains::<CratingRestricted>(),
             death: animal.get::<Dead>().map(|dead| match dead.cause {
                 DeathCause::Disease(disease) => {

@@ -80,6 +80,7 @@ fn lower_mixer(
         spatial_voice_limit: 8,
         spatial_in_range: 2_500.0,
         spatial_out_range: 3_000.0,
+        spatial_rolloff: 1.0,
         max_world_distance: 45.0,
     };
     let Some(options) = descendants(&document.root).find(|node| node.name == "SoundOptions") else {
@@ -93,6 +94,7 @@ fn lower_mixer(
         .unwrap_or(policy.spatial_voice_limit);
     policy.spatial_in_range = number(options, "inRangeDist")?.unwrap_or(policy.spatial_in_range);
     policy.spatial_out_range = number(options, "outRangeDist")?.unwrap_or(policy.spatial_out_range);
+    policy.spatial_rolloff = number(options, "rolloff")?.unwrap_or(policy.spatial_rolloff);
     policy.max_world_distance =
         number(options, "maxDistToHear3DWorldSnds")?.unwrap_or(policy.max_world_distance);
     Ok(policy)
@@ -102,6 +104,7 @@ fn lower_ambient(
     document: &OrderedSourceDocument,
 ) -> Result<AudioAmbientPolicy, AudioDocumentDiagnostic> {
     let mut policy = AudioAmbientPolicy {
+        enabled: root_number::<u8>(document, "On")?.is_none_or(|value| value != 0),
         voice_limit: 10,
         delay_seconds: [4.0, 6.0],
         probability: 1.0,
@@ -336,10 +339,10 @@ fn lower_variant(
             inherited_number(variant, factory, "mindelay")?.unwrap_or(delay),
             inherited_number(variant, factory, "maxdelay")?.unwrap_or(delay),
         ),
-        distance: min_distance.or(max_distance).map(|fallback| {
+        distance: min_distance.or(max_distance).map(|_| {
             ordered(
-                min_distance.unwrap_or(fallback),
-                max_distance.unwrap_or(fallback),
+                min_distance.unwrap_or(15.0),
+                max_distance.unwrap_or(3_000.0),
             )
         }),
         soften_gain: number(variant, "softenGain")?.unwrap_or(1.0),

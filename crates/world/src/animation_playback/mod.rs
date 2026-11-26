@@ -79,6 +79,8 @@ impl Plugin for AnimationPlaybackPlugin {
             )
             .add_message::<authored_animation_presentation_action_delivery::AnimationPresentationTextAction<false>>()
             .add_message::<authored_animation_presentation_action_delivery::AnimationPresentationTextAction<true>>()
+            .add_systems(PostUpdate, player_clock_lanes::advance_prefab_real_time_players
+                .before(bevy::animation::animate_targets))
             .add_systems(PostUpdate, player_clock_lanes::advance_render_players
                 .after(bevy::animation::transition::advance_transitions)
                 .before(bevy::animation::animate_targets)

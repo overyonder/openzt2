@@ -12,6 +12,20 @@ use openzt2_world_state::animation_playback::{
 };
 
 use super::authored_animation_event_execution::visit_interval;
+
+#[derive(Component)]
+pub(crate) struct PrefabRealTimeAnimation(pub(crate) AnimationNodeIndex);
+
+pub(super) fn advance_prefab_real_time_players(
+    time: Res<Time<Real>>,
+    mut players: Query<(&PrefabRealTimeAnimation, &mut AnimationPlayer)>,
+) {
+    for (clock, mut player) in &mut players {
+        if let Some(animation) = player.animation_mut(clock.0) {
+            animation.set_seek_time(animation.seek_time() + time.delta_secs());
+        }
+    }
+}
 use super::authored_animation_text_action_execution_context::AuthoredAnimationTextActionExecutionContext;
 use super::managed_clip_binding::{
     FixedAnimationPlayer, ManagedAnimationClip, RealTimeAnimationPlayer,
@@ -189,7 +203,7 @@ pub(super) fn dispatch_stock_render_animation_text_key(
     mut players: Query<&mut AnimationPlaybackController, With<StockRenderAnimationAdvance>>,
     mut actions: AuthoredAnimationTextActionExecutionContext<true>,
 ) {
-    let entity = event.trigger().target;
+    let entity = event.entity;
     let Ok(mut controller) = players.get_mut(entity) else {
         return;
     };

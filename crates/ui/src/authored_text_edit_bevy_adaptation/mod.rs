@@ -50,6 +50,31 @@ impl UiTextEditPolicy {
 /// Converts the projected static `Text` value into Bevy's native editable text
 /// component once. Bevy/Parley then own Unicode navigation, selection, caret
 /// geometry, rendering, clipping, scrolling, IME, and clipboard operations.
+#[derive(Component)]
+#[relationship(relationship_target = UiTextEditWatchers)]
+pub(crate) struct UiWatchesTextEdit(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = UiWatchesTextEdit)]
+pub(crate) struct UiTextEditWatchers(Vec<Entity>);
+
+pub(super) fn update_authored_text_edit_watchers(
+    edits: Query<
+        (&EditableText, &UiTextEditWatchers),
+        Or<(Changed<EditableText>, Changed<UiTextEditWatchers>)>,
+    >,
+    mut receivers: Query<&mut UiInteractionEnabled>,
+) {
+    for (edit, watchers) in &edits {
+        let enabled = !edit.value().to_string().trim().is_empty();
+        for watcher in &watchers.0 {
+            if let Ok(mut receiver) = receivers.get_mut(*watcher) {
+                receiver.set_if_neq(UiInteractionEnabled(enabled));
+            }
+        }
+    }
+}
+
 pub(super) fn initialize_authored_text_edits_as_bevy_editable_text(
     mut commands: Commands,
     mut edits: Query<

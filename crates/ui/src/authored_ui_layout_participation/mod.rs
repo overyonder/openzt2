@@ -17,6 +17,7 @@ use super::authored_tree_expansion_and_row_indentation::{
 /// draw visibility, so Bevy and Taffy do not lay out every inactive UI
 /// document each frame.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[require(Node)]
 pub struct UiAuthoredLayoutDisplay(Display);
 
 impl UiAuthoredLayoutDisplay {
@@ -52,7 +53,6 @@ pub(super) fn project_authored_layout_participation(
                 Changed<Visibility>,
                 Changed<UiAuthoredLayoutDisplay>,
                 Changed<ChildOf>,
-                Added<Node>,
                 Added<UiOverheadOnly>,
                 Added<UiAuthoredTreeHeader>,
                 Changed<UiEdgePanSurface>,

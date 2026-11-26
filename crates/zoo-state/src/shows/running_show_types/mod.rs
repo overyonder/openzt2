@@ -29,7 +29,6 @@ pub enum ShowPhase {
 #[derive(Component)]
 pub struct RunningShow {
     pub phase: ShowPhase,
-    pub remaining_ticks: u32,
     pub current_slot: usize,
     pub trick_score: f32,
     pub stars: f32,

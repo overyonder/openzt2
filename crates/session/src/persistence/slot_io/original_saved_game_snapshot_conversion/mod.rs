@@ -3,10 +3,7 @@ use super::{
 };
 use bevy::prelude::*;
 use openzt2_game_assets::{
-    lua_script::{
-        lua_script_archive_path_index::LuaScriptArchivePathIndex,
-        lua_script_asset_loading::LuaScriptAsset,
-    },
+    lua_script::{lua_script_asset_loading::LuaScriptAsset, lua_script_sources::LuaScriptSources},
     original_saved_game_asset_loading::OriginalSavedGameAsset,
     source_document::{
         ordered_source_document_types::OrderedSourceDocumentNode,
@@ -17,10 +14,7 @@ use openzt2_game_assets::{
     world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
 };
 use openzt2_game_data::{audio::AudioCrowdPolicy, AssetId};
-use openzt2_world_state::simulation_time::{
-    deterministic_random_stream::derive_zoo_seed_from_scenario_and_profile,
-    simulation_control_types::SimulationControl,
-};
+use openzt2_world_state::simulation_time::deterministic_random_stream::derive_zoo_seed_from_scenario_and_profile;
 use std::io;
 
 #[allow(clippy::too_many_arguments)]
@@ -29,9 +23,9 @@ pub(super) fn encode_original_saved_game_snapshot(
     world: &WorldSnapshotRecord,
     terrain: &TerrainSnapshotRecord,
     profile: AssetId,
-    document: &Handle<WorldScenarioDocumentAsset>,
+    document: &WorldScenarioDocumentAsset,
     scripts: &Assets<LuaScriptAsset>,
-    script_index: &LuaScriptArchivePathIndex,
+    script_sources: &LuaScriptSources,
     definitions: WorldDefinitionsView<'_>,
     species: SpeciesView<'_>,
     crowd: AudioCrowdPolicy,
@@ -41,8 +35,7 @@ pub(super) fn encode_original_saved_game_snapshot(
     let economy_manager = unique_child(context, "ZTEconomyMgr")?;
     let award_points = read_saved_status_progression(status)?;
     validate_inactive_managers(context)?;
-    let start = saved
-        .source
+    let start = document
         .document
         .starting_zoos
         .first()
@@ -53,8 +46,11 @@ pub(super) fn encode_original_saved_game_snapshot(
         }
     }
     let timing = definitions.timing();
-    let (clock, calendar) =
-        super::original_saved_game_clock_conversion::read_original_saved_clock(status, timing)?;
+    let cadence = openzt2_simulation_time::simulation_time_world_lifecycle::zoo_day_cadence_from_world_definitions(definitions)
+        .ok_or_else(|| invalid("saved world has no simulation cadence"))?;
+    let (clock, calendar) = super::original_saved_game_clock_conversion::read_original_saved_clock(
+        status, timing, cadence,
+    )?;
     let native_month = u32::from(
         calendar
             .year
@@ -82,13 +78,12 @@ pub(super) fn encode_original_saved_game_snapshot(
     let simulation = super::super::simulation_time_snapshot_section::original_saved_game_conversion::from_saved_clock(
         clock,
         calendar,
-        SimulationControl::new(0, false),
         seed,
         timing,
+        cadence,
     )
     .map_err(|error| invalid(format!("invalid saved simulation state: {error:?}")))?;
-    let definition = saved
-        .source
+    let definition = document
         .document
         .scenarios
         .iter()
@@ -110,7 +105,7 @@ pub(super) fn encode_original_saved_game_snapshot(
         .ok_or_else(|| invalid("saved world exhausts canonical identifiers"))?
         .max(native_next);
     let scenario=super::scenario_snapshot_section::original_saved_game_conversion::read_original_saved_scenario_snapshot(
-        unique_child(context,"ZTScenarioMgr")?,definition,&saved.source.document.scenario_script_bindings,document.id(),scripts,script_index,clock.tick,
+        unique_child(context,"ZTScenarioMgr")?,definition,&document.document.scenario_script_bindings,saved.scenario.id(),scripts,script_sources,clock.tick,
         ||{let id=next;next=next.checked_add(1).ok_or_else(||invalid("saved scenario identifiers are exhausted"))?;Ok(id)},
     )?;
     let favourite =
@@ -123,8 +118,7 @@ pub(super) fn encode_original_saved_game_snapshot(
                 })
             },
         )?;
-    let map = saved
-        .source
+    let map = document
         .document
         .maps
         .first()

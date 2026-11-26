@@ -1,7 +1,7 @@
 //! Data used by photo capture, screenshot capture, and captured evidence.
 
 use bevy::prelude::*;
-use openzt2_game_data::{AssetId as DomainAssetId, species::LifeStage};
+use openzt2_game_data::{species::LifeStage, AssetId as DomainAssetId};
 
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdError;
 

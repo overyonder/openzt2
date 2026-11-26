@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
-use openzt2_game_data::{AssetId, behavior::document::BehaviorDocument};
+use openzt2_game_data::{behavior::document::BehaviorDocument, AssetId};
 
 #[derive(Asset, TypePath, Debug)]
 pub struct BehaviorDocumentAsset {

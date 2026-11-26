@@ -33,9 +33,11 @@ pub(super) struct AnimalSnapshotRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crate_identifier: Option<u64>,
     pub release_restricted: bool,
-    /// `b_CaffeineMode` (`true`) or `b_DeCaffeineMode` (`false`).
+    /// Older records use a single value for the two caffeine flags.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caffeinated: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decaffeinated: Option<bool>,
     pub crating_restricted: bool,
     pub death: Option<AnimalSnapshotDeath>,
     pub welfare: Option<AnimalWelfareSnapshotRecord>,

@@ -13,11 +13,11 @@ use openzt2_world_state::{
 };
 use openzt2_zoo_state::{
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState,
         running_actions::{
-            RunBehaviorDigArtifact, RunBehaviorFindArtifact, RunningBehaviorInstruction,
-            WhenBehaviorAction, mark_behavior_task_for_failure_and_stop_navigation,
+            mark_behavior_task_for_failure_and_stop_navigation, RunBehaviorDigArtifact,
+            RunBehaviorFindArtifact, RunningBehaviorInstruction, WhenBehaviorAction,
         },
+        BehaviorTaskExecutionState,
     },
     locomotion::locomotion_types::{ActiveTerrainDerivedNavigationGraph, NavFlags},
     placement::placement_occupancy_index::PlacedObjectFootprintQueries,
@@ -198,7 +198,7 @@ fn find_artifact(
                     .then_with(|| a.0.cmp(&b.0))
             })
             .map(|site| site.0)?;
-        let (_, _, mut pose, mut global, mut id, mut presentation, mut visibility) =
+        let (_, _, mut pose, mut global, mut id, presentation, mut visibility) =
             sites.get_mut(site).ok()?;
         let next =
             Transform::from_translation(position).with_scale(Vec3::splat(definition.prefab_scale));

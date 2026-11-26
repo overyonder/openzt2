@@ -468,6 +468,11 @@ fn restored_waste_rebuilds_one_job_and_authored_cleanup_survives_a_second_save()
             interaction_slot: None,
             depth: 0,
         },));
+    destination.world_mut().commands().queue(move |world: &mut World| {
+        let mut commands = world.commands();
+        openzt2_zoo_state::behavior_task_execution_types::running_actions::continue_behavior_program(staff, 90, &mut commands);
+    });
+    destination.world_mut().flush();
     destination.update();
     assert!(destination.world().get_entity(work.target).is_err());
     // Save after the kill but before the task's terminal event: consumed waste stays gone.
@@ -537,7 +542,11 @@ fn restored_prefab_preserves_saved_root_pose_and_removes_its_children_with_waste
         ),
         rotation_cycles: vec![],
         transform_animations: vec![],
+        visibility_animation: None,
+        morph_animation: None,
+        render_lod_policy: None,
         renderables: vec![],
+        animation_start: None,
         colliders: vec![],
         lods: vec![],
         billboards: vec![],

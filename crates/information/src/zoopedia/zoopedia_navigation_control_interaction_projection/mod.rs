@@ -3,7 +3,6 @@ use openzt2_game_data::ui_document::action::information::UiInformationAction;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiInformationActions;
-use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
@@ -19,10 +18,9 @@ pub(crate) fn project_zoopedia_history_availability_to_authored_navigation_contr
         Ref<UiInformationActions>,
         &UiDocumentOwner,
         &mut UiInteractionEnabled,
-        Option<&mut UiFocusable>,
     )>,
 ) {
-    for (authored_actions, document_owner, mut interaction_enabled, focusable) in
+    for (authored_actions, document_owner, mut interaction_enabled) in
         &mut authored_navigation_controls
     {
         let Ok(history) = zoopedia_histories.get(document_owner.0) else {
@@ -50,8 +48,5 @@ pub(crate) fn project_zoopedia_history_availability_to_authored_navigation_contr
         };
 
         interaction_enabled.0 = availability;
-        if let Some(mut focusable) = focusable {
-            focusable.enabled = availability;
-        }
     }
 }

@@ -1,6 +1,7 @@
 //! Staff assignment, worker-duty, and firing actions.
 
 use super::UiTrigger;
+use crate::AssetId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
@@ -15,14 +16,6 @@ pub enum UiStaffAction {
     FireSelectedStaff,
     MarkSelectedEntityAsKeeperAssignmentTarget,
     ClearSelectedKeeperAssignmentTarget,
-    SetWorkerDutyAssignment { duty: UiWorkerDuty, assigned: bool },
+    SetWorkerDutyAssignment { task: AssetId, assigned: bool },
     EnterStaffAssignmentMode,
-}
-
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UiWorkerDuty {
-    CleanAquaticTankFilter,
-    EmptyRecyclingContainer,
-    EmptyTrashContainer,
-    SweepLitter,
 }

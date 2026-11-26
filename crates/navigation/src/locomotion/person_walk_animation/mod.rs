@@ -208,6 +208,15 @@ pub(super) fn project_person_motion_to_walk_animation(
             && clip_binding.as_ref().is_some_and(|binding| {
                 binding.matches(controller.animation_set_asset.id(), node_key, false)
             });
+        let has_locomotion_node = resolved_node
+            || assets
+                .sets
+                .get(&controller.animation_set_asset)
+                .is_some_and(|set| {
+                    set.animation_graph_nodes
+                        .iter()
+                        .any(|node| node.animation_graph_node_asset_key == node_key)
+                });
         if !has_locomotion_node {
             if let Some(agent) = agent.filter(|_| moving && row.is_some()) {
                 agent
@@ -381,6 +390,7 @@ pub(super) fn project_person_motion_to_walk_animation(
                 blend_duration_milliseconds: 0,
                 playback_speed_permille: rate,
                 playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,
+                action_settings: None,
             });
             if let Some((parent, _, mean_speed_mps)) = binding {
                 let motion = ConsumedLocomotionRootMotion::new(request.id, parent);
@@ -440,7 +450,15 @@ mod tests {
                     )
                 })
                 .into(),
-            Vec::new(),
+            [WALK_CLIP, STAND_CLIP]
+                .map(|key| {
+                    openzt2_game_data::animation::animation_set::AuthoredAnimationGraphNode {
+                        animation_graph_node_asset_key: key.to_owned(),
+                        animation_clip_asset_keys: vec![key.to_owned()],
+                        authored_animation_attributes: Vec::new(),
+                    }
+                })
+                .into(),
             Vec::new(),
             Vec::new(),
             None,

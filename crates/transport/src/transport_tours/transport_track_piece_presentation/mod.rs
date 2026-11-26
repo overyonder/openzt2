@@ -1392,7 +1392,7 @@ pub(super) fn bind_authored_transport_construction_marker_roles(
     >,
     children: Query<&Children>,
     parents: Query<&ChildOf>,
-    mut roles: Query<&mut TransportConstructionMarkerOf>,
+    roles: Query<&TransportConstructionMarkerOf>,
 ) {
     let find_owner = |entity| {
         parents
@@ -1442,17 +1442,13 @@ pub(super) fn bind_authored_transport_construction_marker_roles(
         let paired = station && authored.iter().any(|&(_, ordinal)| ordinal == 3);
         for (entity, ordinal) in authored {
             let ordinal = if paired { ordinal / 2 } else { ordinal };
-            match roles.get_mut(entity) {
-                Ok(mut current) if current.owner == owner => {
-                    current
-                        .map_unchanged(|role| &mut role.ordinal)
-                        .set_if_neq(ordinal);
-                }
-                _ => {
-                    commands
-                        .entity(entity)
-                        .insert(TransportConstructionMarkerOf { owner, ordinal });
-                }
+            if !roles
+                .get(entity)
+                .is_ok_and(|role| role.owner == owner && role.ordinal == ordinal)
+            {
+                commands
+                    .entity(entity)
+                    .insert(TransportConstructionMarkerOf { owner, ordinal });
             }
         }
     }

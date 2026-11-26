@@ -9,7 +9,6 @@ pub(super) fn snapshot_section_dependencies_changed(
     mut species_documents: MessageReader<AssetEvent<SpeciesAsset>>,
     mut failures: MessageReader<UntypedAssetLoadFailedEvent>,
     species: Res<SpeciesAssets>,
-    scripts_index: Option<Res<LuaScriptArchivePathIndex>>,
     locomotion: Query<Ref<LocomotionCapacity>>,
     profile: Res<ProfileOptions>,
 ) -> bool {
@@ -23,7 +22,6 @@ pub(super) fn snapshot_section_dependencies_changed(
         stage.is_added()
             || assets_changed
             || species.is_changed()
-            || scripts_index.is_some_and(|index| index.is_changed())
             || locomotion
                 .get(stage.root)
                 .is_ok_and(|capacity| capacity.is_changed())

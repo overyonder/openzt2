@@ -1,6 +1,6 @@
 use super::{
-    guest_simulation_types::*, view_event_execution::BehaviorViewEventEmitted,
-    view_event_execution::apply_guest_reactions,
+    guest_simulation_types::*, view_event_execution::apply_guest_reactions,
+    view_event_execution::BehaviorViewEventEmitted,
 };
 use bevy::prelude::*;
 use openzt2_game_assets::world_definitions::{
@@ -8,10 +8,10 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::{
-    AssetId,
     world_definitions::{
         document::WorldDefinitionDocument, guest_simulation_definitions::*, world_objects::*,
     },
+    AssetId,
 };
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
@@ -23,6 +23,7 @@ pub(super) fn policy_document() -> WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
             authored_runtime: Default::default(),
             audio_cue_prefixes: Vec::new(),
+            audio_stage_volumes: Vec::new(),
             surface_effect_strength: None,
             presentation_caustic_policies: Vec::new(),
             traversal_animation_manifests: Vec::new(),

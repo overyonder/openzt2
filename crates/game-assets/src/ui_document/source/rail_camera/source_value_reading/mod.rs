@@ -4,7 +4,7 @@ use std::io;
 
 use crate::source_document::ordered_source_document_types::OrderedSourceDocumentNode;
 
-pub(super) fn required_source_attribute<'a>(
+pub(in crate::ui_document::source) fn required_source_attribute<'a>(
     source_node: &'a OrderedSourceDocumentNode,
     attribute_name: &str,
 ) -> io::Result<&'a str> {
@@ -16,7 +16,7 @@ pub(super) fn required_source_attribute<'a>(
         })
 }
 
-pub(super) fn required_finite_source_number(
+pub(in crate::ui_document::source) fn required_finite_source_number(
     source_node: &OrderedSourceDocumentNode,
     attribute_name: &str,
 ) -> io::Result<f32> {
@@ -24,7 +24,7 @@ pub(super) fn required_finite_source_number(
         .map_err(|_| invalid_source_data(format!("invalid {attribute_name}")))
 }
 
-pub(super) fn optional_source_boolean_attribute(
+pub(in crate::ui_document::source) fn optional_source_boolean_attribute(
     source_node: &OrderedSourceDocumentNode,
     attribute_name: &str,
 ) -> io::Result<Option<bool>> {
@@ -40,7 +40,7 @@ pub(super) fn optional_source_boolean_attribute(
         .transpose()
 }
 
-pub(super) fn source_element_child<'a>(
+pub(in crate::ui_document::source) fn source_element_child<'a>(
     source_node: &'a OrderedSourceDocumentNode,
     child_name: &str,
 ) -> Option<&'a OrderedSourceDocumentNode> {
@@ -49,7 +49,7 @@ pub(super) fn source_element_child<'a>(
         .find(|source_child| source_child.name.eq_ignore_ascii_case(child_name))
 }
 
-pub(super) fn find_source_descendant<'a>(
+pub(in crate::ui_document::source) fn find_source_descendant<'a>(
     source_roots: impl Iterator<Item = &'a OrderedSourceDocumentNode>,
     descendant_name: &str,
 ) -> Option<&'a OrderedSourceDocumentNode> {
@@ -62,7 +62,9 @@ pub(super) fn find_source_descendant<'a>(
     })
 }
 
-pub(super) fn parse_finite_source_number(source_value: &str) -> io::Result<f32> {
+pub(in crate::ui_document::source) fn parse_finite_source_number(
+    source_value: &str,
+) -> io::Result<f32> {
     source_value
         .trim_end_matches(['f', 'F'])
         .parse::<f32>()
@@ -71,7 +73,7 @@ pub(super) fn parse_finite_source_number(source_value: &str) -> io::Result<f32> 
         .ok_or_else(|| invalid_source_data("invalid finite floating-point value"))
 }
 
-pub(super) fn read_source_vector_attributes(
+pub(in crate::ui_document::source) fn read_source_vector_attributes(
     source_node: &OrderedSourceDocumentNode,
 ) -> io::Result<[f32; 3]> {
     Ok([
@@ -81,7 +83,9 @@ pub(super) fn read_source_vector_attributes(
     ])
 }
 
-pub(super) fn read_source_vector_string(source_value: &str) -> io::Result<[f32; 3]> {
+pub(in crate::ui_document::source) fn read_source_vector_string(
+    source_value: &str,
+) -> io::Result<[f32; 3]> {
     source_value
         .split_ascii_whitespace()
         .map(parse_finite_source_number)
@@ -90,7 +94,7 @@ pub(super) fn read_source_vector_string(source_value: &str) -> io::Result<[f32; 
         .map_err(|_| invalid_source_data("expected three vector components"))
 }
 
-pub(super) fn read_source_rotation_matrix(
+pub(in crate::ui_document::source) fn read_source_rotation_matrix(
     source_node: &OrderedSourceDocumentNode,
 ) -> io::Result<[f32; 9]> {
     let [source_row_0, source_row_1, source_row_2] = ["row0", "row1", "row2"].map(|row_name| {
@@ -111,6 +115,6 @@ pub(super) fn read_source_rotation_matrix(
     ])
 }
 
-pub(super) fn invalid_source_data(message: impl Into<String>) -> io::Error {
+pub(in crate::ui_document::source) fn invalid_source_data(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }

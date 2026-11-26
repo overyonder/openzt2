@@ -1,7 +1,7 @@
 use bevy::prelude::*;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollectionSource;
+use openzt2_game_data::AssetId;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 use std::collections::HashSet;
 

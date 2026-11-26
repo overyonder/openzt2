@@ -11,12 +11,8 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiVisib
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
 use openzt2_ui::authored_ui_selection_binding::UiSelectedBinding;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
-use openzt2_zoo_state::staff::staff_assignment_types::CleansFilters;
-use openzt2_zoo_state::staff::staff_assignment_types::CleansRecycling;
-use openzt2_zoo_state::staff::staff_assignment_types::EmptiesTrash;
-use openzt2_zoo_state::staff::staff_assignment_types::SweepsTrash;
 use openzt2_zoo_state::staff::staff_assignment_types::{
-    StaffAssignmentArea, StaffAssignmentTarget,
+    StaffAssignmentArea, StaffAssignmentTarget, WorkerDutyAssignments,
 };
 use openzt2_zoo_state::staff::staff_employment_types::Employment;
 use openzt2_zoo_state::staff::staff_employment_types::Staff;
@@ -37,54 +33,24 @@ pub(crate) fn project_maintenance_worker_duties_to_information_panel_controls(
         With<InfoPanel>,
     >,
     selections: Query<Ref<SelectedSubject>>,
-    workers: Query<
-        (
-            Has<CleansFilters>,
-            Has<CleansRecycling>,
-            Has<EmptiesTrash>,
-            Has<SweepsTrash>,
-        ),
-        With<Staff>,
-    >,
-    changed_workers: Query<
-        (),
-        Or<(
-            Added<CleansFilters>,
-            Added<CleansRecycling>,
-            Added<EmptiesTrash>,
-            Added<SweepsTrash>,
-        )>,
-    >,
-    mut removed_filters: RemovedComponents<CleansFilters>,
-    mut removed_recycling: RemovedComponents<CleansRecycling>,
-    mut removed_trash: RemovedComponents<EmptiesTrash>,
-    mut removed_sweeping: RemovedComponents<SweepsTrash>,
+    workers: Query<Ref<WorkerDutyAssignments>, With<Staff>>,
     mut nodes: Query<(&UiSelectedBinding, &mut UiSelected), StaffDutyField>,
 ) {
-    let filters_removed = removed_filters.read().count() != 0;
-    let recycling_removed = removed_recycling.read().count() != 0;
-    let trash_removed = removed_trash.read().count() != 0;
-    let sweeping_removed = removed_sweeping.read().count() != 0;
-    let duties_changed = !changed_workers.is_empty()
-        || filters_removed
-        || recycling_removed
-        || trash_removed
-        || sweeping_removed;
     for (parent, visible, fields) in &panels {
         let Ok(selection) = selections.get(parent.parent()) else {
+            continue;
+        };
+        let Ok(duties) = workers.get(selection.0) else {
             continue;
         };
         if !visible.get()
             || (!selection.is_changed()
                 && !visible.is_changed()
-                && !duties_changed
+                && !duties.is_changed()
                 && !fields.as_ref().is_some_and(Ref::is_changed))
         {
             continue;
         }
-        let Ok((filters, recycling, trash, sweeping)) = workers.get(selection.0) else {
-            continue;
-        };
         for entity in fields
             .as_deref()
             .into_iter()
@@ -94,15 +60,8 @@ pub(crate) fn project_maintenance_worker_duties_to_information_panel_controls(
                 continue;
             };
 
-            let current = match &binding.0 {
-                UiBooleanPropertyBindingSource::WorkerCleansFilters => filters,
-                UiBooleanPropertyBindingSource::WorkerCleansRecycling => recycling,
-                UiBooleanPropertyBindingSource::WorkerEmptiesTrash => trash,
-                UiBooleanPropertyBindingSource::WorkerSweepsTrash => sweeping,
-                _ => continue,
-            };
-            if selected.0 != current {
-                selected.0 = current;
+            if let UiBooleanPropertyBindingSource::WorkerDutyAssigned(task) = binding.0 {
+                selected.set_if_neq(UiSelected(duties.is_assigned(task)));
             }
         }
     }

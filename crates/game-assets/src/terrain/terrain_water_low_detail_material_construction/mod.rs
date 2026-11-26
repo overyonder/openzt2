@@ -2,13 +2,13 @@
 
 use std::io;
 
-use bevy::{asset::LoadContext, prelude::*};
+use bevy::prelude::*;
 use openzt2_game_data::terrain::TerrainGrid;
 
 use crate::{
-    asset_source::AssetArchives,
+    asset_source::{generated_asset_publication::GeneratedAssetPublication, AssetArchives},
     material::{
-        evaluated_effect_material_asset_construction::create_material_asset_from_evaluated_d3d9_effect,
+        evaluated_effect_material_asset_construction::publish_material_asset_from_evaluated_d3d9_effect,
         material_asset_types::MaterialAsset,
     },
     model_source::{
@@ -20,25 +20,25 @@ use crate::{
 pub(super) fn create_terrain_water_low_detail_materials(
     grid: &TerrainGrid,
     archives: &AssetArchives,
-    context: &mut LoadContext<'_>,
-) -> io::Result<Box<[Option<Handle<MaterialAsset>>]>> {
+    context: &mut GeneratedAssetPublication<'_, '_>,
+) -> io::Result<Vec<Option<Handle<MaterialAsset>>>> {
     create_terrain_water_fixed_detail_materials(grid, archives, context, false)
 }
 
 pub(super) fn create_terrain_water_medium_detail_materials(
     grid: &TerrainGrid,
     archives: &AssetArchives,
-    context: &mut LoadContext<'_>,
-) -> io::Result<Box<[Option<Handle<MaterialAsset>>]>> {
+    context: &mut GeneratedAssetPublication<'_, '_>,
+) -> io::Result<Vec<Option<Handle<MaterialAsset>>>> {
     create_terrain_water_fixed_detail_materials(grid, archives, context, true)
 }
 
 fn create_terrain_water_fixed_detail_materials(
     grid: &TerrainGrid,
     archives: &AssetArchives,
-    context: &mut LoadContext<'_>,
+    context: &mut GeneratedAssetPublication<'_, '_>,
     medium: bool,
-) -> io::Result<Box<[Option<Handle<MaterialAsset>>]>> {
+) -> io::Result<Vec<Option<Handle<MaterialAsset>>>> {
     let mut materials = Vec::with_capacity(grid.biomes.len());
     for (biome_index, biome) in grid.biomes.iter().enumerate() {
         let Some(water) = &biome.water_presentation else {
@@ -47,7 +47,7 @@ fn create_terrain_water_fixed_detail_materials(
         };
         let path = &water.texture_animations[0].texture;
         let resolved = archives
-            .resolve_ui_reference(context.path().path(), path)
+            .resolve_ui_reference(context.source_path(), path)
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::NotFound,
@@ -62,7 +62,7 @@ fn create_terrain_water_fixed_detail_materials(
         }
         .map(|value| f32::from(value) / 255.0);
         let optional_texture = |path: &str, uv_set| {
-            (!path.is_empty()).then(|| archives.resolve_ui_reference(context.path().path(), path)).flatten()
+            (!path.is_empty()).then(|| archives.resolve_ui_reference(context.source_path(), path)).flatten()
                 .map(|resolved| NativeTextureSource {
                     asset_path: crate::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(&resolved.to_string_lossy()),
                     uv_set, clamp_mode: 3, filter_mode: 0,
@@ -108,7 +108,7 @@ fn create_terrain_water_fixed_detail_materials(
         };
         let lowered = lower_netimmerse_material_into_evaluated_d3d9_effect(&material)?;
         let label = format!("water-fixed-{biome_index}-{quality}");
-        let material = create_material_asset_from_evaluated_d3d9_effect(
+        let material = publish_material_asset_from_evaluated_d3d9_effect(
             lowered.evaluated_effect,
             lowered.texture_asset_paths,
             &label,
@@ -116,7 +116,7 @@ fn create_terrain_water_fixed_detail_materials(
             &std::sync::Arc::default(),
             &lowered.reflection_projections,
         )?;
-        materials.push(Some(context.add_labeled_asset(label, material)));
+        materials.push(Some(context.publish(label, material)));
     }
-    Ok(materials.into_boxed_slice())
+    Ok(materials)
 }

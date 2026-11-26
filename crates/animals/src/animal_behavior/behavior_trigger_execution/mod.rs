@@ -5,7 +5,7 @@ use openzt2_game_assets::world_definitions::{
 };
 use openzt2_world_state::{
     simulation_time::simulation_clock_types::ZooClock,
-    world_spawn::{world_entity_crating::WorldEntityIsCrated, world_membership_types::WorldMember},
+    world_spawn::{world_entity_crating::UncratedWorldEntity, world_membership_types::WorldMember},
 };
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
@@ -46,7 +46,7 @@ fn deliver_current_subject_triggers(
             Without<Dead>,
             Without<Frozen>,
             Without<Tranquilized>,
-            Without<WorldEntityIsCrated>,
+            UncratedWorldEntity,
             Without<SynchronizedBehaviorParticipant>,
             Without<PendingBehaviorSet>,
         ),

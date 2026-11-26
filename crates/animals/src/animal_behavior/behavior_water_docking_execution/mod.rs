@@ -19,7 +19,7 @@ use openzt2_world_state::{
         },
     },
     simulation_time::simulation_clock_types::ZooClock,
-    world_spawn::world_entity_crating::WorldEntityIsCrated,
+    world_spawn::world_entity_crating::{AnimalCrate, ScriptedCrating},
 };
 use openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
@@ -225,7 +225,7 @@ fn execute_water_docking(
             Option<&mut WaterDock>,
             Option<&MovingWaterDock>,
             Has<PendingBehaviorTaskFailure>,
-            Has<WorldEntityIsCrated>,
+            (Has<AnimalCrate>, Has<ScriptedCrating>),
             Has<Dead>,
             Has<Frozen>,
             Has<Tranquilized>,
@@ -252,7 +252,7 @@ fn execute_water_docking(
             continue;
         };
         let mut pending = pending;
-        let invalid = failing || crated || dead || frozen || tranquilized;
+        let invalid = failing || crated.0 || crated.1 || dead || frozen || tranquilized;
         if let Some(dock) = pending.as_deref() {
             if invalid
                 || task
@@ -363,6 +363,7 @@ fn execute_water_docking(
                             blend_duration_milliseconds: 0,
                             playback_speed_permille: 1000,
                             playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
+                            action_settings: None,
                         })
                         .id;
                     dock.stage = WaterDockStage::Finishing {
@@ -417,6 +418,7 @@ fn execute_water_docking(
                     blend_duration_milliseconds: 0,
                     playback_speed_permille: 1000,
                     playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,
+                    action_settings: None,
                 })
                 .id;
             commands.entity(actor).insert((

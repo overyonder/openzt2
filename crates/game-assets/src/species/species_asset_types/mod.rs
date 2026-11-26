@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use openzt2_game_data::{
-    AssetId,
     species::{LifeStage, Sex, SpeciesDocument},
+    AssetId,
 };
 
 pub mod species_animation_set_loading;

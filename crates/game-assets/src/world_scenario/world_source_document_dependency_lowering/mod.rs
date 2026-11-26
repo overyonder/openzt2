@@ -4,8 +4,8 @@ use super::{
     world_scenario_document_asset_and_dependency_handles::DemandLoadedAssetPath,
     world_scenario_document_source::WorldScenarioDocumentSource,
     world_scenario_source_reference_resolution::{
-        SourceReference, SourceReferenceKind, resolve_world_scenario_source_references,
-        unresolved_reference,
+        resolve_world_scenario_source_references, unresolved_reference, SourceReference,
+        SourceReferenceKind,
     },
 };
 use crate::{

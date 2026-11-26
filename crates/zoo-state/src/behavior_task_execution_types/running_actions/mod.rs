@@ -199,7 +199,8 @@ pub struct RunBehaviorViewAnimals(pub action::view_animals::BehaviorViewAnimalsA
 pub struct GuestTourDepartureGate {
     pub need: f32,
     pub threshold: f32,
-    pub policy: openzt2_game_data::world_definitions::guest_simulation_definitions::GuestTourNeedPolicy,
+    pub policy:
+        openzt2_game_data::world_definitions::guest_simulation_definitions::GuestTourNeedPolicy,
     pub triggered: bool,
 }
 
@@ -232,7 +233,10 @@ pub struct BehaviorViewingProgress {
 impl BehaviorViewingProgress {
     pub fn apply_view_score(&mut self, score: f32) {
         self.remaining = (self.remaining + score).min(self.maximum);
-        if self.emote_score.is_none_or(|previous| previous.abs() < score.abs()) {
+        if self
+            .emote_score
+            .is_none_or(|previous| previous.abs() < score.abs())
+        {
             self.emote_score = Some(score);
         }
     }
@@ -692,7 +696,9 @@ pub fn activate_due_behavior_instructions(
 
 #[track_caller]
 pub fn mark_behavior_task_for_failure_and_stop_navigation(actor: Entity, commands: &mut Commands) {
-    use crate::animal_behavior::behavior_pursuit_types::{BehaviorPursuitPoll, PendingBehaviorPursuit};
+    use crate::animal_behavior::behavior_pursuit_types::{
+        BehaviorPursuitPoll, PendingBehaviorPursuit,
+    };
     use crate::locomotion::locomotion_types::{Destination, Docking};
 
     debug!(?actor, site = %std::panic::Location::caller(), "behavior task marked for failure");
@@ -736,7 +742,7 @@ pub fn continue_behavior_program(actor: Entity, tick: u64, commands: &mut Comman
 
 fn activate_behavior_instruction(world: &mut World, actor: Entity, tick: u64) {
     use crate::animal_health::types::{Dead, Frozen, Tranquilized};
-    use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+    use openzt2_world_state::world_spawn::world_entity_crating::{AnimalCrate, ScriptedCrating};
 
     let Some(task) = world.get::<BehaviorTaskExecutionState>(actor) else {
         return;
@@ -747,7 +753,8 @@ fn activate_behavior_instruction(world: &mut World, actor: Entity, tick: u64) {
             .is_none()
         || ((world.get::<Frozen>(actor).is_some() || world.get::<Tranquilized>(actor).is_some())
             && world.get::<RunBehaviorTermination>(actor).is_none())
-        || world.get::<WorldEntityIsCrated>(actor).is_some()
+        || world.get::<AnimalCrate>(actor).is_some()
+        || world.get::<ScriptedCrating>(actor).is_some()
         || world.get::<Dead>(actor).is_some()
     {
         return;
@@ -1078,7 +1085,9 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
         Some(BehaviorAction::Wander(action)) => Some(action.locomotion_speed),
         Some(BehaviorAction::DockSpline(action)) => Some(action.speed),
         Some(BehaviorAction::EscapeObstacle(action)) => Some(action.speed),
-        Some(BehaviorAction::ExitInteractionContainer { .. }) => Some(BehaviorGroundLocomotionSpeed::Slow),
+        Some(BehaviorAction::ExitInteractionContainer { .. }) => {
+            Some(action::wander::BehaviorGroundLocomotionSpeed::Slow)
+        }
         Some(BehaviorAction::FollowEntity(action)) => Some(action.speed),
         Some(BehaviorAction::UsePortal(action)) => Some(action.speed),
         Some(BehaviorAction::DockTankWall(action)) => Some(action.speed),
@@ -1272,9 +1281,12 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
         BehaviorAction::AnimationClip(action) => {
             insert_action(world, actor, instruction, RunBehaviorAnimationClip(action))
         }
-        BehaviorAction::AnimationSwitch(action) => {
-            insert_action(world, actor, instruction, RunBehaviorAnimationSwitch(action))
-        }
+        BehaviorAction::AnimationSwitch(action) => insert_action(
+            world,
+            actor,
+            instruction,
+            RunBehaviorAnimationSwitch(action),
+        ),
         BehaviorAction::AttachObject(action) => {
             insert_action(world, actor, instruction, RunBehaviorAttachObject(action))
         }
@@ -1348,15 +1360,25 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
         BehaviorAction::EscapeObstacle(action) => {
             insert_action(world, actor, instruction, RunBehaviorEscapeObstacle(action))
         }
-        BehaviorAction::ExitInteractionContainer { exit_behavior_set } => {
-            insert_action(world, actor, instruction, RunBehaviorExitInteractionContainer(exit_behavior_set))
+        BehaviorAction::ExitInteractionContainer { exit_behavior_set } => insert_action(
+            world,
+            actor,
+            instruction,
+            RunBehaviorExitInteractionContainer(exit_behavior_set),
+        ),
+        BehaviorAction::FindArtifact => {
+            insert_action(world, actor, instruction, RunBehaviorFindArtifact)
         }
-        BehaviorAction::FindArtifact => insert_action(world, actor, instruction, RunBehaviorFindArtifact),
-        BehaviorAction::DigArtifact => insert_action(world, actor, instruction, RunBehaviorDigArtifact),
+        BehaviorAction::DigArtifact => {
+            insert_action(world, actor, instruction, RunBehaviorDigArtifact)
+        }
         BehaviorAction::Tour => insert_action(world, actor, instruction, RunBehaviorTour),
-        BehaviorAction::TeleportToLocation(action) => {
-            insert_action(world, actor, instruction, RunBehaviorTeleportToLocation(action))
-        }
+        BehaviorAction::TeleportToLocation(action) => insert_action(
+            world,
+            actor,
+            instruction,
+            RunBehaviorTeleportToLocation(action),
+        ),
         BehaviorAction::KickOffRider => {
             insert_action(world, actor, instruction, RunBehaviorKickOffRider)
         }

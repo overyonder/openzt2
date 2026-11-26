@@ -34,7 +34,7 @@ use openzt2_world_state::world_spawn::{
 };
 
 use super::{
-    photo_album_types::{PHOTO_CAMERA_ROLL_CAPACITY, PhotoCameraRoll, WorldPhotoCameraRoll},
+    photo_album_types::{PhotoCameraRoll, WorldPhotoCameraRoll, PHOTO_CAMERA_ROLL_CAPACITY},
     photo_capture_types::{
         CapturedPhotoEvidence, PendingPhotoCapture, PendingPhotoEvidence, PendingPhotoScore,
         PhotoCaptureFailed, PhotoFailure, PhotoSubjectsCollected, PhotoView,

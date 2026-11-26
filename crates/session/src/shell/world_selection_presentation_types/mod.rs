@@ -8,7 +8,6 @@ use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_quer
 use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_interface_state::persistence::profile_types::ProfileIndex;
-use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
@@ -42,7 +41,7 @@ pub(super) struct WorldSelectionPresentation<'w, 's> {
     pub(super) texts: Query<'w, 's, &'static mut Text>,
     pub(super) text_nodes: Query<'w, 's, &'static mut Node>,
     pub(super) images: Query<'w, 's, &'static mut ImageNode>,
-    pub(super) focusable: Query<'w, 's, &'static mut UiFocusable>,
+
     pub(super) enabled: Query<'w, 's, &'static mut UiInteractionEnabled>,
 }
 

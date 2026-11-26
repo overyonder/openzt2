@@ -1,4 +1,7 @@
 use bevy::prelude::*;
+
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ZooClockAdvance;
 use num_integer::Integer;
 
 /// Zoo time in fixed simulation ticks.

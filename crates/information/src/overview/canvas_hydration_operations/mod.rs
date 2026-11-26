@@ -18,8 +18,8 @@ use openzt2_interface_state::ui::{
 };
 
 use super::map_rasterization_operations::{
-    OVERVIEW_MAP_IMAGE_EXTENT, OverviewTerrainWaterRaster, PendingOverviewMapPixels,
-    blank_overview_map_pixels, is_terrain_or_water,
+    blank_overview_map_pixels, is_terrain_or_water, OverviewTerrainWaterRaster,
+    PendingOverviewMapPixels, OVERVIEW_MAP_IMAGE_EXTENT,
 };
 
 #[derive(Component)]

@@ -1,11 +1,11 @@
 use bevy::prelude::*;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 use openzt2_game_data::{
-    AssetId,
     localization::{
         LocalizationFormatArgument, LocalizationFormatError, LocalizationRichContentNode,
         LocalizationTextPresentation,
     },
+    AssetId,
 };
 
 use super::{

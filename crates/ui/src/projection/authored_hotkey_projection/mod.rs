@@ -25,11 +25,11 @@ pub(super) fn project_authored_hotkey_action_proxies(
             // F1 receiver belongs to the live HUD's separate gamemode binding.
             if data.role == UiDocumentRole::MainMenu
                 && key == KeyCode::F1
-                && matches!(
-                    &hotkey.action,
+                && hotkey.actions.iter().all(|action| matches!(
+                    action,
                     UiActionRecord::Information(record)
                         if matches!(&record.action, UiInformationAction::OpenEncyclopediaEntry { .. })
-                )
+                ))
             {
                 continue;
             }
@@ -50,12 +50,11 @@ pub(super) fn project_authored_hotkey_action_proxies(
                 node: node_index as u32,
                 hotkey: hotkey_index as u32,
             };
-            super::authored_node_action_routing_projection::insert_authored_action_proxy_route(
-                commands,
-                proxy,
-                source,
-                &hotkey.action,
-            );
+            for action in &hotkey.actions {
+                super::authored_node_action_routing_projection::insert_authored_action_proxy_route(
+                    commands, proxy, source, action,
+                );
+            }
         }
     }
 }
@@ -127,6 +126,10 @@ fn windows_virtual_key_code(code: u32) -> Option<KeyCode> {
         0x58 => KeyCode::KeyX,
         0x59 => KeyCode::KeyY,
         0x5a => KeyCode::KeyZ,
+        0x6b => KeyCode::NumpadAdd,
+        0x6d => KeyCode::NumpadSubtract,
+        0xbb => KeyCode::Equal,
+        0xbd => KeyCode::Minus,
         0x70..=0x7b => [
             KeyCode::F1,
             KeyCode::F2,

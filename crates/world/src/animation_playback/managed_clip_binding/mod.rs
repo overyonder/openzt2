@@ -255,16 +255,8 @@ pub(crate) fn bind_selected_clips<Lane: Component>(
                 0.0
             };
             let duration = state
-                .and_then(|mut state| {
-                    if state.requested_blend_duration_milliseconds.is_some() {
-                        state.requested_blend_duration_milliseconds.take()
-                    } else {
-                        None
-                    }
-                })
-                .map_or(Duration::ZERO, |milliseconds| {
-                    Duration::from_millis(u64::from(milliseconds))
-                });
+                .and_then(|mut state| state.active_animation_graph_blend.take())
+                .map_or(Duration::ZERO, |blend| blend.timer.duration());
             let source = source_handle
                 .as_ref()
                 .and_then(|handle| source_assets.get(handle));

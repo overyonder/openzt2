@@ -36,11 +36,13 @@ pub struct AudioMixerPolicy {
     pub spatial_voice_limit: u16,
     pub spatial_in_range: f32,
     pub spatial_out_range: f32,
+    pub spatial_rolloff: f32,
     pub max_world_distance: f32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct AudioAmbientPolicy {
+    pub enabled: bool,
     pub voice_limit: u16,
     pub delay_seconds: [f32; 2],
     pub probability: f32,

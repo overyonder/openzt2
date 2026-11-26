@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::source_document::ordered_source_document_types::OrderedSourceDocument;
 
-use super::{BindError, IndexedElement, canonicalize_source_document_record_key};
+use super::{canonicalize_source_document_record_key, BindError, IndexedElement};
 use crate::source_document::ordered_source_document_types::OrderedSourceDocumentNode;
 
 pub(super) fn build_precedence_resolved_source_record_index<'a>(

@@ -135,8 +135,8 @@ pub(super) fn project_authored_model_material_passes(
     (mut visibility, mut effect_draws, mut orderings): (
         Query<&mut Visibility, With<GltfMaterialName>>,
         ParamSet<(
-            Query<&AuthoredModelEffectMaterial, AssetChanged<AuthoredModelEffectMaterial>>,
-            Query<&mut AuthoredModelEffectMaterial>,
+            Query<&'static AuthoredModelEffectMaterial, AssetChanged<AuthoredModelEffectMaterial>>,
+            Query<&'static mut AuthoredModelEffectMaterial>,
         )>,
         Query<&mut AuthoredEffectTechniquePassSubmissionOrder>,
     ),
@@ -246,7 +246,7 @@ pub(super) fn project_authored_model_material_passes(
             continue;
         };
         let source_exists = previous_material.is_some();
-        if let Some(mut current) = previous_material {
+        if let Some(current) = previous_material {
             current
                 .map_unchanged(|material| &mut material.0)
                 .set_if_neq(handle.clone());
@@ -278,7 +278,7 @@ pub(super) fn project_authored_model_material_passes(
             .any(|pass| !draw_materials.contains(pass.id()))
         {
             let pending = passes.iter().map(Handle::id).collect::<Box<[_]>>();
-            if let Some(mut waiting) = waiting {
+            if let Some(waiting) = waiting {
                 waiting
                     .map_unchanged(|waiting| &mut waiting.0)
                     .set_if_neq(pending);

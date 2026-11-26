@@ -325,6 +325,7 @@ impl VisibilityWrites<'_, '_> {
 pub(super) struct InteractionWrites<'w, 's> {
     targets: AuthoredUiTargetLookup<'w, 's>,
     visibility: Query<'w, 's, &'static InheritedVisibility>,
+    edits: Query<'w, 's, &'static bevy::text::EditableText>,
     enabled: Query<'w, 's, &'static mut UiInteractionEnabled>,
     modals: Query<'w, 's, &'static mut UiAuthoredModalPresentation>,
     long_tooltips: Query<'w, 's, &'static mut UiLongTooltipKey>,
@@ -345,6 +346,7 @@ impl InteractionWrites<'_, '_> {
         let Self {
             targets,
             visibility,
+            edits,
             enabled,
             modals,
             long_tooltips,
@@ -356,6 +358,27 @@ impl InteractionWrites<'_, '_> {
         } = self;
         let candidates = |target| targets.candidates(context.document, target);
         match action {
+            UiPresentationAction::WatchTextEdit {
+                target_node,
+                source_node,
+            } => {
+                let Some((source, edit)) = targets
+                    .candidates(context.document, source_node)
+                    .find_map(|source| edits.get(source).ok().map(|edit| (source, edit)))
+                else {
+                    return;
+                };
+                let value = UiInteractionEnabled(!edit.value().to_string().trim().is_empty());
+                for target in targets.candidates(context.document, target_node) {
+                    if let Ok(mut current) = enabled.get_mut(target) {
+                        current.set_if_neq(value);
+                        commands.entity(target).insert(
+                            crate::authored_text_edit_bevy_adaptation::UiWatchesTextEdit(source),
+                        );
+                        break;
+                    }
+                }
+            }
             UiPresentationAction::ActivateTargetNodeWithPress { target_node } => {
                 let Some(node) = candidates(target_node)
                     .find(|entity| visibility.get(*entity).is_ok_and(|visible| visible.get()))
@@ -571,7 +594,7 @@ impl ValuesWrites<'_, '_> {
                     };
                     let next = stepped_value(value.0, delta, policy, lower.0, upper.0);
                     if delta != 0 {
-                        accept_slider_value(entity, &mut value, next, &mut slider_edits);
+                        accept_slider_value(entity, &mut value, next, slider_edits);
                     }
                 } else {
                     let delta = Vec2::new(position_delta[0] as f32, position_delta[1] as f32);

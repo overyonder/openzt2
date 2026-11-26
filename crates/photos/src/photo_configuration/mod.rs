@@ -2,7 +2,7 @@ use std::io;
 
 use super::photo_album_types::MAX_PHOTO_ALBUM_SPREADS;
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
 use openzt2_game_assets::source_document::{

@@ -13,6 +13,7 @@ pub struct LegacyNifParticleEffect {
     pub capacity: u32,
     pub particle_radius: f32,
     pub emit_rate: f32,
+    pub controller_clock: crate::scene_prefab::PrefabControllerClock,
     pub emit_start_seconds: f32,
     pub emit_stop_seconds: f32,
     pub lifetime_seconds: [f32; 2],

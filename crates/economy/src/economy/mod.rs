@@ -41,7 +41,7 @@ use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    BehaviorStepFixedSet, update_waiting_behavior_actors,
+    update_waiting_behavior_actors, BehaviorStepFixedSet,
 };
 use openzt2_zoo_state::construction::FixedConstructionSet;
 

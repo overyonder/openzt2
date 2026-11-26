@@ -3,10 +3,15 @@ use bevy::{
     prelude::*,
 };
 
+use std::sync::Arc;
+
+use crate::model_source::native_model_source_lowering_types::NetImmerseMaterialAnimation;
+
 use super::runtime::effect_pass_gpu_data::EffectPassMaterial;
 
 #[derive(TypePath, Clone, Debug)]
 pub struct MaterialAsset {
+    pub netimmerse_material_animations: Arc<[NetImmerseMaterialAnimation]>,
     pub netimmerse_texture_binding: Option<NetImmerseMaterialTextureBinding>,
     pub(super) evaluated_d3d9_effect: d3d9_effects::effect_types::EvaluatedD3d9Effect,
     pub(super) _source_dependencies: Box<[UntypedHandle]>,
@@ -26,6 +31,14 @@ impl Asset for MaterialAsset {}
 
 impl VisitAssetDependencies for MaterialAsset {
     fn visit_dependencies(&self, visit: &mut impl FnMut(UntypedAssetId)) {
+        for technique in &self.evaluated_technique_pass_material_assets {
+            for handle in &technique.pass_material_assets {
+                visit(handle.id().untyped());
+            }
+        }
+        for texture in &self.bound_texture_assets {
+            visit(texture.texture.id().untyped());
+        }
         for mode in &self.modes {
             mode.visit_dependencies(visit);
         }

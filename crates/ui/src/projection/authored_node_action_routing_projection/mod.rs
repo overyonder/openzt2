@@ -18,12 +18,14 @@ use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPre
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiResearchActions;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiScenarioActions;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiShellActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiShowActions;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiSimulationActions;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiStaffActions;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiTransportActions;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::{
     UiAudioSettingActions, UiAudioVolumeControl,
+};
+use openzt2_interface_state::ui::authored_ui_action_projection_components::{
+    UiScriptActions, UiShowActions,
 };
 
 pub(super) fn insert_authored_node_action_routing_components(
@@ -63,14 +65,16 @@ pub(super) fn insert_authored_node_action_routing_components(
     insert_component_when_node_has_action_variant!(Show, UiShowActions);
     insert_component_when_node_has_action_variant!(Transport, UiTransportActions);
     insert_component_when_node_has_action_variant!(Scenario, UiScenarioActions);
+    insert_component_when_node_has_action_variant!(Script, UiScriptActions);
     if let Some(channel) = record.actions.iter().find_map(|action| match action {
         UiActionRecord::AudioSetting(record) => Some(record.action),
         _ => None,
     }) {
-        commands.entity(entity).insert((
-            UiAudioSettingActions(UiActionSource::Node(node_index)),
-            UiAudioVolumeControl(channel),
-        ));
+        let mut node = commands.entity(entity);
+        node.insert(UiAudioSettingActions(UiActionSource::Node(node_index)));
+        if !matches!(channel, openzt2_game_data::ui_document::action::audio_settings::UiAudioSettingAction::SetEightBitSound(_)) {
+            node.insert(UiAudioVolumeControl(channel));
+        }
     }
     insert_component_when_node_has_action_variant!(Information, UiInformationActions);
     insert_component_when_node_has_action_variant!(EnterImmersiveMode, UiImmersiveModeActions);
@@ -134,6 +138,9 @@ pub(super) fn insert_authored_action_proxy_route(
         }
         UiActionRecord::Scenario(_) => {
             commands.entity(entity).insert(UiScenarioActions(source));
+        }
+        UiActionRecord::Script(_) => {
+            commands.entity(entity).insert(UiScriptActions(source));
         }
         UiActionRecord::AudioSetting(_) => {
             commands

@@ -14,7 +14,6 @@ pub struct AuthoredTerrainWaterRendererTargets {
     pub refraction: Handle<Image>,
     pub fallback_reflection: Handle<Image>,
     pub water_bump_combination_materials: Box<[Handle<EffectPassMaterial>]>,
-    pub elapsed_seconds: f32,
 }
 
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
@@ -85,21 +84,4 @@ pub struct AuthoredTerrainWaterfallDecalEffectPass {
     pub material: Handle<EffectPassMaterial>,
     pub rotate_detail: bool,
     pub detail_vertical_scroll_per_second: f32,
-}
-
-#[derive(Component)]
-pub struct TerrainWaterLowDetailTextureState {
-    pub start_seconds: [Option<f32>; 2],
-    pub reverse: [bool; 2],
-    pub transforms: [Mat4; 2],
-}
-
-impl Default for TerrainWaterLowDetailTextureState {
-    fn default() -> Self {
-        Self {
-            start_seconds: [None; 2],
-            reverse: [false; 2],
-            transforms: [Mat4::IDENTITY; 2],
-        }
-    }
 }

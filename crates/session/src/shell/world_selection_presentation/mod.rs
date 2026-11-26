@@ -438,11 +438,6 @@ pub(super) fn project_selected_world_facts_into_authored_map_selection_controls(
             if let Ok(mut interaction_enabled) = presentation.enabled.get_mut(entity) {
                 interaction_enabled.0 = enabled;
             }
-            if let Ok(mut focusable) = presentation.focusable.get_mut(entity) {
-                if focusable.enabled != enabled {
-                    focusable.enabled = enabled;
-                }
-            }
         }
     }
 }

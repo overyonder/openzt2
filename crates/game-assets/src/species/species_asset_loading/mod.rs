@@ -1,16 +1,16 @@
 use std::{io, path::Path};
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
 
 use crate::{
     asset_source::{
-        AssetArchives,
         archive_entry_asset_path::{
-            ARCHIVE_ENTRY_ASSET_EXTENSION, archive_entry_asset_source_path,
+            archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION,
         },
+        AssetArchives,
     },
     world_definitions::world_definition_asset_loading::authored_binder_reference_resolution::resolve_binder_file_reference,
     {
@@ -20,7 +20,7 @@ use crate::{
             blue_fang_source_document_parsing::parse_blue_fang_source_document,
             ordered_source_document_collection_precedence::reorder_ordered_source_documents_by_requested_normalized_path_keys_and_last_definition_precedence,
             ordered_source_document_types::OrderedSourceDocument,
-            path::{AssetPath, is_authored_file_reference},
+            path::{is_authored_file_reference, AssetPath},
         },
         species::source::{
             collect_authored_species_type_source_references,

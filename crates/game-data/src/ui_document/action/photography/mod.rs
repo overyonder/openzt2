@@ -19,7 +19,6 @@ pub enum UiPhotoAction {
     ShowPreviousActivePhotoAlbumPage,
     ShowNextActivePhotoAlbumPage,
     CreateNewPhotoAlbumFromActiveAlbumProfile,
-    MarkPhotoAlbumHelpAsShown,
     DeleteActivePhotoAlbumAndContainedPhotos,
     StartMovingSelectedPhotoToActiveAlbum,
     CancelMovingSelectedPhoto,

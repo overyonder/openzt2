@@ -14,7 +14,7 @@ use d3d9_effects::effect_evaluation::retained_transform_evaluation::RetainedD3d9
 
 use super::evaluated_d3d9_sampler_state::EvaluatedD3d9SamplerState;
 
-pub(super) fn collect_evaluated_d3d9_pass_states(
+pub(in crate::material) fn collect_evaluated_d3d9_pass_states(
     technique: &d3d9_effects::effect_types::EvaluatedD3d9EffectTechnique,
 ) -> io::Result<Vec<EvaluatedD3d9PassState>> {
     let mut state = EvaluatedD3d9PassState::default();
@@ -32,7 +32,7 @@ pub(super) fn collect_evaluated_d3d9_pass_states(
 }
 
 #[derive(Clone)]
-pub(super) struct EvaluatedD3d9PassState {
+pub(in crate::material) struct EvaluatedD3d9PassState {
     pub(super) vertex_shader: Option<Box<[u8]>>,
     pub(super) pixel_shader: Option<Box<[u8]>>,
     pub(super) vertex_floats: [Vec4; 256],
@@ -50,7 +50,7 @@ pub(super) struct EvaluatedD3d9PassState {
     pub(super) effect_states: [u32; 103],
     pub(super) lighting_state_is_authored: bool,
     pub(super) ambient_state_is_authored: bool,
-    pub(super) cull: Option<Face>,
+    pub(in crate::material) cull: Option<Face>,
     pub(super) polygon: PolygonMode,
     depth_enabled: bool,
     pub(super) depth_write: bool,

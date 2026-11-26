@@ -458,11 +458,9 @@ mod tests {
             .expect("indexed camera");
 
         assert!(!camera.has_type_token("BFOverheadCameraComponent"));
-        assert!(
-            camera
-                .descendant_named("BFOverheadCameraComponent")
-                .is_some()
-        );
+        assert!(camera
+            .descendant_named("BFOverheadCameraComponent")
+            .is_some());
     }
 }
 

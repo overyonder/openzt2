@@ -30,19 +30,19 @@ pub(super) struct ActiveFossilSonar;
 
 #[derive(Component)]
 #[relationship(relationship_target = FossilSonarSites)]
-struct FossilSiteOfWorld(Entity);
+pub(super) struct FossilSiteOfWorld(Entity);
 
 #[derive(Component)]
 #[relationship_target(relationship = FossilSiteOfWorld)]
-struct FossilSonarSites(Vec<Entity>);
+pub(super) struct FossilSonarSites(Vec<Entity>);
 
 #[derive(Component)]
 #[relationship(relationship_target = FossilSonarCellSites)]
-struct FossilSiteOfCell(Entity);
+pub(super) struct FossilSiteOfCell(Entity);
 
 #[derive(Component)]
 #[relationship_target(relationship = FossilSiteOfCell)]
-struct FossilSonarCellSites(Vec<Entity>);
+pub(super) struct FossilSonarCellSites(Vec<Entity>);
 
 type FossilSiteProjection = (
     Entity,

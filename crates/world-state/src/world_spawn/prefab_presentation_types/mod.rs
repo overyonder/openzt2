@@ -12,6 +12,14 @@ use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 #[derive(Component, Debug, Clone)]
 pub struct PrefabPresentation(pub Handle<ScenePrefabAsset>);
 
+impl bevy::asset::AsAssetId for PrefabPresentation {
+    type Asset = ScenePrefabAsset;
+
+    fn as_asset_id(&self) -> bevy::asset::AssetId<ScenePrefabAsset> {
+        self.0.id()
+    }
+}
+
 impl PrefabPresentation {
     pub const fn new(prefab: Handle<ScenePrefabAsset>) -> Self {
         Self(prefab)

@@ -60,7 +60,7 @@ impl<T: Component> PartialEq for ModelMaterialInputOwner<T> {
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
-struct ModelEffectMaterialVariant {
+pub(super) struct ModelEffectMaterialVariant {
     authored: AssetId<EffectPassMaterial>,
     replacement: Option<AssetId<Image>>,
     clothing_decal: Option<(usize, u32, AssetId<Image>)>,
@@ -159,6 +159,7 @@ pub(super) struct ConfiguredMaterialChanges<'w, 's> {
                 Changed<AuthoredModelEffectMaterial>,
                 AssetChanged<AuthoredModelEffectMaterial>,
                 Changed<Mesh3d>,
+                Changed<GlobalTransform>,
                 AssetChanged<Mesh3d>,
                 Changed<PrefabCameraRenderLayers>,
                 Changed<ModelMaterialInputOwner<ModelExpanded>>,
@@ -205,6 +206,7 @@ pub(super) fn project_configured_model_effect_materials(
         Entity,
         Ref<AuthoredModelEffectMaterial>,
         Ref<Mesh3d>,
+        Option<Ref<GlobalTransform>>,
         Option<Ref<PrefabCameraRenderLayers>>,
         Option<Ref<ModelMaterialInputOwner<ModelExpanded>>>,
         Option<Ref<ModelMaterialInputOwner<PrefabTextureReplacements>>>,
@@ -226,15 +228,19 @@ pub(super) fn project_configured_model_effect_materials(
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     graphics: Option<Res<GraphicsSettings>>,
     mut material_events: MessageReader<AssetEvent<EffectPassMaterial>>,
-    mut removed_model_owners: RemovedComponents<ModelMaterialInputOwner<ModelExpanded>>,
-    mut removed_replacement_owners: RemovedComponents<
-        ModelMaterialInputOwner<PrefabTextureReplacements>,
-    >,
-    mut removed_tint_owners: RemovedComponents<InheritedPrimitiveTint>,
-    mut removed_light_owners: RemovedComponents<
-        ModelMaterialInputOwner<PrefabFixedFunctionWorldLightingPolicy>,
-    >,
-    mut removed_layers: RemovedComponents<PrefabCameraRenderLayers>,
+    (
+        mut removed_model_owners,
+        mut removed_replacement_owners,
+        mut removed_tint_owners,
+        mut removed_light_owners,
+        mut removed_layers,
+    ): (
+        RemovedComponents<ModelMaterialInputOwner<ModelExpanded>>,
+        RemovedComponents<ModelMaterialInputOwner<PrefabTextureReplacements>>,
+        RemovedComponents<InheritedPrimitiveTint>,
+        RemovedComponents<ModelMaterialInputOwner<PrefabFixedFunctionWorldLightingPolicy>>,
+        RemovedComponents<PrefabCameraRenderLayers>,
+    ),
     mut animation: AnimatedMaterialInputs,
     mut variants: Local<HashMap<ModelEffectMaterialVariant, AssetId<EffectPassMaterial>>>,
 ) {
@@ -303,6 +309,7 @@ pub(super) fn project_configured_model_effect_materials(
         entity,
         authored,
         mesh,
+        draw_pose,
         layers,
         model_owner,
         replacement_owner,
@@ -328,6 +335,9 @@ pub(super) fn project_configured_model_effect_materials(
         let decals = decal_owner
             .as_ref()
             .and_then(|owner| animation.decals.get(owner.0).ok());
+        let draw_position = draw_pose
+            .as_ref()
+            .map_or(Vec3::ZERO, |pose| pose.translation());
         let scoped_lights = std::iter::once(authored.geometry)
             .chain(
                 dirty_draws
@@ -497,7 +507,7 @@ pub(super) fn project_configured_model_effect_materials(
                 derived.configure_for_morph_fade();
             }
             if !scoped_lights.is_empty() {
-                derived.bind_scoped_prefab_lighting(&scoped_lights, &mut buffers);
+                derived.bind_scoped_prefab_lighting(&scoped_lights, draw_position, &mut buffers);
             }
             let handle = materials.add(derived);
             variants.insert(key, handle.id());
@@ -505,7 +515,7 @@ pub(super) fn project_configured_model_effect_materials(
         };
         if !scoped_lights.is_empty() {
             if let Some(material) = materials.get(&handle) {
-                material.update_scoped_prefab_lighting(&scoped_lights, &mut buffers);
+                material.update_scoped_prefab_lighting(&scoped_lights, draw_position, &mut buffers);
             }
         }
         if let Some(opacity) = opacity {

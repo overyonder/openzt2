@@ -9,7 +9,7 @@ use openzt2_game_assets::behavior::behavior_asset_types::{
     BehaviorDocumentAsset, LoadedBehaviorDocumentCollection,
 };
 use openzt2_game_data::{
-    AssetId, world_definitions::guest_simulation_definitions::GuestEducationDonationPolicy,
+    world_definitions::guest_simulation_definitions::GuestEducationDonationPolicy, AssetId,
 };
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
@@ -371,7 +371,7 @@ fn issue_education_donation_token(
             .entity(guest)
             .try_remove::<EducationDonationBonus>();
     }
-    if f64::from(amount) * 100.0 > wallet.0.0 as f64 {
+    if f64::from(amount) * 100.0 > wallet.0 .0 as f64 {
         return;
     }
     let seconds = policy.timeout.unwrap_or(60.0);

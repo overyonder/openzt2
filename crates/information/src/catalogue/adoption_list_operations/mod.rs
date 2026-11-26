@@ -10,7 +10,7 @@ use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIden
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_animals::animal_lifecycle::adoption_offer_types::{
-    AdoptionOfferClock, AdoptionOfferOption, AdoptionOfferOptions, AdoptionOfferSupply, AdoptionOfferUnlocked, CurrentAdoptionOffer,
+    AdoptionOfferRandom, AdoptionOfferOption, AdoptionOfferOptions, AdoptionOfferSupply, AdoptionOfferUnlocked, CurrentAdoptionOffer,
 };
 use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::AnimalCatalogueGender;
 use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::BeginAnimalAdoptionPlacement;
@@ -110,7 +110,7 @@ pub(crate) struct AdoptionCatalogueOffers<'w, 's> {
         's,
         (
             Entity,
-            Ref<'static, AdoptionOfferClock>,
+            Ref<'static, AdoptionOfferRandom>,
             Option<Ref<'static, AdoptionOfferOptions>>,
         ),
         With<WorldRoot>,
@@ -156,13 +156,13 @@ pub(crate) fn select_first_available_species_after_adoption_catalogue_and_offer_
     let Ok(mut selected_catalogue_entry) = selections.single_mut() else {
         return;
     };
-    let Ok((_, clock, Some(members))) = offers.roots.single() else {
+    let Ok((_, random, Some(members))) = offers.roots.single() else {
         return;
     };
     for (table_policy, document_owner) in &adoption_lists {
         if *table_policy != UiTablePolicy::AdoptionList
             || (!table_policy.is_added()
-                && !clock.is_added()
+                && !random.is_added()
                 && selected_catalogue_entry.0.is_some())
         {
             continue;
@@ -203,7 +203,7 @@ pub(crate) fn request_authored_adoption_list_row_count(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     adoption_lists: Query<(Entity, Ref<UiTablePolicy>, &UiDocumentOwner)>,
-    worlds: Query<Ref<AdoptionOfferClock>, With<WorldRoot>>,
+    worlds: Query<Ref<AdoptionOfferRandom>, With<WorldRoot>>,
     mut row_count_requests: MessageWriter<SetUiListRowCount>,
 ) {
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
@@ -212,7 +212,7 @@ pub(crate) fn request_authored_adoption_list_row_count(
     let Some(configuration) = world_definitions.animal_adoption_offer_configuration() else {
         return;
     };
-    let Ok(clock) = worlds.single() else {
+    let Ok(random) = worlds.single() else {
         return;
     };
     let displayed_slot_count = maximum_authored_animal_adoption_offer_slot_count(configuration);
@@ -220,7 +220,7 @@ pub(crate) fn request_authored_adoption_list_row_count(
     for (list_entity, table_policy, _) in &adoption_lists {
         if *table_policy != UiTablePolicy::AdoptionList
             || (!table_policy.is_added()
-                && !clock.is_added()
+                && !random.is_added()
                 && !active_world_definitions.is_changed()
                 && !world_definition_assets.is_changed())
         {
@@ -295,11 +295,11 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
         return;
     };
     let removed_offer = offers.removed_offers.read().count() != 0;
-    let Ok((_, clock, members)) = offers.roots.single() else {
+    let Ok((_, random, members)) = offers.roots.single() else {
         return;
     };
     let mut offers_changed = removed_offer
-        || clock.is_added()
+        || random.is_added()
         || members.as_ref().is_some_and(|members| members.is_changed());
     let mut slots = Vec::<[Option<(Ref<AdoptionOfferSupply>, bool)>; 2]>::new();
     for (option, current) in offers

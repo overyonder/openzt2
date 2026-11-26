@@ -4,7 +4,7 @@ use bevy::{ecs::resource::IsResource, prelude::*};
 use openzt2_world_state::world_spawn::{
     persistent_id_index::PersistentIdIndex,
     persistent_id_types::PersistentId,
-    world_entity_crating::{AnimalCrate, ContainedCratedAnimal, WorldEntityIsCrated},
+    world_entity_crating::{AnimalCrate, ContainedCratedAnimal},
     world_membership_types::WorldMember,
 };
 
@@ -37,8 +37,7 @@ pub(super) fn capture_native_crate_links(
             .get::<PersistentId>()
             .ok_or(Failure::BrokenPersistentEntityReference)?
             .0;
-        if !animal.contains::<WorldEntityIsCrated>()
-            || animal.get::<WorldMember>().is_none()
+        if animal.get::<WorldMember>().is_none()
             || animal.get::<WorldMember>() != crate_entity.get::<WorldMember>()
         {
             return Err(Failure::BrokenPersistentEntityReference);

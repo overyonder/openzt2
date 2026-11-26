@@ -301,6 +301,7 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
         documents,
         &[
             "ZTFirstPersonMode",
+            "ZTGuestViewMode",
             "ZTPhotoMode",
             "ZTSuperStaffMode",
             "ZTFenceMode",

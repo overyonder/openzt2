@@ -4,7 +4,7 @@ use super::world_scenario_document_asset_and_dependency_handles::{
     DemandLoadedAssetPath, WorldScenarioDocumentAsset,
 };
 use bevy::prelude::*;
-use openzt2_game_data::{AssetId, world_scenario::WorldScenarioDocument};
+use openzt2_game_data::{world_scenario::WorldScenarioDocument, AssetId};
 use serde::{Deserialize, Serialize};
 use std::io;
 

@@ -3,8 +3,6 @@ use bevy::ecs::entity::EntityHashMap;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use bevy::camera::visibility::RenderLayers;
-use bevy::gltf::Gltf;
-use bevy::gltf::GltfMesh;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
@@ -37,8 +35,7 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    gltfs: Res<Assets<Gltf>>,
-    gltf_meshes: Res<Assets<GltfMesh>>,
+    meshes: Res<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     authored_materials: Res<Assets<MaterialAsset>>,
     graphics_settings: Res<GraphicsSettings>,
@@ -67,10 +64,6 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
         };
         let Some(asset) = terrain_assets.get(&chunk.asset) else {
             wait_or_reject(chunk.asset.id().untyped());
-            continue;
-        };
-        let Some(model) = gltfs.get(asset.lowered_terrain_model()) else {
-            wait_or_reject(asset.lowered_terrain_model().id().untyped());
             continue;
         };
         let Some(terrain_material) = authored_materials.get(asset.terrain_effect_material()) else {
@@ -106,20 +99,15 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
             commands.entity(entity).insert(TerrainChunkRejected);
             continue;
         }
-        let mesh_name = format!(
-            "terrain_chunk_{}_{}",
-            chunk.source_coord.x, chunk.source_coord.y
-        );
-        let Some(mesh) = model
-            .named_meshes
-            .get(mesh_name.as_str())
-            .and_then(|handle| gltf_meshes.get(handle))
-            .and_then(|mesh| mesh.primitives.first())
-            .map(|primitive| primitive.mesh.clone())
+        let Some(mesh) = asset.chunk_mesh(chunk.source_coord.x as u32, chunk.source_coord.y as u32)
         else {
             commands.entity(entity).insert(TerrainChunkRejected);
             continue;
         };
+        if !meshes.contains(mesh.id()) {
+            wait_or_reject(mesh.id().untyped());
+            continue;
+        }
         projectable.push((
             entity,
             chunk,
@@ -127,7 +115,7 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
             member.root,
             asset,
             terrain_effect_passes,
-            mesh,
+            mesh.clone(),
         ));
     }
     let surfaces = {
@@ -349,8 +337,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()))
             .init_asset::<TerrainAsset>()
-            .init_asset::<Gltf>()
-            .init_asset::<GltfMesh>()
+            .init_asset::<Mesh>()
             .init_asset::<Image>()
             .init_asset::<MaterialAsset>()
             .init_asset::<EffectPassMaterial>()

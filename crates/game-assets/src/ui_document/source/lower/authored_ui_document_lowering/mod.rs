@@ -114,6 +114,7 @@ pub(in crate::ui_document::source) struct AuthoredUiDocument {
     pub image_selections: Vec<AuthoredUiImageSelection>,
     pub interaction_cursors: Option<AuthoredUiInteractionCursors>,
     pub placement_preview: Option<AuthoredUiPlacementPreview>,
+    pub edge_pan_source_child: Option<usize>,
     /// Names of nodes in other documents, indexed by their document role.
     pub role_targets: BTreeMap<String, UiDocumentRole>,
     /// Winning archive paths for referenced assets.
@@ -267,11 +268,15 @@ pub(in crate::ui_document::source) fn lower_ui_document(
         });
     }
 
+    let edge_pan_surface_node_index = input
+        .edge_pan_source_child
+        .and_then(|child| output.nodes.first()?.children.get(child).copied());
     Ok(UiDocument {
         id: input.id,
         role: input.role,
         logical_size,
         nodes: output.nodes,
+        edge_pan_surface_node_index,
         gameplay_interaction_cursors,
         construction_placement_preview,
         image_selection_groups,

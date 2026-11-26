@@ -121,9 +121,9 @@ pub(super) fn spawn_scripted_animals(
                 needs: request.initial_needs.clone(),
             });
         if request.crated {
-            commands.entity(request.entity).insert(
-                openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated,
-            );
+            commands
+                .entity(request.entity)
+                .insert(openzt2_world_state::world_spawn::world_entity_crating::ScriptedCrating);
         }
         if let Some(name) = &request.name {
             commands

@@ -26,7 +26,7 @@ pub(super) fn clean_nearest_waste_from_first_person_use_action(
     }
     let Some(position) = cameras
         .iter()
-        .find(|(_, mode)| matches!(mode, CameraMode::FirstPerson(_)))
+        .find(|(_, mode)| matches!(mode, CameraMode::FirstPerson))
         .map(|(transform, _)| transform.translation())
     else {
         return;

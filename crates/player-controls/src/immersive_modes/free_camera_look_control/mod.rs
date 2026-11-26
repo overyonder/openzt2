@@ -65,7 +65,7 @@ pub(super) fn aim_player_driven_camera(
         return;
     };
     for (active, camera, actions, subject, angles) in &sessions {
-        let Ok((mode, tuning, intent, mut transform, zoom, mouse_look)) = cameras.get_mut(camera.0)
+        let Ok((mode, tuning, intent, transform, zoom, mouse_look)) = cameras.get_mut(camera.0)
         else {
             continue;
         };

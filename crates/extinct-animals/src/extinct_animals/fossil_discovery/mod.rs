@@ -39,6 +39,7 @@ use openzt2_zoo_state::{
     placement::object_placement_definition_queries::object_placement_prefab_identifier,
 };
 
+use super::behavior_artifact_execution::DigAuthoredArtifact;
 use super::fossil_definition_index::{FossilDefinitionIndex, FossilRewardCandidate};
 use crate::fossil_site_types::{DigPit, FossilSiteKind, RequestedFossilPuzzle};
 
@@ -90,11 +91,13 @@ pub(super) fn discover_requested_fossils(
     {
         return;
     }
-    let (Some(policy), Ok(camera), Some(pit)) = (
+    let (Some(policy), Ok(camera)) = (
         definitions.fossil_placement(),
         cameras.get(immersive_camera.0),
-        definitions.find_object(AssetId::from_key("digpit")),
     ) else {
+        return;
+    };
+    let Some(pit) = definitions.find_object(AssetId::from_key("digpit")) else {
         return;
     };
     let Some(pit_presentation) = definitions.scene(pit.prefab) else {
@@ -107,7 +110,7 @@ pub(super) fn discover_requested_fossils(
         if request.interaction_tool != controller || dug.contains(&request.fossil_site) {
             continue;
         }
-        let Ok(mut site) = sites.get_mut(request.fossil_site) else {
+        let Ok(site) = sites.get_mut(request.fossil_site) else {
             continue;
         };
         let position = site.pose.translation();
@@ -119,134 +122,237 @@ pub(super) fn discover_requested_fossils(
             continue;
         }
         let root = site.member.root;
-        let Ok((level, requested, collection, mut ids)) = zoos.get_mut(root) else {
+        let Ok((level, requested, collection, ids)) = zoos.get_mut(root) else {
             continue;
         };
-        let kind = *site.kind;
         dug.insert(request.fossil_site);
-        commands.entity(request.fossil_site).try_despawn();
-        commands.spawn((
-            *site.member,
-            *site.id,
-            DefinitionId(pit.id),
-            site.pose.compute_transform().with_scale(Vec3::splat(pit.prefab_scale)),
-            Visibility::Inherited,
-            PrefabPresentation::new(pit_presentation.clone()),
-            DigPit,
-        ));
-        match kind {
-            FossilSiteKind::Puzzle => {
-                let found = collections.entry(root).or_insert_with(|| {
-                    pieces
-                        .iter_many(collection.into_iter().flat_map(RelationshipTarget::iter))
-                        .flatten()
-                        .map(|piece| piece.0)
-                        .collect::<HashSet<_>>()
-                });
-                let Some(set) = select_puzzle(
-                    definitions,
-                    &index,
-                    level.0,
-                    requested,
-                    found,
-                    &mut site.random.0,
-                ) else {
-                    continue;
-                };
-                let mut awarded = 0;
-                for &piece in &set.pieces {
-                    if awarded == set.pieces_per_location {
-                        break;
-                    }
-                    if found.contains(&piece) || index.piece(piece).is_none() {
-                        continue;
-                    }
-                    let Ok(id) = ids.allocate() else {
-                        break;
-                    };
-                    commands.spawn((
-                        CollectedFossilPiece(piece),
-                        FossilPieceOfWorld(root),
-                        WorldMember { root },
-                        id,
-                        Transform::from_translation(position),
-                        Visibility::default(),
-                    ));
-                    found.insert(piece);
-                    awarded += 1;
+        settle_fossil_dig(
+            request.fossil_site,
+            site,
+            root,
+            level,
+            requested,
+            collection,
+            ids,
+            definitions,
+            pit,
+            &pit_presentation,
+            &index,
+            &pieces,
+            &mut collections,
+            Some(immersive_camera.0),
+            &mut commands,
+        );
+    }
+}
+
+pub(super) fn discover_authored_fossil(
+    event: On<DigAuthoredArtifact>,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    index: Res<FossilDefinitionIndex>,
+    cameras: Query<(Entity, &Camera), With<ZooCamera>>,
+    mut sites: Query<DigSite>,
+    mut zoos: Query<FossilDigZoo>,
+    pieces: Query<&CollectedFossilPiece>,
+    mut commands: Commands,
+) {
+    let Some(definitions) = active_definitions.get(&definitions) else {
+        return;
+    };
+    let (Ok(site), Ok((level, requested, collection, ids))) =
+        (sites.get_mut(event.site), zoos.get_mut(event.root))
+    else {
+        return;
+    };
+    if site.member.root != event.root {
+        return;
+    }
+    let Some(pit) = definitions.find_object(AssetId::from_key("digpit")) else {
+        return;
+    };
+    let Some(pit_presentation) = definitions.scene(pit.prefab) else {
+        return;
+    };
+    let camera = cameras
+        .iter()
+        .find_map(|(entity, camera)| camera.is_active.then_some(entity));
+    settle_fossil_dig(
+        event.site,
+        site,
+        event.root,
+        level,
+        requested,
+        collection,
+        ids,
+        definitions,
+        pit,
+        &pit_presentation,
+        &index,
+        &pieces,
+        &mut EntityHashMap::default(),
+        camera,
+        &mut commands,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn settle_fossil_dig(
+    entity: Entity,
+    mut site: DigSiteItem,
+    root: Entity,
+    level: &FossilDiscoveryLevel,
+    requested: Option<&RequestedFossilPuzzle>,
+    collection: Option<&WorldFossilPieces>,
+    mut ids: Mut<PersistentIdAllocator>,
+    definitions: WorldDefinitionsView,
+    pit: &openzt2_game_data::world_definitions::world_objects::WorldObjectDefinition,
+    pit_presentation: &Handle<openzt2_game_assets::scene_prefab::ScenePrefabAsset>,
+    index: &FossilDefinitionIndex,
+    pieces: &Query<&CollectedFossilPiece>,
+    collections: &mut EntityHashMap<HashSet<AssetId>>,
+    camera: Option<Entity>,
+    commands: &mut Commands,
+) {
+    let position = site.pose.translation();
+    let kind = *site.kind;
+    commands.entity(entity).try_despawn();
+    commands.spawn((
+        *site.member,
+        *site.id,
+        DefinitionId(pit.id),
+        site.pose
+            .compute_transform()
+            .with_scale(Vec3::splat(pit.prefab_scale)),
+        Visibility::Inherited,
+        PrefabPresentation::new(pit_presentation.clone()),
+        DigPit,
+    ));
+    match kind {
+        FossilSiteKind::Puzzle => {
+            let found = collections.entry(root).or_insert_with(|| {
+                pieces
+                    .iter_many(collection.into_iter().flat_map(RelationshipTarget::iter))
+                    .flatten()
+                    .map(|piece| piece.0)
+                    .collect::<HashSet<_>>()
+            });
+            let Some(set) = select_puzzle(
+                definitions,
+                index,
+                level.0,
+                requested,
+                found,
+                &mut site.random.0,
+            ) else {
+                return;
+            };
+            let mut awarded = 0;
+            for &piece in &set.pieces {
+                if awarded == set.pieces_per_location {
+                    break;
                 }
-                if awarded > 0 {
-                    commands.write_message(super::fossil_find_effect::ShowFossilFindEffect {
-                        camera: immersive_camera.0,
-                        species: set.species,
-                    });
-                    commands.trigger(FossilFindFeedback {
-                        root,
-                        kind: FossilFind::Puzzle {
-                            object: set.species,
-                            collected: set.pieces.iter().filter(|piece| found.contains(*piece)).count(),
-                            total: set.pieces.len(),
-                        },
-                    });
+                if found.contains(&piece) || index.piece(piece).is_none() {
+                    continue;
                 }
-            }
-            FossilSiteKind::PlaceableObject => {
-                let Some(object) = draw_reward(&index.placeable_rewards, &mut site.random.0)
-                    .and_then(|reward| definitions.find_object(reward)) else {
-                    continue;
-                };
-                let Some(prefab) = object_placement_prefab_identifier(object)
-                    .and_then(|prefab| definitions.scene(prefab)) else {
-                    continue;
-                };
                 let Ok(id) = ids.allocate() else {
-                    continue;
+                    break;
                 };
                 commands.spawn((
+                    CollectedFossilPiece(piece),
+                    FossilPieceOfWorld(root),
                     WorldMember { root },
-                    DefinitionId(object.id),
                     id,
-                    Transform::from_translation(position)
-                        .with_scale(Vec3::splat(object.prefab_scale)),
-                    Visibility::Inherited,
-                    PrefabPresentation::new(prefab),
+                    Transform::from_translation(position),
+                    Visibility::default(),
                 ));
+                found.insert(piece);
+                awarded += 1;
+            }
+            if awarded > 0 {
+                if let Some(camera) = camera {
+                    commands.write_message(super::fossil_find_effect::ShowFossilFindEffect {
+                        camera,
+                        species: set.species,
+                    });
+                }
                 commands.trigger(FossilFindFeedback {
                     root,
-                    kind: FossilFind::Object(object.name_key),
+                    kind: FossilFind::Puzzle {
+                        object: set.species,
+                        collected: set
+                            .pieces
+                            .iter()
+                            .filter(|piece| found.contains(*piece))
+                            .count(),
+                        total: set.pieces.len(),
+                    },
                 });
             }
-            FossilSiteKind::Cash => {
-                let Some(reward_name) = draw_reward(&index.cash_rewards, &mut site.random.0)
-                    .and_then(|reward| definitions.find_object(reward))
-                    .map(|object| object.name_key) else {
-                    continue;
-                };
-                let Some(dollars) = site.random.0.range_u32(21).map(|draw| i64::from(draw) + 5)
-                else {
-                    continue;
-                };
-                let operation = commands
-                    .spawn((
-                        WorldMember { root },
-                        PendingFossilCashReward { dollars, reward_name },
-                        GeneralEconomyTransaction::CashGrant,
-                    ))
-                    .id();
-                commands.write_message(TransactionRequest {
-                    operation,
-                    debit: Account::External,
-                    credit: Account::Zoo,
-                    amount: Money(dollars * 100),
-                    kind: TransactionKind::Reward,
-                    subject: None,
-                });
-            }
+        }
+        FossilSiteKind::PlaceableObject => {
+            let Some(object) = draw_reward(&index.placeable_rewards, &mut site.random.0)
+                .and_then(|reward| definitions.find_object(reward))
+            else {
+                return;
+            };
+            let Some(prefab) = object_placement_prefab_identifier(object)
+                .and_then(|prefab| definitions.scene(prefab))
+            else {
+                return;
+            };
+            let Ok(id) = ids.allocate() else {
+                return;
+            };
+            commands.spawn((
+                WorldMember { root },
+                DefinitionId(object.id),
+                id,
+                Transform::from_translation(position).with_scale(Vec3::splat(object.prefab_scale)),
+                Visibility::Inherited,
+                PrefabPresentation::new(prefab),
+            ));
+            commands.trigger(FossilFindFeedback {
+                root,
+                kind: FossilFind::Object(object.name_key),
+            });
+        }
+        FossilSiteKind::Cash => {
+            let Some(reward_name) = draw_reward(&index.cash_rewards, &mut site.random.0)
+                .and_then(|reward| definitions.find_object(reward))
+                .map(|object| object.name_key)
+            else {
+                return;
+            };
+            let Some(dollars) = site.random.0.range_u32(21).map(|draw| i64::from(draw) + 5) else {
+                return;
+            };
+            let operation = commands
+                .spawn((
+                    WorldMember { root },
+                    PendingFossilCashReward {
+                        dollars,
+                        reward_name,
+                    },
+                    GeneralEconomyTransaction::CashGrant,
+                ))
+                .id();
+            commands.write_message(TransactionRequest {
+                operation,
+                debit: Account::External,
+                credit: Account::Zoo,
+                amount: Money(dollars * 100),
+                kind: TransactionKind::Reward,
+                subject: None,
+            });
         }
     }
 }
 
-fn draw_reward(groups: &[Vec<FossilRewardCandidate>], random: &mut DeterministicRng) -> Option<AssetId> {
+fn draw_reward(
+    groups: &[Vec<FossilRewardCandidate>],
+    random: &mut DeterministicRng,
+) -> Option<AssetId> {
     let group = random.range_u32(u32::try_from(groups.len()).ok()?)?;
     let candidates = groups.get(group as usize)?;
     let first = random.range_u32(u32::try_from(candidates.len()).ok()?)? as usize;
@@ -281,7 +387,10 @@ pub(super) fn settle_fossil_cash_feedback(
         if let Ok((member, reward)) = rewards.get(settlement.operation) {
             commands.trigger(FossilFindFeedback {
                 root: member.root,
-                kind: FossilFind::Cash { dollars: reward.dollars, reward_name: reward.reward_name },
+                kind: FossilFind::Cash {
+                    dollars: reward.dollars,
+                    reward_name: reward.reward_name,
+                },
             });
             commands.entity(settlement.operation).try_despawn();
         }
@@ -353,9 +462,16 @@ impl FossilFindFeedback {
 
 #[derive(Clone, Copy)]
 enum FossilFind {
-    Puzzle { object: AssetId, collected: usize, total: usize },
+    Puzzle {
+        object: AssetId,
+        collected: usize,
+        total: usize,
+    },
     Object(AssetId),
-    Cash { dollars: i64, reward_name: AssetId },
+    Cash {
+        dollars: i64,
+        reward_name: AssetId,
+    },
     Tier(bool),
 }
 
@@ -381,7 +497,11 @@ pub(super) fn present_fossil_find_feedback(
     };
     let progress;
     let (key, arguments) = match event.kind {
-        FossilFind::Puzzle { object, collected, total } => {
+        FossilFind::Puzzle {
+            object,
+            collected,
+            total,
+        } => {
             let key = if collected == total {
                 "fpfossildisplay:puzzle_ready"
             } else {
@@ -393,19 +513,38 @@ pub(super) fn present_fossil_find_feedback(
                 .and_then(|object| localization.find_plain_localized_text(object.name_key))
                 .unwrap_or_default();
             progress = format!("{collected}/{total}");
-            (key, [LocalizationFormatArgument::Text(name), LocalizationFormatArgument::Text(&progress)])
+            (
+                key,
+                [
+                    LocalizationFormatArgument::Text(name),
+                    LocalizationFormatArgument::Text(&progress),
+                ],
+            )
         }
         FossilFind::Object(name) => (
             "fpfossildisplay:placeable_object_found",
-            [LocalizationFormatArgument::Text(
-                localization
-                    .find_plain_localized_text(name)
-                    .unwrap_or_default(),
-            ), LocalizationFormatArgument::Text("")],
+            [
+                LocalizationFormatArgument::Text(
+                    localization
+                        .find_plain_localized_text(name)
+                        .unwrap_or_default(),
+                ),
+                LocalizationFormatArgument::Text(""),
+            ],
         ),
-        FossilFind::Cash { dollars, reward_name } => (
+        FossilFind::Cash {
+            dollars,
+            reward_name,
+        } => (
             "fpfossildisplay:nonplaceable_object_found",
-            [LocalizationFormatArgument::Text(localization.find_plain_localized_text(reward_name).unwrap_or_default()), LocalizationFormatArgument::CurrencyCents(dollars * 100)],
+            [
+                LocalizationFormatArgument::Text(
+                    localization
+                        .find_plain_localized_text(reward_name)
+                        .unwrap_or_default(),
+                ),
+                LocalizationFormatArgument::CurrencyCents(dollars * 100),
+            ],
         ),
         FossilFind::Tier(unlocked) => (
             if unlocked {
@@ -413,7 +552,10 @@ pub(super) fn present_fossil_find_feedback(
             } else {
                 "fpfossildisplay:next_level_unavailable"
             },
-            [LocalizationFormatArgument::Text(""), LocalizationFormatArgument::Text("")],
+            [
+                LocalizationFormatArgument::Text(""),
+                LocalizationFormatArgument::Text(""),
+            ],
         ),
     };
     let mut text = String::new();

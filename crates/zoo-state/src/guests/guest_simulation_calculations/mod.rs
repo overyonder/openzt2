@@ -96,7 +96,6 @@ pub fn inclusive_u32(low: u32, high: u32, random: u32) -> u32 {
     low.saturating_add(random % width.max(1))
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReachedAction {
     BeginViewing,

@@ -78,7 +78,7 @@ pub(super) fn animate_rider_for_authored_view(
                 let first = if side > 0.0 { 2 } else { 0 };
                 definition.animation_states.iter().find(|state| {
                     let limit = |index, default| {
-                        if state.present_limits & (1 << index) == 0 {
+                        if state.present_limits & (1_u8 << index) == 0_u8 {
                             default
                         } else {
                             f32::from(state.angle_limits_degrees[index])
@@ -104,6 +104,7 @@ pub(super) fn animate_rider_for_authored_view(
             blend_duration_milliseconds: 0,
             playback_speed_permille: 1000,
             playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
+            action_settings: None,
         })
         .id;
     commands

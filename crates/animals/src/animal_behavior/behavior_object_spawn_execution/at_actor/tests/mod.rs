@@ -1,10 +1,10 @@
 use super::*;
 use bevy::asset::{
-    AssetLoader, LoadContext,
     io::{
-        AssetSourceBuilder, AssetSourceId, Reader,
         memory::{Dir, MemoryAssetReader},
+        AssetSourceBuilder, AssetSourceId, Reader,
     },
+    AssetLoader, LoadContext,
 };
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_data::behavior::action_record::BehaviorAction;
@@ -26,13 +26,13 @@ use openzt2_world_state::simulation_time::deterministic_random_stream::{
     DeterministicRng, RngDomain, ZooSeed,
 };
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     activate_due_behavior_instructions, activated_behavior_actor,
 };
+use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Loads any `.testprefab` as a one-entity scene once the test opens the gate.
 #[derive(TypePath)]
@@ -69,7 +69,11 @@ impl AssetLoader for GatedPrefabLoader {
                 flags: ScenePrefabEntityFlags(ScenePrefabEntityFlags::ACTIVE.0),
                 rotation_cycles: vec![],
                 transform_animations: vec![],
+                visibility_animation: None,
+                morph_animation: None,
+                render_lod_policy: None,
                 renderables: vec![],
+                animation_start: None,
                 colliders: vec![],
                 lods: vec![],
                 billboards: vec![],
@@ -91,6 +95,7 @@ fn litter(id: AssetId) -> WorldObjectDefinition {
     WorldObjectDefinition {
         authored_runtime: Default::default(),
         audio_cue_prefixes: Vec::new(),
+        audio_stage_volumes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),
         traversal_animation_manifests: Vec::new(),
@@ -275,11 +280,10 @@ fn dropped_litter_waits_for_its_model_and_spawns_once() {
             .action,
         0
     );
-    assert!(
-        app.world()
-            .get::<PendingAtActorSpawnPrefab>(guest)
-            .is_some()
-    );
+    assert!(app
+        .world()
+        .get::<PendingAtActorSpawnPrefab>(guest)
+        .is_some());
 
     gate.store(true, Ordering::Release);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -298,9 +302,8 @@ fn dropped_litter_waits_for_its_model_and_spawns_once() {
             .action,
         1
     );
-    assert!(
-        app.world()
-            .get::<PendingAtActorSpawnPrefab>(guest)
-            .is_none()
-    );
+    assert!(app
+        .world()
+        .get::<PendingAtActorSpawnPrefab>(guest)
+        .is_none());
 }

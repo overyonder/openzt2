@@ -13,7 +13,8 @@ use openzt2_game_data::animation::{
 };
 
 use super::{
-    animation::lower_blue_fang_clip, conversion_error::ConversionError,
+    animation::lower_blue_fang_clip,
+    conversion_error::ConversionError,
     kf_animation::lower_netimmerse_kf_clip,
     netimmerse_nif_source::{
         block_payload::NetImmerseNifBlockPayload, document_source_types::NetImmerseNifDocument,

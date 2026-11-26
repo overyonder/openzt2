@@ -3,7 +3,7 @@
 use std::{io, path::Path};
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
 use openzt2_game_data::AssetId;
@@ -17,10 +17,10 @@ use super::{
 
 use crate::{
     asset_source::{
-        AssetArchives,
         archive_entry_asset_path::{
-            ARCHIVE_ENTRY_ASSET_EXTENSION, archive_entry_asset_source_path,
+            archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION,
         },
+        AssetArchives,
     },
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,

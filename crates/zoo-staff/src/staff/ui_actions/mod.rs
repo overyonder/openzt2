@@ -125,13 +125,13 @@ pub(super) fn route_staff_assignment_ui_actions(
                         }
                     }
                 }
-                UiStaffAction::SetWorkerDutyAssignment { duty, assigned } => {
+                UiStaffAction::SetWorkerDutyAssignment { task, assigned } => {
                     let worker = information_source(activation.node, &sources, &parents)
                         .or(selected.subject());
                     if let Some(worker) = worker.filter(|worker| staff.get(*worker).is_ok()) {
                         worker_duty_assignments.write(SetStaffWorkerDutyAssignment {
                             worker,
-                            duty: *duty,
+                            task: *task,
                             assigned: *assigned,
                         });
                     }

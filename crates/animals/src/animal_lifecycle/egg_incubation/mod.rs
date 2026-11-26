@@ -9,12 +9,12 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
-    AssetId,
     behavior::eligibility::{
         BehaviorCandidateRole, BehaviorEligibilityFactInput, BehaviorEligibilityFactValue,
         BehaviorSpatialEligibilityFact, BehaviorWelfareEligibilityFact,
     },
     world_definitions::world_objects::WorldObjectEggDefinition,
+    AssetId,
 };
 use openzt2_world_state::{
     simulation_time::{
@@ -29,8 +29,8 @@ use openzt2_world_state::{
 use openzt2_zoo_state::{
     animal_behavior::{
         behavior_candidate_selection::{
-            BehaviorCandidateRanking, candidate_requirements_are_satisfied,
-            score_supported_behavior_task,
+            candidate_requirements_are_satisfied, score_supported_behavior_task,
+            BehaviorCandidateRanking,
         },
         behavior_random_stream_state::BehaviorRandomStream,
     },

@@ -156,6 +156,7 @@ fn disabled_message_of_the_day_survives_the_profile_index() {
                     profile_identifier,
                     locale_identifier: AssetId::default(),
                     controller_input_enabled: true,
+                attributes: Default::default(),
                 },
                 challenge_progress: Default::default(),
                 scenario_variables: Default::default(),

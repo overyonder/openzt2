@@ -4,7 +4,7 @@ use std::time::Duration;
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_game_data::species::SpeciesVariantFlags;
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::UncratedWorldEntity;
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
 use openzt2_zoo_state::animal_lifecycle::types::{Animal, AnimalVariant};
@@ -89,19 +89,26 @@ fn project_rampage_music(
         .collect::<bevy::ecs::entity::EntityHashMap<_>>();
     let mut distances = bevy::ecs::entity::EntityHashMap::<f32>::default();
     for (member, pose) in &active {
-        let distance = listeners.get(&member.root).map_or(f32::INFINITY, |listener| {
-            pose.translation().distance_squared(*listener)
-        });
+        let distance = listeners
+            .get(&member.root)
+            .map_or(f32::INFINITY, |listener| {
+                pose.translation().distance_squared(*listener)
+            });
         let nearest = distances.entry(member.root).or_insert(f32::INFINITY);
         *nearest = nearest.min(distance);
     }
     for (root, playing) in &mut worlds {
         let selection = root.to_bits();
         if let Some(&nearest) = distances.get(&root) {
-            let same_cue = playing.as_ref().is_some_and(|playing| playing.loop_cue == policy.music);
+            let same_cue = playing
+                .as_ref()
+                .is_some_and(|playing| playing.loop_cue == policy.music);
             if !same_cue {
                 if playing.is_some() {
-                    stop.write(StopAudioCue { emitter: None, selection });
+                    stop.write(StopAudioCue {
+                        emitter: None,
+                        selection,
+                    });
                 }
                 if policy.music != openzt2_game_data::AssetId::default() {
                     play.write(PlayAudioCue {
@@ -250,7 +257,7 @@ fn check_due_animals_for_rampage(
         (&NeedPoints, &mut BehaviorRandomStream),
         (
             Without<Tranquilized>,
-            Without<WorldEntityIsCrated>,
+            UncratedWorldEntity,
             Without<RampageTimeRemaining>,
         ),
     >,

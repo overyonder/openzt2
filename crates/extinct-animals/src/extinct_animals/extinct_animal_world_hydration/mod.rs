@@ -37,7 +37,9 @@ pub(super) fn hydrate_extinct_animal_world_state_from_loaded_definitions(
     new_roots: Query<Entity, Added<WorldRoot>>,
 ) {
     for (entity, persistent_identifier, member) in &sites {
-        let Ok(seed) = seeds.get(member.root) else { continue; };
+        let Ok(seed) = seeds.get(member.root) else {
+            continue;
+        };
         commands
             .entity(entity)
             .insert(FossilDiscoveryRandomStream(DeterministicRng::from_entity(

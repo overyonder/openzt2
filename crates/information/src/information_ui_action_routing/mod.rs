@@ -187,6 +187,7 @@ pub(super) fn route_authored_information_actions_from_activated_ui_nodes(
                 | UiInformationAction::SelectGraphType { .. } => {
                     super::information_graph_operations::apply_authored_information_graph_action(
                         &record.action,
+                        document,
                         owner.0,
                         activation.node,
                         &mut graphs,

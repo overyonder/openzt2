@@ -95,7 +95,7 @@ pub(super) fn project_drafted_graphics_detail_settings_into_authored_rows(
         };
         let value = setting.selected_value(&draft.graphics);
         for descendant in std::iter::once(entity).chain(children.iter_descendants(entity)) {
-            if let Ok((mut policy, mut minimum, mut maximum, mut slider_value)) =
+            if let Ok((policy, mut minimum, mut maximum, mut slider_value)) =
                 sliders.get_mut(descendant)
             {
                 policy

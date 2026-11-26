@@ -340,7 +340,7 @@ impl TerrainWaterHeightLimits {
                 ))
             })
             .collect::<Option<Vec<_>>>()?;
-        let mut dirty = bevy::platform::collections::HashSet::default();
+        let mut dirty = bevy::platform::collections::HashSet::<u32>::default();
         for (entity, next) in contributions {
             if let Some(previous) = self.by_source.remove(&entity) {
                 for point in previous.iter().copied() {

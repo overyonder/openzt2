@@ -1,26 +1,29 @@
+use super::pending_snapshot_application_types::SnapshotTerrainAsset;
 use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure as Failure,
     terrain_snapshot_types::TerrainSnapshotRecord, world_snapshot_types::WorldSnapshotRecord,
 };
 use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_assets::{
-    saved_world_asset_source::{SavedWorldAssetSource, SavedWorldTerrainAsset},
+    asset_source::AssetArchives,
+    terrain::canonical_terrain_asset_loading::add_restored_terrain_asset,
+    world_scenario::saved_world_scenario_asset_construction::add_restored_world_scenario_asset,
     world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
 };
 
 #[derive(SystemParam)]
 pub(in crate::persistence) struct SavedWorldSnapshotPreparation<'w> {
     server: Option<Res<'w, AssetServer>>,
-    source: Option<ResMut<'w, SavedWorldAssetSource>>,
+    archives: Option<Res<'w, AssetArchives>>,
 }
 
 impl SavedWorldSnapshotPreparation<'_> {
     pub(super) fn prepare(
-        &mut self,
+        &self,
         world: &WorldSnapshotRecord,
         terrain: Option<&TerrainSnapshotRecord>,
         retained: &mut Option<Handle<WorldScenarioDocumentAsset>>,
-    ) -> Result<Option<SavedWorldTerrainAsset>, Failure> {
+    ) -> Result<Option<SnapshotTerrainAsset>, Failure> {
         let Some(document) = &world.source_document else {
             return Ok(None);
         };
@@ -63,14 +66,27 @@ impl SavedWorldSnapshotPreparation<'_> {
             .document
             .find_world_map(world.map_definition_identifier)
             .ok_or(Failure::UnknownAssetIdentifier)?;
-        let source = self
-            .source
-            .as_deref_mut()
+        let archives = self
+            .archives
+            .as_deref()
             .ok_or(Failure::UnknownAssetIdentifier)?;
-        let (handle, terrain) = source
-            .register(document.clone(), map.terrain, &terrain.grid, server)
-            .map_err(|_| Failure::CorruptSnapshotSection)?;
-        *retained = Some(handle);
-        Ok(Some(terrain))
+        let declaring_path = document
+            .terrains
+            .iter()
+            .find(|terrain| terrain.id == map.terrain)
+            .map(|terrain| std::path::PathBuf::from(terrain.path.as_ref()))
+            .ok_or(Failure::UnknownAssetIdentifier)?;
+        let terrain =
+            add_restored_terrain_asset(server, archives, terrain.grid.clone(), declaring_path);
+        let scenario = add_restored_world_scenario_asset(
+            server,
+            archives,
+            document.clone(),
+            map.terrain,
+            terrain.clone(),
+        )
+        .map_err(|_| Failure::CorruptSnapshotSection)?;
+        *retained = Some(scenario);
+        Ok(Some(SnapshotTerrainAsset(terrain)))
     }
 }

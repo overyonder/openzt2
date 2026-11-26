@@ -84,11 +84,18 @@ pub(super) fn deliver_behavior_object_spawns(
             // The spawn node, such as an animal's `Poop`, may be an animated
             // joint or a plain named node. Without either the spawn fails.
             let subject_joint = AssetId::from_key(subject_node);
-            let transform = rigs.get(event.controller).ok()
-                .into_iter().flat_map(|rig| joints.iter_many(rig.joints()).matched())
+            let transform = rigs
+                .get(event.controller)
+                .ok()
+                .into_iter()
+                .flat_map(|rig| joints.iter_many(rig.joints()).matched())
                 .find(|(joint, _)| joint.authored_joint_id == subject_joint)
                 .map(|(_, transform)| transform.compute_transform())
-                .or_else(|| named_nodes.pose(actor, subject_node).map(GlobalTransform::compute_transform))?;
+                .or_else(|| {
+                    named_nodes
+                        .pose(actor, subject_node)
+                        .map(GlobalTransform::compute_transform)
+                })?;
             let presentation = if object.prefab == AssetId::default() {
                 None
             } else {

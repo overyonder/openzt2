@@ -35,6 +35,18 @@ pub struct AimFreeCameraAt {
 }
 
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub struct ScriptedOverheadCameraMotion {
+    pub root: Entity,
+    pub operation: ScriptedOverheadCameraOperation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ScriptedOverheadCameraOperation {
+    Pan { world: Vec3 },
+    Zoom { distance: f32 },
+}
+
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
 pub struct CameraMoved {
     pub eye: Vec3,
     pub focus: Vec3,

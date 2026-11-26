@@ -156,6 +156,7 @@ pub struct AmbientSpawnDefinition {
     pub population: [u16; 2],
     pub spawn_interval_ticks: [u32; 2],
     pub radius_cm: [u32; 2],
+    pub spawn_origin_cm: Option<[i32; 2]>,
     pub lifetime_ticks: [u32; 2],
     pub probability: u32,
     pub audio: AssetId,

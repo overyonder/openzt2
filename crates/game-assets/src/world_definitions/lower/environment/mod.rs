@@ -755,12 +755,11 @@ pub(super) fn bind_ambient(
     output: &mut WorldDefinitionLoweringTables,
 ) -> Result<(), BindError> {
     let radius_cm = array(record, &["minimumRadiusCm", "maximumRadiusCm"], [0_u32; 2])?;
-    if radius_cm != [0, 0] {
-        return Err(BindError::record(
-            record,
-            "ambient spawn radius requires an origin",
-        ));
-    }
+    let spawn_origin_cm = if record.value(&["originXCm", "originZCm"]).is_some() {
+        Some(array(record, &["originXCm", "originZCm"], [0_i32; 2])?)
+    } else {
+        None
+    };
     let effect = asset(record, &["effect", "particle"]);
     if effect != AssetId::default() {
         return Err(BindError::record(
@@ -798,6 +797,7 @@ pub(super) fn bind_ambient(
             [0_u32; 2],
         )?,
         radius_cm,
+        spawn_origin_cm,
         lifetime_ticks: array(
             record,
             &["minimumLifetimeTicks", "maximumLifetimeTicks"],

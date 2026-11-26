@@ -6,13 +6,12 @@ use std::{
 use bevy::ecs::{entity::EntityHashSet, relationship::RelationshipTarget, system::SystemParam};
 use bevy::prelude::*;
 use openzt2_game_assets::lua_script::{
-    lua_script_archive_path_index::LuaScriptArchivePathIndex,
-    lua_script_asset_loading::LuaScriptAsset,
+    lua_script_asset_loading::LuaScriptAsset, lua_script_sources::LuaScriptSources,
 };
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_game_data::world_scenario::{ScenarioDefinitionRecord, ScenarioScriptPhase};
 use openzt2_game_data::AssetId;
-use openzt2_world_state::simulation_time::simulation_control_types::SimulationControl;
+use openzt2_world_state::simulation_time::simulation_control_types::SimulationPaused;
 use openzt2_zoo_state::scenario::{
     scenario_objective_types::{
         ScenarioObjective, ScenarioObjectiveDependents, ScenarioObjectiveGroup,
@@ -111,7 +110,7 @@ pub(super) fn rebuild_scenario_rule_binding_indexes(
 
 pub(super) fn advance_scenario_script_timers(
     time: Res<Time<Fixed>>,
-    simulation: Single<&SimulationControl>,
+    simulation: Single<&SimulationPaused>,
     assets: Res<Assets<WorldScenarioDocumentAsset>>,
     mut sessions: Query<(
         Entity,
@@ -137,7 +136,7 @@ pub(super) fn advance_scenario_script_timers(
         };
         let evaluate = timing.evaluation_is_due(&time, record.evaluation_interval_seconds)
             && session.is_none_or(|session| session.state == ScenarioSessionState::Running);
-        let always_run = !simulation.paused && timing.always_run_is_due(&time);
+        let always_run = !simulation.0 && timing.always_run_is_due(&time);
         if evaluate || always_run {
             due.write(ScenarioEvaluationDue {
                 owner,
@@ -242,7 +241,8 @@ impl ScenarioRuleQueries<'_, '_> {
                 .get(objective.record_index as usize)
                 .map(|node| (node.id, *status));
         }
-        let group = self.groups.as_readonly().get(entity).ok()?;
+        let groups = self.groups.as_readonly();
+        let group = groups.get(entity).ok()?;
         definition
             .objective_groups
             .get(group.record_index)
@@ -282,7 +282,8 @@ impl ScenarioRuleQueries<'_, '_> {
         if scenario.sticky(id, prior, false) {
             return None;
         }
-        let group = self.groups.as_readonly().get(entity).ok()?;
+        let groups = self.groups.as_readonly();
+        let group = groups.get(entity).ok()?;
         let record = scenario
             .definition
             .objective_groups
@@ -412,7 +413,7 @@ impl ScenarioInvocation<'_> {
 pub(super) struct ScenarioRuleScripts<'w, 's> {
     assets: Res<'w, Assets<WorldScenarioDocumentAsset>>,
     scripts: Res<'w, Assets<LuaScriptAsset>>,
-    index: Res<'w, LuaScriptArchivePathIndex>,
+    index: Res<'w, LuaScriptSources>,
     runtime: Query<'w, 's, &'static mut ScenarioLuaContext>,
     outputs: ScenarioLuaOutputs<'w, 's>,
 }
@@ -522,7 +523,7 @@ impl ScenarioRuleDocuments<'_, '_> {
 
 pub(super) fn evaluate_due_scenario_rules(
     mut due: MessageReader<ScenarioEvaluationDue>,
-    simulation: Single<&SimulationControl>,
+    simulation: Single<&SimulationPaused>,
     documents: ScenarioRuleDocuments,
     mut rules: ScenarioRuleQueries,
     mut scripts: ScenarioRuleScripts,
@@ -579,7 +580,7 @@ pub(super) fn evaluate_due_scenario_rules(
             rules.evaluate(
                 root,
                 &scenario,
-                simulation.paused,
+                simulation.0,
                 &mut scripts,
                 facts,
                 &mut changed,
@@ -639,7 +640,8 @@ pub(super) fn resolve_external_scenario_rule_transitions(
         let Ok(owner) = rules.owners.get(event.objective) else {
             continue;
         };
-        let Ok((objective, ..)) = rules.objectives.as_readonly().get(event.objective) else {
+        let objectives = rules.objectives.as_readonly();
+        let Ok((objective, ..)) = objectives.get(event.objective) else {
             continue;
         };
         let Some(scenario) = documents.get(owner.0, objective.scenario) else {

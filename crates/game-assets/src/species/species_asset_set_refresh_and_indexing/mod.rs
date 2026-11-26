@@ -4,8 +4,8 @@ use bevy::{
 };
 
 use crate::asset_source::{
-    ArchiveOverlayChanged, AssetArchives,
-    archive_entry_asset_path::definition_archive_entry_asset_path,
+    archive_entry_asset_path::definition_archive_entry_asset_path, ArchiveOverlayChanged,
+    AssetArchives,
 };
 use std::{collections::BTreeSet, path::Path};
 

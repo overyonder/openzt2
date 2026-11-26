@@ -119,6 +119,7 @@ impl ScenePrefabDocumentAssembler {
             morph_animation: None,
             render_lod_policy: None,
             renderables: Vec::new(),
+            animation_start: None,
             colliders: Vec::new(),
             lods: Vec::new(),
             billboards: Vec::new(),

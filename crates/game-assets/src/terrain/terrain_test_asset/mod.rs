@@ -9,7 +9,8 @@ pub fn terrain_test_asset(grid: TerrainGrid) -> TerrainAsset {
         )
         .unwrap(),
         canonical_terrain_grid: grid,
-        lowered_terrain_model: Default::default(),
+        water_biomes_by_material: Default::default(),
+        chunk_meshes: Default::default(),
         terrain_effect_material: Default::default(),
         water_bump_combination_effect_material: Default::default(),
         water_surface_effect_material: Default::default(),
@@ -37,6 +38,7 @@ pub fn terrain_test_water_mut(asset: &mut TerrainAsset) -> (&mut TerrainGrid, &m
 /// The source-path texture table, for tests that compose terrain surfaces.
 pub fn terrain_test_textures_mut(
     asset: &mut TerrainAsset,
-) -> &mut std::collections::HashMap<String, bevy::prelude::Handle<bevy::prelude::Image>> {
+) -> &mut bevy::platform::collections::HashMap<String, bevy::prelude::Handle<bevy::prelude::Image>>
+{
     &mut asset.texture_images_by_normalized_source_path
 }

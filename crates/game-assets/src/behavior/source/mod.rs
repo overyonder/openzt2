@@ -3,8 +3,8 @@
 use std::io;
 
 use openzt2_game_data::{
-    AssetId,
     behavior::document::{BehaviorDocument, BehaviorSet, BehaviorTask},
+    AssetId,
 };
 
 use crate::source_document::ordered_source_document_types::{

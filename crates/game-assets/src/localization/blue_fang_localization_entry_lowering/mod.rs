@@ -1,9 +1,9 @@
 use std::{collections::BTreeMap, io};
 
 use openzt2_game_data::{
-    AssetId,
     localization::{LocalizationEntry, LocalizationRichContentKind, LocalizationRichContentNode},
     world_definitions::guest_simulation_definitions::PersonNamePool,
+    AssetId,
 };
 
 use crate::source_document::ordered_source_document_types::{

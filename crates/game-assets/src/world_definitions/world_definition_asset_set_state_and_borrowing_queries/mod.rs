@@ -3,14 +3,13 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
 };
 
 use bevy::{gltf::Gltf, prelude::*};
 use openzt2_game_data::{
-    AssetId,
     world_definitions::{
         animal_health::*,
         animal_shows_and_training::*,
@@ -43,6 +42,7 @@ use openzt2_game_data::{
         transportation_and_tours::*,
         world_objects::*,
     },
+    AssetId,
 };
 
 use crate::{effect::ParticleEffectDocumentAsset, scene_prefab::ScenePrefabAsset};
@@ -108,6 +108,7 @@ pub(super) enum DefinitionKind {
     StaffByObject,
     // Precedence winners for demand-loaded dependency identifiers.
     TextureDependency,
+    MaterialDependency,
     ModelDependency,
     EffectDependency,
     SceneDependency,
@@ -176,6 +177,7 @@ pub struct WorldDefinitions {
     pub(super) total_loads: usize,
     pub(super) records: BTreeMap<(DefinitionKind, AssetId), DefinitionRow>,
     pub(super) show_stages_by_object: BTreeMap<AssetId, DefinitionRow>,
+    pub(super) animation_binder_rigs: BTreeMap<(AssetId, AssetId), DefinitionRow>,
     pub(super) vehicle_seats_by_index: BTreeMap<(AssetId, u16), DefinitionRow>,
     pub(super) singletons: BTreeMap<SingletonKind, Handle<WorldDefinitionAsset>>,
     pub(super) ground_path_surface_images: BTreeMap<AssetId, Handle<GroundPathSurfaceImage>>,
@@ -323,6 +325,7 @@ impl WorldDefinitions {
             fame_documents: &self.fame_documents,
             records: &self.records,
             show_stages_by_object: &self.show_stages_by_object,
+            animation_binder_rigs: &self.animation_binder_rigs,
             vehicle_seats_by_index: &self.vehicle_seats_by_index,
             singletons: &self.singletons,
             unlock_definition_identifiers_by_target: &self.unlock_definition_identifiers_by_target,
@@ -343,6 +346,7 @@ pub struct WorldDefinitionsView<'a> {
     fame_documents: &'a [Handle<WorldDefinitionAsset>],
     records: &'a BTreeMap<(DefinitionKind, AssetId), DefinitionRow>,
     show_stages_by_object: &'a BTreeMap<AssetId, DefinitionRow>,
+    animation_binder_rigs: &'a BTreeMap<(AssetId, AssetId), DefinitionRow>,
     vehicle_seats_by_index: &'a BTreeMap<(AssetId, u16), DefinitionRow>,
     singletons: &'a BTreeMap<SingletonKind, Handle<WorldDefinitionAsset>>,
     unlock_definition_identifiers_by_target: &'a BTreeMap<AssetId, Vec<AssetId>>,
@@ -419,6 +423,15 @@ impl<'a> WorldDefinitionsView<'a> {
             .document
             .staff_requests
             .get(row.first..row.end)
+    }
+
+    pub fn animation_binder_rig_source(
+        self,
+        definition: AssetId,
+        binder: AssetId,
+    ) -> Option<(bevy::asset::AssetId<WorldDefinitionAsset>, usize)> {
+        let row = self.animation_binder_rigs.get(&(definition, binder))?;
+        Some((row.handle.id(), row.first))
     }
 
     pub fn has_object_record(self, id: AssetId) -> bool {
@@ -1294,6 +1307,16 @@ impl<'a> WorldDefinitionsView<'a> {
                     .handle,
             )?
             .texture_path(id)
+    }
+
+    pub fn material(
+        self,
+        id: AssetId,
+    ) -> Option<Handle<crate::material::material_asset_types::MaterialAsset>> {
+        let row = self
+            .records
+            .get(&(DefinitionKind::MaterialDependency, id))?;
+        self.assets.get(&row.handle)?.material(self.server?, id)
     }
 
     pub fn model(self, id: AssetId) -> Option<Handle<Gltf>> {

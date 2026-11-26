@@ -183,7 +183,7 @@ use std::fmt::Write as _;
 use bevy::{
     asset::AsAssetId,
     camera::visibility::VisibilityClass,
-    platform::collections::{HashMap, HashSet},
+    platform::collections::HashSet,
     prelude::*,
     render::{
         extract_component::ExtractComponent, render_resource::IntoBindGroupLayoutEntryBuilder as _,

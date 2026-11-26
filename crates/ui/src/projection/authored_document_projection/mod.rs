@@ -68,7 +68,7 @@ use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualBackgroundSlo
 pub(super) struct UiDocumentLifetimeAttachment;
 
 pub(in crate::projection) fn despawn_document_attachment_to_missing_owner(
-    removal: On<Remove, ChildOf>,
+    removal: On<Remove<ChildOf>>,
     attachments: Query<&ChildOf, With<UiDocumentLifetimeAttachment>>,
     entities: Query<Entity>,
     mut commands: Commands,
@@ -548,6 +548,31 @@ pub(super) fn project_document_on_entity(
     }
 
     for (index, record) in data.nodes.iter().enumerate() {
+        for action in &record.actions {
+            use openzt2_game_data::ui_document::action::{
+                presentation::UiPresentationAction, UiActionRecord,
+            };
+            let UiActionRecord::Presentation(action) = action else {
+                continue;
+            };
+            let UiPresentationAction::WatchTextEdit {
+                target_node,
+                source_node,
+            } = action.action
+            else {
+                continue;
+            };
+            let source = data
+                .nodes
+                .iter()
+                .position(|node| node.id == source_node && matches!(node.kind, UiNodeKind::Edit));
+            let target = data.nodes.iter().position(|node| node.id == target_node);
+            if let (Some(source), Some(target)) = (source, target) {
+                commands.entity(entities[target]).insert(
+                    crate::authored_text_edit_bevy_adaptation::UiWatchesTextEdit(entities[source]),
+                );
+            }
+        }
         if matches!(record.widget, UiWidgetRecord::CatalogueDetails { .. }) {
             let dynamic_rows = [
                 "cost",
@@ -649,7 +674,7 @@ pub(super) fn project_document_on_entity(
             record
                 .actions
                 .iter()
-                .chain(record.hotkeys.iter().map(|hotkey| &hotkey.action))
+                .chain(record.hotkeys.iter().flat_map(|hotkey| &hotkey.actions))
         })
         .filter_map(|record| {
             let UiActionRecord::Presentation(record) = record else {

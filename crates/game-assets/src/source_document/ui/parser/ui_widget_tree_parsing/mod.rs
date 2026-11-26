@@ -253,9 +253,12 @@ fn parse_authored_ui_node_parts(
         notify_animation_completed: attr(attributes, "notifyTargetsOfCompletedAnimation")
             .and_then(parse_bool),
         help: child("UIHelpInfo").map(parse_help),
-        text_format: child("text")
-            .and_then(|node| node.attribute("format"))
+        text_format: element_children
+            .iter()
+            .filter(|node| node.name == "text")
+            .filter_map(|node| node.attribute("format"))
             .filter(|value| !value.is_empty())
+            .min_by_key(|value| value.starts_with("openzt2:money:"))
             .map(str::to_owned),
         fields,
         finance_categories,

@@ -458,6 +458,7 @@ mod hit_policy_tests {
             image_selections: Vec::new(),
             interaction_cursors: None,
             placement_preview: None,
+            edge_pan_source_child: None,
             role_targets: Default::default(),
             resolved_dependencies: Default::default(),
         };

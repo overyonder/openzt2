@@ -40,11 +40,11 @@ pub(super) struct SceneBoundDependency(pub(super) BoundInput);
 
 #[derive(Component)]
 #[relationship(relationship_target = SceneWaterBoundUsers)]
-pub(super) struct SceneWaterBoundSource(pub(super) Entity);
+pub(in crate::terrain) struct SceneWaterBoundSource(pub(super) Entity);
 
 #[derive(Component)]
 #[relationship_target(relationship = SceneWaterBoundSource)]
-pub(super) struct SceneWaterBoundUsers(Vec<Entity>);
+pub(in crate::terrain) struct SceneWaterBoundUsers(Vec<Entity>);
 
 #[derive(Component)]
 pub(super) struct SceneBoundInvalidated;
