@@ -426,25 +426,14 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
             maximum_behavior_execution,
             pending_service_request_sequences: &[],
         };
-    if let Some(record) = &runtime_continuation {
-        if let Some((id, _)) = record.entity_names.as_ref().and_then(|names| {
-            names
-                .iter()
-                .find(|(id, _)| !complete_persistent_identifiers.contains(id))
-        }) {
-            bevy::log::warn!(id, "saved name owner is missing");
-            return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+    if let Some(record) = &mut runtime_continuation {
+        // A name is saved for every named object, also one no section
+        // restores, such as the food a guest holds; it has nowhere to go.
+        if let Some(names) = &mut record.entity_names {
+            names.retain(|(id, _)| complete_persistent_identifiers.contains(id));
         }
-        if let Some(id) = record
-            .registered_entity_name_identifiers
-            .as_ref()
-            .and_then(|ids| {
-                ids.iter()
-                    .find(|id| !complete_persistent_identifiers.contains(id))
-            })
-        {
-            bevy::log::warn!(id, "saved name registration owner is missing");
-            return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+        if let Some(ids) = &mut record.registered_entity_name_identifiers {
+            ids.retain(|id| complete_persistent_identifiers.contains(id));
         }
         super::runtime_continuation_snapshot_application::validate_runtime_continuation_identity_high_water_marks(record, high_water_marks)?;
         if record
