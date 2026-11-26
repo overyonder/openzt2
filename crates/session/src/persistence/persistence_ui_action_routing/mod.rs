@@ -26,6 +26,7 @@ use openzt2_interface_state::persistence::profile_types::SelectProfile;
 use openzt2_interface_state::persistence::save_slot_types::DeleteWorldSnapshotFromSlot;
 use openzt2_interface_state::persistence::save_slot_types::LoadSaveSlotCatalogue;
 use openzt2_interface_state::persistence::save_slot_types::LoadWorldSnapshotFromSlot;
+use openzt2_interface_state::persistence::save_slot_types::SaveSlotCatalogue;
 use openzt2_interface_state::persistence::save_slot_types::SaveSlotId;
 use openzt2_interface_state::persistence::save_slot_types::SaveWorldSnapshotToSlot;
 
@@ -91,6 +92,7 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
     ui_values: Query<&UiValue>,
     editable_text_nodes: Query<(&EditableText, &UiDocumentOwner, Option<&UiTextEditPolicy>)>,
     profile_index: Res<ProfileIndex>,
+    save_slot_catalogue: Res<SaveSlotCatalogue>,
     live_world_roots: Query<
         Entity,
         With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
@@ -142,7 +144,7 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                     ) {
                         continue;
                     }
-                    let slot = ui_values
+                    let mut slot = ui_values
                         .get(activated_ui_node.node)
                         .map_or(0, |value| value.0.max(0) as u32);
                     let submitted_world_display_name =
@@ -181,6 +183,7 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                             });
                             continue;
                         }
+                        slot = save_slot_for_name(&save_slot_catalogue, name).0;
                         if let Ok(ui_document_root) = live_world_roots.single() {
                             commands
                                 .entity(ui_document_root)
@@ -301,5 +304,54 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                 }
             }
         }
+    }
+}
+
+/// The slot a save named `name` goes to. As in `zt.exe`, which saves by name,
+/// it overwrites the save of that name or else takes the first free slot.
+fn save_slot_for_name(catalogue: &SaveSlotCatalogue, name: &str) -> SaveSlotId {
+    let records = &catalogue.save_slot_records;
+    records
+        .iter()
+        .find(|record| record.world_display_name.eq_ignore_ascii_case(name))
+        .map(|record| record.save_slot_identifier)
+        .unwrap_or_else(|| {
+            SaveSlotId(
+                (0..)
+                    .find(|slot| {
+                        records
+                            .iter()
+                            .all(|record| record.save_slot_identifier.0 != *slot)
+                    })
+                    .unwrap_or(0),
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openzt2_interface_state::persistence::save_slot_types::SaveSlotRecord;
+
+    #[test]
+    fn a_save_overwrites_the_one_of_its_name_or_takes_the_first_free_slot() {
+        let record = |slot, name: &str| SaveSlotRecord {
+            save_slot_identifier: SaveSlotId(slot),
+            world_display_name: name.to_owned(),
+            last_saved_unix_timestamp_milliseconds: 0,
+            scenario_definition_identifier: Default::default(),
+            map_definition_identifier: Default::default(),
+            profile_identifier: Default::default(),
+        };
+        let catalogue = SaveSlotCatalogue {
+            save_slot_records: vec![record(0, "test"), record(2, "test2")],
+            original_saved_game_records: Vec::new(),
+        };
+        assert_eq!(save_slot_for_name(&catalogue, "Test2"), SaveSlotId(2));
+        assert_eq!(save_slot_for_name(&catalogue, "test3"), SaveSlotId(1));
+        assert_eq!(
+            save_slot_for_name(&SaveSlotCatalogue::default(), "test"),
+            SaveSlotId(0)
+        );
     }
 }
