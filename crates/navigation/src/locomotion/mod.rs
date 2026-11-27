@@ -1,7 +1,7 @@
 //! Focused route planning, local steering, fixed-step movement, and docking.
 
 mod animal_animation_locomotion;
-mod animal_navigation_policy;
+pub mod animal_navigation_policy;
 #[cfg(test)]
 mod animal_terrain_slope_tests;
 mod animal_water_contact;

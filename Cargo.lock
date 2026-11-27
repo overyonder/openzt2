@@ -5292,6 +5292,7 @@ dependencies = [
  "openzt2_game_assets",
  "openzt2_game_data",
  "openzt2_interface_state",
+ "openzt2_navigation",
  "openzt2_ui",
  "openzt2_world",
  "openzt2_world_state",

@@ -58,6 +58,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::gltf::Gltf;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use openzt2_zoo_state::placement::object_placement_definition_queries::object_placement_prefab_identifier;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -105,6 +106,9 @@ pub(super) struct BehaviorTargetPlacementWorld<'w, 's> {
     habitats: Res<'w, HabitatIndex>,
     regions: Query<'w, 's, &'static HabitatRegion>,
     grid: Res<'w, TopologyGrid>,
+    animal_variants:
+        Query<'w, 's, &'static openzt2_zoo_state::animal_lifecycle::types::AnimalVariant>,
+    animal_policy: openzt2_navigation::locomotion::animal_navigation_policy::AnimalNavigationPolicy<'w>,
 }
 
 #[derive(SystemParam)]
@@ -158,7 +162,8 @@ pub(super) fn apply_behavior_target_placements(
                 if prefab.is_none() {
                     let prefab = catalogue
                         .find_object(pending.definition)
-                        .and_then(|object| catalogue.scene(object.prefab));
+                        .and_then(object_placement_prefab_identifier)
+                        .and_then(|prefab| catalogue.scene(prefab));
                     pending.stage = BehaviorTargetPlacementStage::Siting { prefab };
                 }
                 match choose_behavior_target_placement_site(
@@ -352,7 +357,12 @@ fn choose_behavior_target_placement_site(
     if !behavior_placement_supports_definition(definition) {
         return SiteChoice::Rejected;
     }
-    let Some(handle) = catalogue.scene(object.prefab) else {
+    // Food laid on the ground, such as hay or meat, has no main model, only
+    // its full, partly eaten and empty states; it is put down as its full one,
+    // as the player places it.
+    let Some(handle) =
+        object_placement_prefab_identifier(object).and_then(|prefab| catalogue.scene(prefab))
+    else {
         return if catalogue_is_complete {
             SiteChoice::Rejected
         } else {
@@ -428,10 +438,51 @@ fn choose_behavior_target_placement_site(
             &mut candidates,
         );
     }
-    // Preserve the recipient site when valid, then try dry shore nodes. The
-    // authored placement set still navigates to and docks at the chosen site.
-    for candidate in std::iter::once(recipient.translation()).chain(candidates) {
+    // Try dry ground nodes around the recipient. The authored placement set
+    // still navigates to and docks at the chosen site.
+    // An object put down over an animal, such as a trough, shuts it in its
+    // walls, so a site must leave the recipient clear.
+    let clearance = world
+        .prefabs
+        .get(&handle)
+        .map_or(DEFAULT_PLACED_OBJECT_RADIUS_M, |prefab| {
+            placed_object_radius(prefab, object.prefab_scale)
+        });
+    let recipient_agent = world.agents.get(pending.recipient).ok();
+    let recipient_radius = recipient_agent.map_or(0.0, |agent| agent.radius_m);
+    // The recipient walks up to the object and eats or drinks from it, so the
+    // ground around it must not be too steep for that animal, as a keeper
+    // could otherwise leave food on a slope its animal cannot climb.
+    let recipient_minimum_normal_y = recipient_agent
+        .and_then(|agent| {
+            world
+                .animal_policy
+                .agent_with_authored_collision_limits(
+                    agent,
+                    world.animal_variants.get(pending.recipient).ok(),
+                )
+                .ok()
+        })
+        .and_then(|(_, maximum_slope)| maximum_slope)
+        .map(f32::cos);
+    for candidate in candidates {
         let position = candidate.xz();
+        if position.distance(recipient.translation().xz()) < clearance + recipient_radius {
+            continue;
+        }
+        if let (Some(minimum_normal_y), Some(navigation)) =
+            (recipient_minimum_normal_y, world.navigation.as_ref())
+        {
+            let reach = clearance + recipient_radius * RECIPIENT_REACH_RADII;
+            if !ground_around_meets_slope(
+                navigation.terrain_derived_navigation_graph(),
+                position,
+                reach,
+                minimum_normal_y,
+            ) {
+                continue;
+            }
+        }
         let Some(point) = sample_behavior_placement_terrain(world, position) else {
             continue;
         };
@@ -456,6 +507,90 @@ fn choose_behavior_target_placement_site(
         }
     }
     SiteChoice::Rejected
+}
+
+/// How many of its radii from an object an animal may stand to reach it, as
+/// an elephant reaches with its trunk well ahead of its body.
+const RECIPIENT_REACH_RADII: f32 = 4.0;
+
+/// Whether every terrain cell within `reach` of `centre` is gentle enough.
+fn ground_around_meets_slope(
+    graph: &openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph,
+    centre: Vec2,
+    reach: f32,
+    minimum_normal_y: f32,
+) -> bool {
+    let cell_size = f32::from(graph.terrain_cell_size_centimetres) * 0.01;
+    if cell_size <= 0.0 {
+        return true;
+    }
+    let steps = (reach / cell_size).ceil() as i32;
+    (-steps..=steps).all(|dz| {
+        (-steps..=steps).all(|dx| {
+            let point = centre + Vec2::new(dx as f32, dz as f32) * cell_size;
+            if point.distance(centre) > reach {
+                return true;
+            }
+            graph
+                .terrain_cell_at_world_position(Vec3::new(point.x, 0.0, point.y))
+                .and_then(|cell| graph.calculate_navigation_node_for_terrain_cell(cell))
+                .and_then(|index| graph.find_navigation_node(index))
+                .is_none_or(|node| node.minimum_triangle_normal_y >= minimum_normal_y)
+        })
+    })
+}
+
+/// How far a placed object reaches from its origin when its prefab gives no
+/// bounds.
+const DEFAULT_PLACED_OBJECT_RADIUS_M: f32 = 1.0;
+
+/// The horizontal reach of a placed object from its origin.
+fn placed_object_radius(prefab: &ScenePrefabAsset, scale: f32) -> f32 {
+    prefab
+        .canonical_scene_prefab_document()
+        .automatic_placement_bounds_xz
+        .map_or(DEFAULT_PLACED_OBJECT_RADIUS_M, |[minimum, maximum]| {
+            [minimum, maximum]
+                .into_iter()
+                .flat_map(|corner| [corner[0].abs(), corner[1].abs()])
+                .fold(0.0_f32, f32::max)
+                * std::f32::consts::SQRT_2
+                * scale
+        })
+}
+
+/// The site moved away from the actor until the object no longer reaches it,
+/// or `None` when the actor already stands clear.
+fn clear_of_actor(
+    actor: Entity,
+    site: &BehaviorTargetPlacementSite,
+    world: &BehaviorTargetPlacementWorld,
+) -> Option<BehaviorTargetPlacementSite> {
+    let position = world.actor_transforms.get(actor).ok()?.translation().xz();
+    let radius = world.agents.get(actor).map_or(0.0, |agent| agent.radius_m);
+    let reach = world
+        .prefabs
+        .get(&site.prefab)
+        .map_or(DEFAULT_PLACED_OBJECT_RADIUS_M, |prefab| {
+            placed_object_radius(prefab, site.transform.scale.x)
+        });
+    let centre = site.transform.translation.xz();
+    let moved = clear_point(position, centre, reach + radius)?;
+    let mut clear = site.clone();
+    clear.transform.translation.x = moved.x;
+    clear.transform.translation.z = moved.y;
+    Some(clear)
+}
+
+/// `centre` pushed directly away from `standing` until they are `distance`
+/// apart, or `None` when they already are.
+fn clear_point(standing: Vec2, centre: Vec2, distance: f32) -> Option<Vec2> {
+    let offset = centre - standing;
+    if offset.length() >= distance {
+        return None;
+    }
+    let direction = offset.try_normalize().unwrap_or(Vec2::Y);
+    Some(standing + direction * distance)
 }
 
 fn site_is_still_valid(
@@ -588,9 +723,15 @@ fn create_behavior_target_placement_object(
     creation: &mut BehaviorTargetPlacementCreation,
     created: &mut HashMap<Entity, AssetId>,
 ) -> Option<Entity> {
-    if !site_is_still_valid(pending, site, catalogue, world, creation, created) {
-        return None;
-    }
+    // The keeper stands with the object in its hands at the site. Put the
+    // object down just clear of it, so it is not shut in the object's walls.
+    let moved = clear_of_actor(actor, site, world)
+        .filter(|moved| site_is_still_valid(pending, moved, catalogue, world, creation, created));
+    let site = match &moved {
+        Some(moved) => moved,
+        None if site_is_still_valid(pending, site, catalogue, world, creation, created) => site,
+        None => return None,
+    };
     let definition = resolve_object_placeable_definition(catalogue, pending.definition)?;
     let cells = collect_occupied_placement_cells_for_transform(
         definition,
@@ -712,4 +853,85 @@ fn sample_behavior_placement_terrain(
         position,
     )?;
     Some((point.height_m, !world.surfaces.on_land(position)?))
+}
+
+#[cfg(test)]
+mod clearance_tests {
+    use super::*;
+
+    #[test]
+    fn an_object_is_put_down_clear_of_the_keeper() {
+        let keeper = Vec2::ZERO;
+        let moved = clear_point(keeper, Vec2::new(0.5, 0.0), 1.5).unwrap();
+        assert!((moved - Vec2::new(1.5, 0.0)).length() < 1e-5);
+        assert_eq!(clear_point(keeper, Vec2::new(3.0, 0.0), 1.5), None);
+    }
+
+    #[test]
+    fn food_is_kept_off_ground_too_steep_for_its_animal() {
+        use openzt2_game_data::terrain::{
+            TerrainGrid, TerrainPresentation, TerrainSample, TerrainSlopeTile, TerrainUnits,
+            TerrainWaterDepth,
+        };
+        let flat = TerrainSample {
+            height_relative_to_base_metres: 0.0,
+            biome_index: 0,
+            has_ground_cover: false,
+            water_depth: TerrainWaterDepth::Dry,
+            water_surface_flag: false,
+            excludes_elevated_path: false,
+            support_floor_metres: None,
+            height_cap_metres: None,
+            height_is_linked: false,
+            has_child_height_link: false,
+        };
+        let mut samples = vec![flat; 25];
+        // A ridge along the sample column x = 2.
+        for row in 0..5 {
+            samples[row * 5 + 2].height_relative_to_base_metres = 2.0;
+        }
+        let terrain = TerrainGrid {
+            width: 5,
+            height: 5,
+            sector_columns: 1,
+            sector_rows: 1,
+            units: TerrainUnits {
+                cell_size_metres: 1.0,
+                base_height_metres: 0.0,
+                maximum_height_metres: f32::MAX,
+                minimum_water_height_metres: None,
+            },
+            presentation: TerrainPresentation {
+                water_distance_fade: Default::default(),
+                water_editing: Default::default(),
+                detail_texture: String::new(),
+                detail_texture_repetition: 1.0,
+                cliff_rise_per_metre: [0.0; 2],
+                surface_resolution: 1,
+                surface_margin_cells: 0,
+                full_alpha_composition: false,
+            },
+            biomes: Vec::new(),
+            samples,
+            water_regions: Vec::new(),
+            waterfall: None,
+            slope_tiles: vec![TerrainSlopeTile {
+                uses_alternate_diagonal: false,
+            }],
+        };
+        let graph = openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph::build_from_authored_terrain_grid(&terrain).unwrap();
+        let gentle = 30.0_f32.to_radians().cos();
+        assert!(ground_around_meets_slope(
+            &graph,
+            Vec2::new(0.5, -1.5),
+            0.4,
+            gentle
+        ));
+        assert!(!ground_around_meets_slope(
+            &graph,
+            Vec2::new(0.5, -1.5),
+            1.2,
+            gentle
+        ));
+    }
 }
