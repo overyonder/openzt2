@@ -22,6 +22,34 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
+/// How far apart guests stand in a queue: a little more than two people's
+/// spacing, so the line does not push itself apart.
+const QUEUE_PLACE_SPACING_M: f32 = 0.8;
+
+/// Where the guest `place` places back in a queue stands, and the direction
+/// the line runs. The line starts at the queue node and runs out away from
+/// the stand, each guest one place behind whoever joined before them, as far
+/// as the authored queue reaches. The authored hit radius is how near counts
+/// as there, not how far away to stand.
+fn queue_place(
+    queue_node: Vec3,
+    stand: Vec3,
+    actor: Vec3,
+    place: usize,
+    queue_radius_m: f32,
+) -> (Vec3, Vec3) {
+    let line = (queue_node - stand).xz();
+    let line = if line.length_squared() > 0.01 {
+        line
+    } else {
+        (actor - queue_node).xz()
+    }
+    .normalize_or_zero();
+    let direction = Vec3::new(line.x, 0.0, line.y);
+    let distance = (place as f32 * QUEUE_PLACE_SPACING_M).min(queue_radius_m);
+    (queue_node + direction * distance, direction)
+}
+
 pub(super) fn start_current_supported_behavior_docking_actions(
     mut commands: Commands,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
@@ -99,13 +127,18 @@ pub(super) fn start_current_supported_behavior_docking_actions(
         // so the service dock that follows still walks to its reserved slot.
         if let Some(queue_approach) = queue_approach {
             let tag = behavior_task.reservation_tag(&behavior_document_assets);
-            let Some(queue_node_name) = target_definition.and_then(|definition| {
-                definition
-                    .interaction_slots
-                    .iter()
-                    .find(|slot| slot.is_queue && tag.is_none_or(|tag| slot.reservation_tag == tag))
-                    .map(|slot| slot.target_node_name.as_str())
-            }) else {
+            let Some((queue_slot, queue_capacity, queue_node_name)) =
+                target_definition.and_then(|definition| {
+                    definition
+                        .interaction_slots
+                        .iter()
+                        .enumerate()
+                        .find(|(_, slot)| {
+                            slot.is_queue && tag.is_none_or(|tag| slot.reservation_tag == tag)
+                        })
+                        .map(|(index, slot)| (index, slot.capacity, slot.target_node_name.as_str()))
+                })
+            else {
                 super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
                     actor, &mut commands,
                 );
@@ -130,22 +163,37 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                 };
                 node.translation()
             };
-            let offset = (actor_transform.translation() - queue_node_position).xz();
-            if offset.length() <= queue_approach.hit_radius_m {
+            // Walking up to the line joins it, before the authored wait that
+            // follows confirms the place, so guests arriving together take
+            // successive places rather than one. Admission is immediate, so
+            // the order is the order they arrived in.
+            occupancy.admit(target, actor, queue_slot, queue_capacity);
+            // The queue's members in the order they joined it.
+            let members = occupancy
+                .members_in_slot(target, queue_slot)
+                .collect::<Vec<_>>();
+            let place = members
+                .iter()
+                .position(|member| *member == actor)
+                .unwrap_or(members.len());
+            let (spot, direction) = queue_place(
+                queue_node_position,
+                target_transform.translation(),
+                actor_transform.translation(),
+                place,
+                queue_approach.queue_radius_m,
+            );
+            if (actor_transform.translation() - spot).xz().length() <= QUEUE_PLACE_SPACING_M * 0.5 {
                 advance_behavior_task_to_next_action(&mut behavior_task, simulation_clock.tick);
                 continue;
             }
-            let direction = offset.normalize_or_zero();
-            let direction = Vec3::new(direction.x, 0.0, direction.y);
             let target_from_world = target_transform.affine().inverse();
             let request_id = navigation_request_sequence.next();
             docking_requests.write(DockAt {
                 entity: actor,
                 request_id,
                 target,
-                local_point: target_from_world.transform_point3(
-                    queue_node_position + direction * queue_approach.hit_radius_m,
-                ),
+                local_point: target_from_world.transform_point3(spot),
                 local_forward: target_from_world.transform_vector3(-direction),
                 radius_m: navigation_agent.radius_m.max(0.05),
             });
@@ -651,5 +699,19 @@ pub(super) fn fail_behavior_docking_actions_after_navigation_failure(
                 failure.entity, &mut commands,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod queue_place_tests {
+    use super::*;
+
+    #[test]
+    fn a_queue_lines_up_behind_its_node_up_to_its_reach() {
+        let node = Vec3::new(2.0, 0.0, 0.0);
+        let place = |n| queue_place(node, Vec3::ZERO, Vec3::new(0.0, 0.0, 9.0), n, 12.0).0;
+        assert_eq!(place(0), node);
+        assert_eq!(place(1), Vec3::new(2.0 + QUEUE_PLACE_SPACING_M, 0.0, 0.0));
+        assert_eq!(place(100), Vec3::new(14.0, 0.0, 0.0));
     }
 }
