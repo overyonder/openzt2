@@ -133,6 +133,7 @@ impl Plugin for LocomotionPlugin {
                         project_avian_contacts_into_navigation_steering,
                     local_steering_calculation::
                         calculate_route_following_and_separation_steering,
+                    local_steering_calculation::separate_overlapping_idle_people,
                     crate::locomotion::direct_locomotion_execution::calculate_direct_locomotion_steering,
                 )
                     .chain()
@@ -147,6 +148,8 @@ impl Plugin for LocomotionPlugin {
                     kinematic_navigation_agent_motion_integration::
                         integrate_non_physics_planned_navigation_motion,
                     crate::locomotion::direct_locomotion_execution::integrate_non_physics_direct_locomotion,
+                    person_walk_animation::apply_behavior_clip_root_motion,
+                    person_walk_animation::align_person_body_part_clocks,
                     avian_navigation_agent_driving::
                         drive_avian_navigation_agent_velocities_and_complete_routes,
                 )
