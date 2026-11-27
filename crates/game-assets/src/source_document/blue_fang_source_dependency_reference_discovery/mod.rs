@@ -258,7 +258,8 @@ pub fn collect_blue_fang_static_asset_source_references(
             .filter(|source_token| {
                 source_token.rsplit_once('.').is_some_and(|(_, extension)| {
                     [
-                        "dds", "png", "jpg", "jpeg", "bmp", "tga", "nif", "bfb", "psys",
+                        "dds", "png", "jpg", "jpeg", "bmp", "tga", "nif", "bfb", "glb", "gltf",
+                        "psys",
                     ]
                     .iter()
                     .any(|candidate| extension.eq_ignore_ascii_case(candidate))

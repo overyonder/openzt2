@@ -1,7 +1,6 @@
 mod invalidation;
 use bevy::camera::visibility::RenderLayers;
 use bevy::mesh::skinning::SkinnedMesh;
-use bevy::pbr::DistanceFog;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
@@ -10,7 +9,6 @@ use invalidation::*;
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_assets::material::material_asset_types::{MaterialAsset, MaterialModeTarget};
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
-use openzt2_game_assets::material::runtime::resolved_effect_transform_bindings::EffectRenderViewTransforms;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_data::scene_prefab::PrefabBoundingSphere;
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
@@ -24,7 +22,6 @@ use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_ra
 use openzt2_world_state::world_spawn::prefab_presentation_types::{
     PrefabCausticPolicy, PrefabLocalRenderBound, PrefabPrimitiveMaterial, PrefabSkinRenderBound,
 };
-use openzt2_zoo_state::environment::environment_state_types::AuthoredWindShaderPresentationState;
 use openzt2_zoo_state::terrain::terrain_water_caustic_types::TerrainWaterCausticAnimation;
 use openzt2_zoo_state::terrain::terrain_water_caustic_types::{
     TerrainWaterCausticScenePass, TerrainWaterCausticSceneTarget,
@@ -677,8 +674,7 @@ pub(in crate::terrain) fn update_scene_caustic_bindings(
     regions: TerrainWaterRegionQuery,
     lighting: Query<(&TerrainWaterCausticAnimation, &TerrainWaterRegionLight)>,
     terrains: Res<Assets<TerrainAsset>>,
-    cameras: Query<(&Camera, &Projection, Option<&DistanceFog>, Has<ZooCamera>)>,
-    wind: Query<&AuthoredWindShaderPresentationState>,
+    cameras: Query<&Camera>,
     transforms: TransformHelper,
     mut passes: Query<(
         &TerrainWaterCausticScenePass,
@@ -714,17 +710,13 @@ pub(in crate::terrain) fn update_scene_caustic_bindings(
             let Some(height) = source.surface_height(asset) else {
                 return Ok(false);
             };
-            let Ok((camera, projection, fog, primary)) = cameras.get(pass.render_view) else {
+            let Ok(camera) = cameras.get(pass.render_view) else {
                 return Ok(false);
             };
             if !camera.is_active {
                 return Ok(false);
             }
             let Ok(camera_transform) = transforms.compute_global_transform(pass.render_view) else {
-                return Ok(false);
-            };
-            let Ok(model_transform) = transforms.compute_global_transform(pass.source_primitive)
-            else {
                 return Ok(false);
             };
             let Some(source_effect) = sources
@@ -741,23 +733,6 @@ pub(in crate::terrain) fn update_scene_caustic_bindings(
             if !copy_source_sampling(&mut effect, &source_effect)? {
                 return Ok(false);
             }
-            let view = EffectRenderViewTransforms::from_camera(&camera_transform, projection);
-            effect.bind_per_draw_transform_semantics(
-                model_transform.to_matrix(),
-                &view,
-                true,
-                true,
-            );
-            effect.bind_fixed_function_transform_expressions(
-                model_transform.to_matrix(),
-                pass.render_view,
-                &view,
-                true,
-                true,
-                None,
-                None,
-                None,
-            );
             let configuration = &water.surface_material.configuration.caustics;
             let tint = Vec4::from_array(configuration.tint_rgba) * light.raw_base_rgba();
             let packed = tint
@@ -769,31 +744,6 @@ pub(in crate::terrain) fn update_scene_caustic_bindings(
             let matrices =
                 super::caustic_world_projection_matrices(animation, configuration, height);
             let ready = if effect.has_vertex_float_effect_semantic("WorldToCaustic0") {
-                let Ok(wind) = wind.get(pass.water_owner) else {
-                    return Ok(false);
-                };
-                let fog = fog.or_else(|| {
-                    (!primary)
-                        .then(|| {
-                            cameras
-                                .iter()
-                                .find_map(|(_, _, fog, primary)| primary.then_some(fog).flatten())
-                        })
-                        .flatten()
-                });
-                let Some(mut fog) = fog.and_then(|fog| view.fog_shader_registers(fog, projection))
-                else {
-                    return Ok(false);
-                };
-                let source_from_world = super::source_from_bevy_world();
-                fog[1] = (source_from_world * fog[1].truncate().extend(0.0))
-                    .truncate()
-                    .extend(fog[1].w);
-                effect.bind_changed_environment_registers(
-                    Some(&wind.shader_registers()),
-                    None,
-                    Some(&fog),
-                );
                 effect.bind_float_vector_effect_semantic("CausticTint", tint);
                 effect.bind_float_vector_effect_semantic(
                     "HeightRamp",
@@ -806,13 +756,6 @@ pub(in crate::terrain) fn update_scene_caustic_bindings(
                 );
                 effect.bind_float_matrix_effect_semantic("WorldToCaustic0", matrices[0]);
                 effect.bind_float_matrix_effect_semantic("WorldToCaustic1", matrices[1]);
-                let model = source_from_world * model_transform.to_matrix();
-                effect.bind_float_matrix_effect_semantic("ModelToWorld", model);
-                effect.bind_float_matrix_effect_semantic("VecToWorld", model.inverse().transpose());
-                let clip = projection.get_clip_from_view()
-                    * camera_transform.to_matrix().inverse()
-                    * source_from_world.transpose();
-                effect.bind_float_matrix_effect_semantic("WorldToProj", clip);
                 true
             } else {
                 super::bind_caustic_camera_projection(

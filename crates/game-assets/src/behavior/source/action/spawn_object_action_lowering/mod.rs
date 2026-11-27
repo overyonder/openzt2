@@ -60,7 +60,7 @@ pub(super) fn lower_spawn_object_action(
 }
 
 /// A birth. `subjectNode="Floor"` places the child at the mother's feet.
-/// ponytail: `fadeInPeriod` and `spawnInTA` (fade-in, placement inside the
+/// `fadeInPeriod` and `spawnInTA` (fade-in, placement inside the
 /// habitat) are not applied; the child appears at once beside the mother.
 fn lower_spawn_child_action(
     node: &OrderedSourceDocumentNode,

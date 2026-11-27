@@ -65,8 +65,9 @@ impl ArchiveSet {
         reference: &str,
         prefer_blue_fang_bfb: bool,
     ) -> Option<PathBuf> {
-        const NETIMMERSE_FIRST_EXTENSIONS: [&str; 2] = ["nif", "bfb"];
-        const BLUE_FANG_BFB_FIRST_EXTENSIONS: [&str; 2] = ["bfb", "nif"];
+        // Mods may also name glTF models directly.
+        const NETIMMERSE_FIRST_EXTENSIONS: [&str; 4] = ["nif", "bfb", "glb", "gltf"];
+        const BLUE_FANG_BFB_FIRST_EXTENSIONS: [&str; 4] = ["bfb", "nif", "glb", "gltf"];
         if prefer_blue_fang_bfb {
             let bfb_path = Path::new(reference.trim()).with_extension("bfb");
             if let Some(winner) = bfb_path.to_str().and_then(|reference| {

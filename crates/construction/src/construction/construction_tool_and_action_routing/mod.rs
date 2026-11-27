@@ -11,6 +11,7 @@ use openzt2_zoo_state::construction::construction_interaction_types::Constructio
 use openzt2_zoo_state::construction::construction_interaction_types::DeleteEntity;
 use openzt2_zoo_state::construction::construction_interaction_types::DeleteHoverTarget;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity;
+use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::SelectConstructionTool;
 
@@ -27,7 +28,13 @@ pub(super) fn select_construction_tool(
         With<openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject>,
     >,
     mut cancel: MessageWriter<CancelConstruction>,
+    mut policy: ResMut<ConstructionPlacementPolicy>,
 ) {
+    // `ZT_SETSINGLEOBJECTPLACEMENT` lasts until that placement returns the
+    // tool to inspection.
+    if tool.is_changed() && *tool == ConstructionTool::Inspect && !policy.repeat_placement {
+        policy.repeat_placement = true;
+    }
     for selection in selections.read() {
         if *tool == ConstructionTool::Delete && selection.0 == ConstructionTool::Delete {
             cancel.write(CancelConstruction);

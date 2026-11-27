@@ -146,11 +146,10 @@ pub(super) fn project_widget(
                     UiSelected(initially_selected),
                     UiPreviousSelection::from_current_selection(initially_selected),
                 ));
-                // Blue Fang toggle sets apply initially selected members in
-                // source order. When malformed shipped UI selects more than
-                // one member, the last member wins and the earlier members'
-                // authored Off actions still run. Keep that presentation
-                // transition when normalizing the selected fact to one child.
+                // When shipped UI selects more than one member of a toggle set,
+                // the first member wins (the construction panel opens on
+                // fences) and the later members' authored Off actions still
+                // run. Keep that transition when normalizing to one child.
                 if button.initially_selected && !initially_selected {
                     commands.queue(move |world: &mut World| {
                         world.write_message(UiNodeActivated {
@@ -695,7 +694,6 @@ fn normalize_authored_toggle_set_initial_selection_to_one_direct_child(
     parent
         .children
         .iter()
-        .rev()
         .find(|&&candidate_index| {
             document
                 .nodes

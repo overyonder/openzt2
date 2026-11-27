@@ -9,6 +9,9 @@ use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabLocalRend
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentationHydrated;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabShadowPolicy;
+use openzt2_world_state::world_spawn::prefab_model_replacement::{
+    PendingPrefabModelReplacements, PrefabModelReplaced,
+};
 
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabAuthoredBillboardOrientationMode;
@@ -175,6 +178,10 @@ pub fn spawn_prefab_render_tree(
     (root, renderables, lights)
 }
 
+/// Root of the render tree that hydration spawned beneath a presentation.
+#[derive(Component)]
+pub(super) struct PrefabPresentationRenderRoot(Entity);
+
 pub(super) fn hydrate_prefab_presentations(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,
@@ -187,13 +194,62 @@ pub(super) fn hydrate_prefab_presentations(
         let Some(prefab) = prefabs.get(&request.0) else {
             continue;
         };
-        let (_, renderables, _) = spawn_prefab_render_tree(&mut commands, prefab, entity, false);
+        let (root, renderables, _) = spawn_prefab_render_tree(&mut commands, prefab, entity, false);
         for renderable in renderables {
             let mut renderable_commands = commands.entity(renderable);
             if let Some(shadow_policy) = inherited_shadow_policy {
                 renderable_commands.insert(*shadow_policy);
             }
         }
-        commands.entity(entity).insert(PrefabPresentationHydrated);
+        commands.entity(entity).insert((
+            PrefabPresentationHydrated,
+            PrefabPresentationRenderRoot(root),
+        ));
     }
+}
+
+/// Rebuilds presentations whose model was replaced or restored while the
+/// game runs, such as one sent from Blender, once it has reloaded.
+pub(super) fn rebuild_prefab_presentations_after_prefab_reload(
+    mut commands: Commands,
+    mut replaced: MessageReader<PrefabModelReplaced>,
+    mut pending: Local<PendingPrefabModelReplacements>,
+    mut prefab_events: MessageReader<AssetEvent<ScenePrefabAsset>>,
+    asset_server: Res<AssetServer>,
+    presentations: Query<(Entity, &PrefabPresentation, &PrefabPresentationRenderRoot)>,
+) {
+    pending.record(replaced.read().map(|message| message.model_path.clone()));
+    let reloaded = replaced_prefab_reloads(&mut prefab_events, &mut pending, &asset_server);
+    if reloaded.is_empty() {
+        return;
+    }
+    for (entity, presentation, render_root) in &presentations {
+        if reloaded.contains(&presentation.0.id()) {
+            commands.entity(render_root.0).despawn();
+            commands
+                .entity(entity)
+                .remove::<(PrefabPresentationHydrated, PrefabPresentationRenderRoot)>();
+        }
+    }
+}
+
+/// Reloaded prefabs of replaced models. Other reloads, such as a model coming
+/// back into view after its assets were released, are not rebuilt.
+pub(super) fn replaced_prefab_reloads(
+    prefab_events: &mut MessageReader<AssetEvent<ScenePrefabAsset>>,
+    pending: &mut PendingPrefabModelReplacements,
+    asset_server: &AssetServer,
+) -> Vec<bevy::asset::AssetId<ScenePrefabAsset>> {
+    if pending.is_empty() {
+        prefab_events.clear();
+        return Vec::new();
+    }
+    prefab_events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::Modified { id } => Some(*id),
+            _ => None,
+        })
+        .filter(|id| pending.take(asset_server.get_path(*id).as_ref()))
+        .collect()
 }

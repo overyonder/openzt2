@@ -201,6 +201,7 @@ pub(super) fn begin_creating_requested_profiles(
                     display: DisplaySettings::default(),
                     graphics: GraphicsSettings::default(),
                     online_messages: openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy::default(),
+                    modder_tools: openzt2_interface_state::settings::modder_tools_settings_types::ModderToolsSettings::default(),
                 });
                 stored_profile_records_and_settings
                     .sort_by_key(|stored_profile| stored_profile.record.profile_identifier.0);
@@ -238,6 +239,10 @@ pub(super) struct ActiveProfileSettings<'w> {
         'w,
         openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy,
     >,
+    modder_tools: Res<
+        'w,
+        openzt2_interface_state::settings::modder_tools_settings_types::ModderToolsSettings,
+    >,
 }
 
 impl ActiveProfileSettings<'_> {
@@ -260,6 +265,7 @@ impl ActiveProfileSettings<'_> {
             display: *self.display,
             graphics: *self.graphics,
             online_messages: *self.online_messages,
+            modder_tools: *self.modder_tools,
         })
     }
 }
@@ -363,6 +369,7 @@ pub(super) fn begin_selecting_requested_profiles(
                     display: selected_stored_profile.display,
                     graphics: selected_stored_profile.graphics,
                     online_messages: selected_stored_profile.online_messages,
+                    modder_tools: selected_stored_profile.modder_tools,
                 })
             })),
         ));
@@ -479,9 +486,10 @@ pub(super) fn begin_persisting_changed_active_profile_options(
     game_action_input_bindings: Res<GameActionInputBindings>,
     display_settings: Res<DisplaySettings>,
     graphics_settings: Res<GraphicsSettings>,
-    online_message_policy: Res<
-        openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy,
-    >,
+    (online_message_policy, modder_tools_settings): (
+        Res<openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy>,
+        Res<openzt2_interface_state::settings::modder_tools_settings_types::ModderToolsSettings>,
+    ),
     persistence_filesystem_paths: Option<Res<PersistenceFilesystemPaths>>,
     profile_index: Res<ProfileIndex>,
     active_profile_filesystem_tasks: Query<(), With<ProfileFilesystemTask>>,
@@ -512,6 +520,7 @@ pub(super) fn begin_persisting_changed_active_profile_options(
         || display_settings.is_changed()
         || graphics_settings.is_changed()
         || online_message_policy.is_changed()
+        || modder_tools_settings.is_changed()
     {
         *pending_settings_profile = Some(active_profile_identifier);
     }
@@ -536,6 +545,7 @@ pub(super) fn begin_persisting_changed_active_profile_options(
     let display_settings_to_persist = *display_settings;
     let graphics_settings_to_persist = *graphics_settings;
     let online_message_policy_to_persist = *online_message_policy;
+    let modder_tools_settings_to_persist = *modder_tools_settings;
     let profile_index_file_path = persistence_filesystem_paths.profile_index_file_path();
     commands.spawn((
         ProfileFilesystemTaskContext(Some(active_profile_identifier)),
@@ -557,6 +567,7 @@ pub(super) fn begin_persisting_changed_active_profile_options(
             stored_active_profile.display = display_settings_to_persist;
             stored_active_profile.graphics = graphics_settings_to_persist;
             stored_active_profile.online_messages = online_message_policy_to_persist;
+            stored_active_profile.modder_tools = modder_tools_settings_to_persist;
             let encoded_profile_index_bytes = encode_stored_profile_index(
                 &stored_profile_records_and_settings,
                 selected_profile_identifier,

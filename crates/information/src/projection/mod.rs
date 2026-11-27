@@ -1,3 +1,4 @@
+pub(super) mod animal_alert_button_projection;
 pub(super) mod animal_need_and_health_projection;
 pub(super) mod animal_pickup_release_information_projection;
 pub(super) mod entity_editor_data_root_projection;

@@ -47,6 +47,7 @@ fn dirty_outgoing_variables_are_saved_in_the_selection_transaction() {
         .init_resource::<DisplaySettings>()
         .init_resource::<GraphicsSettings>()
         .init_resource::<openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy>()
+        .init_resource::<openzt2_interface_state::settings::modder_tools_settings_types::ModderToolsSettings>()
         .add_message::<SelectProfile>()
         .add_message::<ProfileOperationFailed>()
         .add_message::<PersistProfileScenarioVariables>()

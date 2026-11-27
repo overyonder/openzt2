@@ -148,7 +148,7 @@ fn lower_behavior_task_declaration(
 
 fn lower_behavior_task_delay(node: &DataNode) -> io::Result<Option<[f32; 2]>> {
     // Ankylosaurus `BashFence_Rampage` authors both delays twice; its rampage
-    // fence bash in `zt.exe` came 145 s in, as the later 90 to 180 s allows.
+    // fence bash in the original game came 145 s in, as the later 90 to 180 s allows.
     let last = |name: &str| {
         node.attributes
             .iter()

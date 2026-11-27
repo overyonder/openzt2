@@ -38,9 +38,10 @@ pub(super) fn apply_completed_profile_filesystem_tasks_to_canonical_profile_stat
     mut game_action_input_bindings: ResMut<GameActionInputBindings>,
     mut display_settings: ResMut<DisplaySettings>,
     mut graphics_settings: ResMut<GraphicsSettings>,
-    mut online_message_policy: ResMut<
-        openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy,
-    >,
+    (mut online_message_policy, mut modder_tools_settings): (
+        ResMut<openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy>,
+        ResMut<openzt2_interface_state::settings::modder_tools_settings_types::ModderToolsSettings>,
+    ),
     mut profile_index_ready_messages: MessageWriter<ProfileIndexReady>,
     mut profile_created_messages: MessageWriter<ProfileCreated>,
     mut profile_selected_messages: MessageWriter<ProfileSelected>,
@@ -79,6 +80,7 @@ pub(super) fn apply_completed_profile_filesystem_tasks_to_canonical_profile_stat
                 display,
                 graphics,
                 online_messages,
+                modder_tools,
             }) => {
                 *profile_options = options;
                 *scenario_variables = loaded_scenario_variables;
@@ -88,6 +90,7 @@ pub(super) fn apply_completed_profile_filesystem_tasks_to_canonical_profile_stat
                 *display_settings = display;
                 *graphics_settings = graphics;
                 *online_message_policy = online_messages;
+                *modder_tools_settings = modder_tools;
                 profile_index.selected_profile_identifier = Some(profile);
                 profile_selected_messages.write(ProfileSelected {
                     selected_profile_identifier: profile,

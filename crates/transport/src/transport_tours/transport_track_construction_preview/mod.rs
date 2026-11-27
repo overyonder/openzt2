@@ -390,7 +390,7 @@ const COLOR_ANIMATION_CYCLE_SECONDS: f32 = 0.5;
 /// connect to `station_highlight2` (green), and blinks the road already
 /// joined to the start `endpoint_highlight2` (blue) every `colorAnimationCycle`.
 /// With the delete tool it colours the road leg under the cursor red.
-// ponytail: the colours and cycle are copied from modes.xml, not lowered from it.
+// The colours and cycle are copied from modes.xml, not lowered from it.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn highlight_transport_track_connection_stations(
     mut commands: Commands,

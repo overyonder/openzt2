@@ -190,6 +190,9 @@ pub(super) fn evaluate_requested_object_placement_previews(
             validity => validity,
         };
         if preview.validity != validity {
+            if let PlacementValidity::Invalid(failure) = validity {
+                debug!(?failure, definition = ?request.definition, "object placement preview invalid");
+            }
             preview.validity = validity;
         }
     }

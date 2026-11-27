@@ -91,9 +91,12 @@ pub fn catalogue_entry_is_visible(
     unlocks: &UnlockedCatalogueDefinitionSet,
 ) -> bool {
     // A tutorial narrows the buy panels to what it has added so far. It adds
-    // concrete animals, which the panel offers under their species.
+    // concrete animals, which the panel offers under their species, and
+    // button-only types such as `tankuigate`, whose entry places another
+    // definition.
     if let Some(listed) = scenario.filter(|availability| !availability.is_empty()) {
         return scenario_lists_definition(catalog, AssetId(entry.definition.0), listed)
+            || scenario_lists_definition(catalog, AssetId(entry.kind.0), listed)
             || (entry.category == CatalogueCategory::Animals
                 && listed.ids().iter().any(|id| {
                     catalog.find_object(*id).is_some_and(|object| {

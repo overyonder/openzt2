@@ -40,7 +40,9 @@ pub(in crate::ui_document::source) const PROFILE_ROW_DOCUMENT: &str =
 pub(in crate::ui_document::source) const CAMPAIGN_ROW_DOCUMENT: &str =
     "ui/fragment/ui/layout/campaign/campaign.xml";
 pub(in crate::ui_document::source) const CAMPAIGN_SCENARIO_ROW_DOCUMENT: &str =
-    "ui/fragment/ui/layout/scenariobutton.xml";
+    "ui/fragment/ui/layout/campaign/unlocked.xml";
+pub(in crate::ui_document::source) const ZOO_MESSAGE_ROW_DOCUMENT: &str =
+    "ui/fragment/ui/layout/messagenormal.xml";
 pub(in crate::ui_document::source) const FINANCE_CATEGORY_ROW_DOCUMENT: &str =
     "ui/fragment/ui/layout/econlistcategory.xml";
 pub(in crate::ui_document::source) const FINANCE_VALUE_ROW_DOCUMENT: &str =

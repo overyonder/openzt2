@@ -56,6 +56,7 @@ impl MetadataArchiveDirectory {
                 "entities/units/animals/ai/metadata.xml",
                 "<BFAIEntityType/>",
             ),
+            ("entities/units/animals/ai/malformed.xml", "<"),
         ] {
             archive
                 .start_file(name, SimpleFileOptions::default())

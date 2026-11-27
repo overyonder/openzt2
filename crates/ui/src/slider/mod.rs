@@ -569,10 +569,15 @@ pub(super) fn present_slider_values(
 }
 
 /// Formats the slider value using the authored width, precision and percent suffix.
+/// A label bound to game state, such as the starting cash money text, keeps
+/// its binding's formatted value.
 pub(super) fn present_slider_value_labels(
     sliders: Query<(Entity, &UiSliderValuePresentation, &UiValue)>,
     children: Query<&Children>,
-    mut labels: Query<(Entity, &UiNodeId, &mut Text)>,
+    mut labels: Query<
+        (Entity, &UiNodeId, &mut Text),
+        Without<crate::authored_ui_text_content_binding::UiTextBinding>,
+    >,
 ) {
     for (slider, presentation, value) in &sliders {
         // Search only this slider's own subtree for its label.

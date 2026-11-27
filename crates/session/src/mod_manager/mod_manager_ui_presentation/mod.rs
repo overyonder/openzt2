@@ -77,6 +77,20 @@ pub(super) fn spawn_mod_manager_overlay_from_asset_archives(
             BackgroundColor(Color::srgb(0.14, 0.14, 0.17)),
         ));
         overlay_root.spawn((
+            crate::blender_link::ModderToolsCheckbox,
+            Name::new("Modder tools"),
+            bevy::ui_widgets::Button,
+            UiInteractionEnabled(true),
+            Text::new(crate::blender_link::modder_tools_checkbox_label(false)),
+            TextFont::from_font_size(17.0),
+            TextColor(Color::WHITE),
+            Node {
+                padding: UiRect::axes(px(8), px(5)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.14, 0.14, 0.17)),
+        ));
+        overlay_root.spawn((
             Text::new("Z2F priority — highest first"),
             TextFont::from_font_size(20.0),
             TextColor(Color::WHITE),

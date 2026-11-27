@@ -96,9 +96,9 @@ pub(super) fn align_authored_single_line_text_from_measured_glyph_run(
         {
             continue;
         }
-        // `TextLayoutInfo::size` is logical; `ComputedNode` and the glyph
-        // offset are physical.
-        let width = layout.size.x / node.inverse_scale_factor();
+        // `TextLayoutInfo::size`, `ComputedNode` and the glyph offset are all
+        // physical pixels.
+        let width = layout.size.x;
         let content = node.content_box();
         let fraction = match text_layout.justify {
             Justify::Center => 0.5,

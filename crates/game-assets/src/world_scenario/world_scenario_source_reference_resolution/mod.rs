@@ -135,9 +135,9 @@ pub(super) fn resolve_world_scenario_source_references(
                     format!("resolved asset {reference} has no extension"),
                 )
             })?;
-        let (path, kind) = if extension.eq_ignore_ascii_case("nif")
-            || extension.eq_ignore_ascii_case("bfb")
-        {
+        let (path, kind) = if crate::model_source::gltf_model_source::is_model_source_extension(
+            extension,
+        ) {
             (
                     crate::model_source::native_model_source_lowering::
                         native_model_scene_labelled_asset_path(&resolved.to_string_lossy()),

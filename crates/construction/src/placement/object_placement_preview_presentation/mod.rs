@@ -160,7 +160,7 @@ pub(super) fn hydrate_object_placement_preview_materials_from_ui_document(
 }
 
 const ENTRANCE_ARROW_IMAGE: &str = "ui/fx/footprint/entrance_arrow.tga";
-// ponytail: the pulse was matched by eye to the original.
+// The pulse was matched by eye to the original.
 const ENTRANCE_ARROW_PULSE_M: f32 = 0.3;
 const ENTRANCE_ARROW_PULSE_SECONDS: f32 = 1.0;
 
@@ -195,7 +195,7 @@ fn footprint_rectangle(
     ))
 }
 
-/// `zt.exe` draws a building being placed without its alpha-blended meshes,
+/// The original game draws a building being placed without its alpha-blended meshes,
 /// such as a station's glass and the track under it.
 pub(super) fn hide_alpha_blended_meshes_of_object_placement_previews(
     materials: Res<
@@ -367,7 +367,7 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
         };
         // As the original, one footprint image spans the whole footprint, so
         // its border outlines the footprint rather than every cell.
-        // ponytail: a diagonal footprint keeps one image per cell; span it
+        // A diagonal footprint keeps one image per cell; span it
         // with a rotated rectangle if the diagonal outline matters.
         let rectangle = (turns & 1 == 0)
             .then(|| footprint_rectangle(footprint, pivot, turns, inverse_rotation))
@@ -516,7 +516,7 @@ fn convert_authored_srgba_bytes_to_bevy_color(value: [u8; 4]) -> Color {
     Color::srgba_u8(value[0], value[1], value[2], value[3])
 }
 
-/// The models' `Dock_Arrow` nodes, where `zt.exe` stands a `special` arrow.
+/// The models' `Dock_Arrow` nodes, where the original game stands a `special` arrow.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct DockArrowNodes<'w, 's> {
     children: Query<'w, 's, &'static Children>,
@@ -569,7 +569,7 @@ impl DockArrowNodes<'_, '_> {
     }
 
     /// A station has `Dock_Arrow` and `Dock_Arrow1` on opposite sides;
-    /// `zt.exe` draws one arrow, on the `Dock_Arrow1` side.
+    /// the original game draws one arrow, on the `Dock_Arrow1` side.
     fn dock_arrow(&self, preview: Entity) -> Option<Vec3> {
         let find = |key| {
             let wanted = AssetId::from_key(key);

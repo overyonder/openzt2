@@ -56,7 +56,23 @@ pub(in crate::terrain) struct MembershipInputs<'w, 's> {
     removed_indexes: RemovedComponents<'w, 's, TerrainWaterMembershipIndex>,
     sky: Local<'s, Option<Vec<(Entity, openzt2_game_data::AssetId, Option<Transform>)>>>,
     grid: Local<'s, Option<TopologyGrid>>,
+    /// The fence selector projection reads only fences, topology and the
+    /// authored terrain, so terrain edits reuse it.
+    selectors: Local<'s, Option<(bevy::asset::AssetId<TerrainAsset>, SelectorProjection)>>,
+    /// The authored regions' settled membership, which terrain edits are
+    /// projected over.
+    source: Local<'s, Option<TerrainWaterMembershipIndex>>,
 }
+
+/// Points whose water membership changed, or `None` when the whole terrain's
+/// membership was rebuilt.
+#[derive(Message, Debug, Clone)]
+pub(in crate::terrain) struct TerrainWaterMembershipChanged {
+    pub(in crate::terrain) terrain: bevy::asset::AssetId<TerrainAsset>,
+    pub(in crate::terrain) points: Option<Vec<UVec2>>,
+}
+
+type SelectorProjection = (Box<[Option<[u8; 4]>]>, Box<[[Box<[[Vec2; 2]]>; 8]]>);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::terrain) enum WaterMembershipProjectionStatus {
@@ -89,12 +105,9 @@ pub(in crate::terrain) fn project_terrain_water_membership(
     mut commands: Commands,
     assets: Res<Assets<TerrainAsset>>,
     supports: height_support::TerrainHeightSupports,
-    chunks: Query<(
-        Entity,
-        &TerrainChunk,
-        Option<&EditedTerrainSamples>,
-        Option<&TerrainWaterMembershipIndex>,
-    )>,
+    chunks: Query<(Entity, &TerrainChunk, Option<&EditedTerrainSamples>)>,
+    mut indexes: Query<&mut TerrainWaterMembershipIndex>,
+    mut membership_changed: MessageWriter<TerrainWaterMembershipChanged>,
     regions: Query<(Entity, &TerrainWaterRegionSource)>,
     live_regions: TerrainWaterRegionQuery,
     mut changes: MessageReader<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>,
@@ -110,10 +123,11 @@ pub(in crate::terrain) fn project_terrain_water_membership(
         )>,
     >,
 ) {
-    let changed_chunks: Vec<_> = changes.read().map(|change| change.chunk).collect();
-    let Some((_, root, _, _)) = chunks
+    let changes: Vec<_> = changes.read().copied().collect();
+    let changed_chunks: Vec<_> = changes.iter().map(|change| change.chunk).collect();
+    let Some((root_entity, root, _)) = chunks
         .iter()
-        .find(|(_, chunk, _, _)| chunk.source_coord == IVec2::ZERO)
+        .find(|(_, chunk, _)| chunk.source_coord == IVec2::ZERO)
     else {
         *diagnostic = None;
         return;
@@ -126,8 +140,12 @@ pub(in crate::terrain) fn project_terrain_water_membership(
         );
         return;
     };
-    let sky = supports.sky_supports(definitions);
-    let terrain_changed = inputs.chunks.read() | inputs.edits.read();
+    let sky =
+        info_span!("water_membership_sky_supports").in_scope(|| supports.sky_supports(definitions));
+    let chunks_changed = inputs.chunks.read();
+    let edits_removed = inputs.edits.removed.read().count() > 0;
+    let edits_changed = !inputs.edits.changed.is_empty();
+    let terrain_changed = chunks_changed | edits_removed | edits_changed;
     // Read every removal cursor, including when another input already changed.
     let geometry_changed = inputs.paths.read()
         | inputs.surfaces.read()
@@ -139,7 +157,11 @@ pub(in crate::terrain) fn project_terrain_water_membership(
         | inputs.endpoints.read();
     let regions_changed =
         inputs.regions.read() | inputs.region_edits.read() | inputs.retired.read();
-    let index_removed = inputs.removed_indexes.read().count() > 0;
+    // Replacing an index is not a removal.
+    let index_removed = inputs
+        .removed_indexes
+        .read()
+        .any(|entity| !indexes.contains(entity));
     if !geometry_changed
         && !regions_changed
         && !terrain_changed
@@ -153,6 +175,59 @@ pub(in crate::terrain) fn project_terrain_water_membership(
     {
         return;
     }
+    // A brush dab changes samples inside the rectangles its messages name, so
+    // only those points and their slope tiles are reassigned.
+    let local_edit = !geometry_changed
+        && !regions_changed
+        && !index_removed
+        && !chunks_changed
+        && !edits_removed
+        && !changes.is_empty()
+        && !assets.is_changed()
+        && !definition_assets.is_changed()
+        && !active_definitions.is_changed()
+        && *inputs.sky == sky
+        && *inputs.grid == Some(*topology);
+    if local_edit {
+        if let (Some(source), Ok(mut index), Some(asset)) = (
+            inputs.source.as_ref(),
+            indexes.get_mut(root_entity),
+            assets.get(&root.asset),
+        ) {
+            let _span = info_span!("update_edited_water_membership").entered();
+            let edits = changes.iter().map(|change| {
+                let (_, chunk, edited) = chunks.get(change.chunk).ok()?;
+                Some(
+                    (chunk.asset == root.asset).then_some((chunk, edited?, change.min, change.max)),
+                )
+            });
+            let points = update_edited_membership(
+                asset,
+                source,
+                index.bypass_change_detection(),
+                edits,
+                &live_regions,
+            );
+            if let Some(points) = points {
+                if !points.is_empty() {
+                    index.set_changed();
+                    membership_changed.write(TerrainWaterMembershipChanged {
+                        terrain: root.asset.id(),
+                        points: Some(points),
+                    });
+                }
+                return;
+            }
+        }
+    }
+    let selectors_stale = geometry_changed
+        || assets.is_changed()
+        || definition_assets.is_changed()
+        || active_definitions.is_changed()
+        || *inputs.grid != Some(*topology);
+    if selectors_stale {
+        *inputs.selectors = None;
+    }
     *inputs.sky = sky;
     *inputs.grid = Some(*topology);
     let curb = openzt2_game_data::AssetId::from_key("curb");
@@ -163,21 +238,24 @@ pub(in crate::terrain) fn project_terrain_water_membership(
             .or_else(|| definitions.find_object(edge.definition))
             .is_none_or(|object| !object.behavior_type_identifiers.contains(&curb))
     });
-    for (entity, chunk, _, index) in &chunks {
+    for (entity, chunk, _) in &chunks {
         if chunk.source_coord != IVec2::ZERO {
             continue;
         }
-        let has_edits = chunks.iter().any(|(_, candidate, edited, _)| {
+        let index = indexes.get(entity).ok();
+        let has_edits = chunks.iter().any(|(_, candidate, edited)| {
             candidate.asset.id() == chunk.asset.id() && edited.is_some()
         });
         let Some(asset) = assets.get(&chunk.asset) else {
             continue;
         };
-        let Some(height_limits) = inputs
+        let limits_span = info_span!("water_membership_height_limits").entered();
+        let height_limits = inputs
             .sky
             .as_deref()
-            .and_then(|sky| supports.point_limits(asset, definitions, &topology, sky))
-        else {
+            .and_then(|sky| supports.point_limits(asset, definitions, &topology, sky));
+        drop(limits_span);
+        let Some(height_limits) = height_limits else {
             commands
                 .entity(entity)
                 .remove::<TerrainWaterMembershipIndex>();
@@ -188,14 +266,23 @@ pub(in crate::terrain) fn project_terrain_water_membership(
             );
             continue;
         };
-        let Some((selector_projection, fence_probes)) =
-            selector_projection::construct_selector_projection(
+        let cached = inputs
+            .selectors
+            .as_ref()
+            .filter(|(terrain, _)| *terrain == chunk.asset.id())
+            .map(|(_, selector)| selector.clone());
+        let selector = cached.or_else(|| {
+            let _span = info_span!("construct_water_selector_projection").entered();
+            let selector = selector_projection::construct_selector_projection(
                 asset,
                 definitions,
                 &topology,
                 &selector_fences,
-            )
-        else {
+            )?;
+            *inputs.selectors = Some((chunk.asset.id(), selector.clone()));
+            Some(selector)
+        });
+        let Some((selector_projection, fence_probes)) = selector else {
             if index.is_some() {
                 commands
                     .entity(entity)
@@ -209,10 +296,11 @@ pub(in crate::terrain) fn project_terrain_water_membership(
             continue;
         };
         let region_revision = live_regions.source_revision(chunk.asset.id());
+        let stale = index.is_some();
         if let Some(index) = index {
             if terrain_changed
                 || regions_changed
-                || chunks.iter().any(|(entity, candidate, _, _)| {
+                || chunks.iter().any(|(entity, candidate, _)| {
                     candidate.asset == chunk.asset && changed_chunks.contains(&entity)
                 })
                 || index.empty_selector_topology() != empty_selector_topology
@@ -224,9 +312,8 @@ pub(in crate::terrain) fn project_terrain_water_membership(
                 || active_definitions.is_changed()
                 || definition_assets.is_changed()
             {
-                commands
-                    .entity(entity)
-                    .remove::<TerrainWaterMembershipIndex>();
+                // Rebuilt below; the new index replaces it, or it is removed
+                // if the rebuild fails.
             } else {
                 report_membership_status(
                     &mut diagnostic,
@@ -242,6 +329,11 @@ pub(in crate::terrain) fn project_terrain_water_membership(
                 chunk.asset.id(),
                 WaterMembershipProjectionStatus::TerrainPending,
             );
+            if stale {
+                commands
+                    .entity(entity)
+                    .remove::<TerrainWaterMembershipIndex>();
+            }
             continue;
         };
         let grid = asset.canonical_terrain_grid();
@@ -263,9 +355,16 @@ pub(in crate::terrain) fn project_terrain_water_membership(
                 chunk.asset.id(),
                 WaterMembershipProjectionStatus::SourceOwnerMissing(row),
             );
+            if stale {
+                commands
+                    .entity(entity)
+                    .remove::<TerrainWaterMembershipIndex>();
+            }
             continue;
         }
-        let Some(mut index) = settle_source_membership(
+        *inputs.source = None;
+        let settle_span = info_span!("settle_source_water_membership").entered();
+        let Some(source) = settle_source_membership(
             chunk.asset.id(),
             asset,
             &owners,
@@ -281,13 +380,21 @@ pub(in crate::terrain) fn project_terrain_water_membership(
                 chunk.asset.id(),
                 WaterMembershipProjectionStatus::SourceAcceptanceUnresolved,
             );
+            if stale {
+                commands
+                    .entity(entity)
+                    .remove::<TerrainWaterMembershipIndex>();
+            }
             continue;
         };
+        drop(settle_span);
+        let mut index = source.clone();
         if has_edits {
+            let _span = info_span!("project_edited_water_membership").entered();
             let Some(edited_index) = project_edited_membership(
                 asset,
-                index,
-                chunks.iter().filter_map(|(_, candidate, edited, _)| {
+                &source,
+                chunks.iter().filter_map(|(_, candidate, edited)| {
                     (candidate.asset == chunk.asset).then_some((candidate, edited))
                 }),
                 &live_regions,
@@ -297,6 +404,11 @@ pub(in crate::terrain) fn project_terrain_water_membership(
                     chunk.asset.id(),
                     WaterMembershipProjectionStatus::EditedAffiliationUnresolved,
                 );
+                if stale {
+                    commands
+                        .entity(entity)
+                        .remove::<TerrainWaterMembershipIndex>();
+                }
                 continue;
             };
             index = edited_index;
@@ -305,11 +417,24 @@ pub(in crate::terrain) fn project_terrain_water_membership(
             .with_selector_projection(selector_projection)
             .and_then(|index| index.with_fence_probes(fence_probes))
         else {
+            if stale {
+                commands
+                    .entity(entity)
+                    .remove::<TerrainWaterMembershipIndex>();
+            }
             continue;
         };
-        commands
-            .entity(entity)
-            .insert(index.with_region_source_revision(region_revision));
+        let index = index.with_region_source_revision(region_revision);
+        let points = indexes
+            .get(entity)
+            .ok()
+            .and_then(|previous| index.changed_points_since(previous));
+        *inputs.source = Some(source);
+        commands.entity(entity).insert(index);
+        membership_changed.write(TerrainWaterMembershipChanged {
+            terrain: chunk.asset.id(),
+            points,
+        });
         report_membership_status(
             &mut diagnostic,
             chunk.asset.id(),
@@ -464,7 +589,7 @@ fn settle_source_membership(
 
 fn project_edited_membership<'a>(
     asset: &TerrainAsset,
-    base: TerrainWaterMembershipIndex,
+    base: &TerrainWaterMembershipIndex,
     chunks: impl Iterator<Item = (&'a TerrainChunk, Option<&'a EditedTerrainSamples>)>,
     regions: &TerrainWaterRegionQuery,
 ) -> Option<TerrainWaterMembershipIndex> {
@@ -546,15 +671,122 @@ fn project_edited_membership<'a>(
         if !edited_affiliation[index] {
             continue;
         }
-        let biome = region.biome(asset)?;
-        let plane = region.surface_height(asset)?;
-        let low = plane - biome.deep_water_depth_mm.unwrap_or(0) as f32 * 0.001;
-        let high = if region.uses_tank_minimum_depth(asset)? {
-            plane - base.tank_minimum_depth()?
-        } else {
-            plane + biome.water_shore_offset_mm.unwrap_or(0) as f32 * 0.001
+        if !edited_point_accepted(asset, base, &region, point)? {
+            *owner = None;
+            dirty_tiles.extend(neighbouring_tiles(point, tile_width, tile_height));
+        }
+    }
+    dirty_tiles.sort_unstable_by_key(|tile| (tile.y, tile.x));
+    dirty_tiles.dedup();
+    for tile in dirty_tiles {
+        sides[(tile.y * tile_width + tile.x) as usize] =
+            resolve_tile_sides(asset, regions, tile, |point| {
+                points[(point.y * grid.width + point.x) as usize]
+            })?;
+    }
+    TerrainWaterMembershipIndex::new(
+        base.terrain(),
+        grid.width,
+        grid.height,
+        points.into_boxed_slice(),
+        sides.into_boxed_slice(),
+        base.empty_selector_topology(),
+    )?
+    .with_selector_projection_from(base)?
+    .with_edited_point_heights(heights.into_boxed_slice())
+}
+
+/// Reassigns the samples inside each changed rectangle (inclusive local chunk
+/// bounds) and the slope tiles around them, giving the same index as
+/// projecting every edited chunk over `source`. Returns the points whose
+/// owner or height changed and the corners of tiles whose sides changed, or
+/// `None` when the change needs the whole projection.
+fn update_edited_membership<'a>(
+    asset: &TerrainAsset,
+    source: &TerrainWaterMembershipIndex,
+    index: &mut TerrainWaterMembershipIndex,
+    edits: impl Iterator<
+        Item = Option<Option<(&'a TerrainChunk, &'a EditedTerrainSamples, UVec2, UVec2)>>,
+    >,
+    regions: &TerrainWaterRegionQuery,
+) -> Option<Vec<UVec2>> {
+    use openzt2_zoo_state::terrain::terrain_edit_data_types::TerrainWaterAffiliation;
+    use openzt2_zoo_state::terrain::terrain_sample_grid_queries::{
+        authored_terrain_sample_index, read_materialized_terrain_sample,
+    };
+    let grid = asset.canonical_terrain_grid();
+    let tile_width = (grid.width - 1) / 4;
+    let tile_height = (grid.height - 1) / 4;
+    let mut updates = Vec::new();
+    for edit in edits {
+        let Some((chunk, edited, min, max)) = edit? else {
+            continue;
         };
-        if !neighbouring_tiles(point, tile_width, tile_height)
+        let last = u32::from(chunk.side).checked_sub(1)?;
+        for z in min.y..=max.y.min(last) {
+            for x in min.x..=max.x.min(last) {
+                let (x, z) = (x as usize, z as usize);
+                let sample_index = authored_terrain_sample_index(chunk, asset, x, z)?;
+                let sample = read_materialized_terrain_sample(chunk, asset, Some(edited), x, z)?;
+                let point = UVec2::new(
+                    sample_index as u32 % grid.width,
+                    sample_index as u32 / grid.width,
+                );
+                let owner = match sample.water_affiliation {
+                    Some(TerrainWaterAffiliation::SourceRow(_)) => source.point_owner(point),
+                    Some(TerrainWaterAffiliation::Edited(owner)) => match regions.get(owner) {
+                        Some(region) => {
+                            if region.terrain().id() != chunk.asset.id() {
+                                return None;
+                            }
+                            edited_point_accepted(asset, source, &region, point)?.then_some(owner)
+                        }
+                        None => None,
+                    },
+                    Some(TerrainWaterAffiliation::Unresolved) => return None,
+                    None => None,
+                };
+                let owner = owner.filter(|owner| regions.get(*owner).is_some());
+                updates.push((point, owner, f32::from(sample.height_cm) * 0.01));
+            }
+        }
+    }
+    let mut changed = index.set_edited_points(updates, asset)?;
+    let mut tiles: Vec<_> = changed
+        .iter()
+        .flat_map(|point| neighbouring_tiles(*point, tile_width, tile_height))
+        .collect();
+    tiles.sort_unstable_by_key(|tile| (tile.y, tile.x));
+    tiles.dedup();
+    for tile in tiles {
+        let sides = resolve_tile_sides(asset, regions, tile, |point| index.point_owner(point))?;
+        if index.set_side_owners(tile, sides)? {
+            changed.extend([tile * 4, tile * 4 + UVec2::splat(4)]);
+        }
+    }
+    Some(changed)
+}
+
+/// Whether an edited water point can join `region`: every slope tile side it
+/// lies on must allow water over elevated paths and support the region's
+/// water interval.
+fn edited_point_accepted(
+    asset: &TerrainAsset,
+    source: &TerrainWaterMembershipIndex,
+    region: &openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionView,
+    point: UVec2,
+) -> Option<bool> {
+    let grid = asset.canonical_terrain_grid();
+    let biome = region.biome(asset)?;
+    let plane = region.surface_height(asset)?;
+    let low = plane - biome.deep_water_depth_mm.unwrap_or(0) as f32 * 0.001;
+    let high = if region.uses_tank_minimum_depth(asset)? {
+        plane - source.tank_minimum_depth()?
+    } else {
+        plane + biome.water_shore_offset_mm.unwrap_or(0) as f32 * 0.001
+    };
+    Some(
+        neighbouring_tiles(point, (grid.width - 1) / 4, (grid.height - 1) / 4)
             .iter()
             .all(|tile| {
                 (0..4).all(|side| {
@@ -567,65 +799,59 @@ fn project_edited_membership<'a>(
                                 .excludes_elevated_path
                         }) && bucket
                             .iter()
-                            .all(|point| base.supports_water_interval(*point, low, high, asset)))
+                            .all(|point| source.supports_water_interval(*point, low, high, asset)))
                 })
-            })
-        {
-            *owner = None;
-            dirty_tiles.extend(neighbouring_tiles(point, tile_width, tile_height));
-        }
+            }),
+    )
+}
+
+/// A slope tile's four side owners from the owners of the points along each
+/// side, filled across the tile and merged over flagged water surfaces.
+fn resolve_tile_sides(
+    asset: &TerrainAsset,
+    regions: &TerrainWaterRegionQuery,
+    tile: UVec2,
+    point_owner: impl Fn(UVec2) -> Option<Entity>,
+) -> Option<[Option<Entity>; 4]> {
+    let grid = asset.canonical_terrain_grid();
+    let mut slots = [None; 4];
+    for (side, slot) in slots.iter_mut().enumerate() {
+        *slot = TerrainWaterMembershipIndex::side_bucket(tile, side)?
+            .into_iter()
+            .filter_map(&point_owner)
+            .last();
     }
-    dirty_tiles.sort_unstable_by_key(|tile| (tile.y, tile.x));
-    dirty_tiles.dedup();
-    for tile in dirty_tiles {
-        let slots = &mut sides[(tile.y * tile_width + tile.x) as usize];
-        for (side, slot) in slots.iter_mut().enumerate() {
-            *slot = TerrainWaterMembershipIndex::side_bucket(tile, side)?
-                .into_iter()
-                .filter_map(|point| points[(point.y * grid.width + point.x) as usize])
-                .last();
-        }
-        for (first, opposite) in [(0, 2), (1, 3)] {
-            if slots[first] == slots[opposite] {
-                for adjacent in [(first + 1) % 4, (first + 3) % 4] {
-                    if slots[adjacent].is_none() {
-                        slots[adjacent] = slots[first];
-                    }
+    for (first, opposite) in [(0, 2), (1, 3)] {
+        if slots[first] == slots[opposite] {
+            for adjacent in [(first + 1) % 4, (first + 3) % 4] {
+                if slots[adjacent].is_none() {
+                    slots[adjacent] = slots[first];
                 }
             }
         }
-        let flagged = |local: UVec2| {
-            grid.samples[((tile.y * 4 + local.y) * grid.width + tile.x * 4 + local.x) as usize]
-                .water_surface_flag
-        };
-        let plane = |owner| regions.get(owner)?.surface_height(asset);
-        if flagged(UVec2::new(1, 3)) || flagged(UVec2::new(3, 1)) {
-            merge_flagged_sides(slots, 2, 3, plane);
-            merge_flagged_sides(slots, 0, 1, plane);
-        }
-        if flagged(UVec2::new(3, 3)) || flagged(UVec2::new(1, 1)) {
-            merge_flagged_sides(slots, 2, 1, plane);
-            merge_flagged_sides(slots, 0, 3, plane);
-        }
-        for side in 0..4 {
-            if slots[side].is_some()
-                && slots[(side + 1) % 4].is_none()
-                && slots[(side + 3) % 4].is_none()
-            {
-                slots[(side + 1) % 4] = slots[side];
-            }
+    }
+    let flagged = |local: UVec2| {
+        grid.samples[((tile.y * 4 + local.y) * grid.width + tile.x * 4 + local.x) as usize]
+            .water_surface_flag
+    };
+    let plane = |owner| regions.get(owner)?.surface_height(asset);
+    if flagged(UVec2::new(1, 3)) || flagged(UVec2::new(3, 1)) {
+        merge_flagged_sides(&mut slots, 2, 3, plane);
+        merge_flagged_sides(&mut slots, 0, 1, plane);
+    }
+    if flagged(UVec2::new(3, 3)) || flagged(UVec2::new(1, 1)) {
+        merge_flagged_sides(&mut slots, 2, 1, plane);
+        merge_flagged_sides(&mut slots, 0, 3, plane);
+    }
+    for side in 0..4 {
+        if slots[side].is_some()
+            && slots[(side + 1) % 4].is_none()
+            && slots[(side + 3) % 4].is_none()
+        {
+            slots[(side + 1) % 4] = slots[side];
         }
     }
-    TerrainWaterMembershipIndex::new(
-        base.terrain(),
-        grid.width,
-        grid.height,
-        points.into_boxed_slice(),
-        sides.into_boxed_slice(),
-        base.empty_selector_topology(),
-    )?
-    .with_selector_projection_from(&base)?
-    .with_edited_point_heights(heights.into_boxed_slice())
+    Some(slots)
 }
 
 fn neighbouring_tiles(point: UVec2, width: u32, height: u32) -> Vec<UVec2> {

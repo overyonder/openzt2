@@ -40,6 +40,9 @@ impl Plugin for SettingsPlugin {
             .init_resource::<GraphicsSettings>()
             .init_resource::<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>()
             .init_resource::<OnlineMessagePolicy>()
+            .init_resource::<
+                openzt2_interface_state::settings::modder_tools_settings_types::ModderToolsSettings,
+            >()
             .init_resource::<SupportedDisplayResolutions>()
             .add_message::<ReplaceDisplaySettingsRequest>()
             .add_message::<SelectScreenResolutionRequest>()

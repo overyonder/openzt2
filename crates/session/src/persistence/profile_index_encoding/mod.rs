@@ -1,5 +1,6 @@
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_data::AssetId;
+use openzt2_interface_state::settings::modder_tools_settings_types::ModderToolsSettings;
 use openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy;
 
 use openzt2_interface_state::input::input_types::GameActionInputBindings;
@@ -20,10 +21,10 @@ use super::{
 pub(super) const MAXIMUM_PROFILE_COUNT: usize = 1024;
 pub(super) const MAXIMUM_PROFILE_DISPLAY_NAME_BYTE_COUNT: usize = 64;
 const PROFILE_INDEX_MAGIC_BYTES: [u8; 8] = *b"OZT2PROF";
-const PROFILE_INDEX_FORMAT_VERSION: u32 = 4;
+const PROFILE_INDEX_FORMAT_VERSION: u32 = 5;
 // Bound the complete index by the independently admitted profile payloads.
 pub(super) const MAXIMUM_PROFILE_INDEX_BYTE_COUNT: usize = 64 + MAXIMUM_PROFILE_COUNT * (
-    42 + 20 + 4 * (4 + MAXIMUM_ENCODED_PROFILE_SETTINGS_BYTE_COUNT)
+    42 + 20 + 1 + 4 * (4 + MAXIMUM_ENCODED_PROFILE_SETTINGS_BYTE_COUNT)
     + openzt2_zoo_state::progression::profile_scenario_variables::MAXIMUM_PROFILE_SCENARIO_VARIABLE_BYTES
     + 2 + MAXIMUM_PROFILE_DISPLAY_NAME_BYTE_COUNT
 );
@@ -50,6 +51,7 @@ pub(super) fn encode_profile_index_for_test(
             display: DisplaySettings::default(),
             graphics: GraphicsSettings::default(),
             online_messages: OnlineMessagePolicy::default(),
+            modder_tools: ModderToolsSettings::default(),
             record: profile_record,
         })
         .collect();
@@ -195,6 +197,9 @@ pub(super) fn encode_stored_profile_index(
             &mut profile_index_bytes,
             &stored_profile_record_and_settings.scenario_variables,
         );
+        profile_index_bytes.push(u8::from(
+            stored_profile_record_and_settings.modder_tools.enabled,
+        ));
         profile_index_bytes.extend_from_slice(
             &(stored_profile_record_and_settings
                 .record
@@ -382,6 +387,17 @@ pub(super) fn decode_stored_profile_index(
         } else {
             Default::default()
         };
+        let modder_tools = if profile_index_format_version >= 5 {
+            let enabled = match profile_index_bytes.get(profile_index_byte_cursor) {
+                Some(0) => false,
+                Some(1) => true,
+                _ => return Err(ProfileFailure::CorruptIndex),
+            };
+            profile_index_byte_cursor += 1;
+            ModderToolsSettings { enabled }
+        } else {
+            ModderToolsSettings::default()
+        };
         let profile_display_name_byte_count = read_little_endian_u16_from_profile_index(
             profile_index_bytes,
             profile_index_byte_cursor,
@@ -423,6 +439,7 @@ pub(super) fn decode_stored_profile_index(
             display: display_settings,
             graphics: graphics_settings,
             online_messages,
+            modder_tools,
         });
         profile_index_byte_cursor = profile_display_name_end_byte_offset;
     }

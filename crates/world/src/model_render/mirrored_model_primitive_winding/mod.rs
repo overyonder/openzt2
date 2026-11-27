@@ -7,9 +7,7 @@ use bevy::transform::helper::TransformHelper;
 
 use openzt2_world_state::model_render::ModelExpanded;
 
-use super::authored_model_material_pass_projection::{
-    AdditionalAuthoredModelMaterialPass, EffectPassMaterialRenderViewProjection,
-};
+use super::authored_model_material_pass_projection::AdditionalAuthoredModelMaterialPass;
 
 #[derive(Component)]
 pub(super) struct ModelPrimitiveWindingProjected;
@@ -26,7 +24,6 @@ pub(super) fn project_mirrored_model_primitive_winding(
         (
             Without<ModelPrimitiveWindingProjected>,
             Without<AdditionalAuthoredModelMaterialPass>,
-            Without<EffectPassMaterialRenderViewProjection>,
         ),
     >,
     transforms: TransformHelper,

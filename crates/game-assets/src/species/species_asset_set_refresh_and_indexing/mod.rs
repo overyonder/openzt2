@@ -1,4 +1,7 @@
-use bevy::prelude::*;
+use bevy::{
+    asset::{AssetLoadFailedEvent, LoadState},
+    prelude::*,
+};
 
 use crate::asset_source::AssetArchives;
 
@@ -31,7 +34,7 @@ pub(super) fn refresh_species_asset_set_after_archive_revision(
         .collect::<Vec<_>>();
     index.pending_paths = paths.into();
     index.handles.clear();
-    index.complete = false;
+    index.loaded_handles.clear();
     request_species_batch(&server, &mut index);
     index.revision = Some(revision);
     index.dirty = true;
@@ -40,8 +43,10 @@ pub(super) fn refresh_species_asset_set_after_archive_revision(
 pub(super) fn index_loaded_species_assets_by_species_and_variant_identifier(
     server: Res<AssetServer>,
     assets: Res<Assets<SpeciesAsset>>,
+    mut failures: MessageReader<AssetLoadFailedEvent<SpeciesAsset>>,
     mut index: ResMut<SpeciesAssets>,
 ) {
+    let failed = failures.read().count() != 0;
     if index.dirty {
         if !species_batch_finished(&server, &index) {
             return;
@@ -50,11 +55,22 @@ pub(super) fn index_loaded_species_assets_by_species_and_variant_identifier(
             request_species_batch(&server, &mut index);
             return;
         }
-    } else if !assets.is_changed() {
+    } else if !assets.is_changed() && !failed {
         return;
     }
-    let by_species = index
+    let loaded_handles = index
         .handles
+        .iter()
+        .filter(|handle| {
+            assets.contains(handle.id())
+                && !matches!(
+                    server.get_load_state(handle.id()),
+                    Some(LoadState::Failed(_))
+                )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let by_species = loaded_handles
         .iter()
         .filter_map(|handle| assets.get(handle).map(|asset| (handle, asset)))
         .flat_map(|(handle, asset)| {
@@ -65,8 +81,7 @@ pub(super) fn index_loaded_species_assets_by_species_and_variant_identifier(
                 .map(move |species| (species.id, handle.clone()))
         })
         .collect();
-    let by_variant = index
-        .handles
+    let by_variant = loaded_handles
         .iter()
         .filter_map(|handle| assets.get(handle).map(|asset| (handle, asset)))
         .flat_map(|(handle, asset)| {
@@ -89,29 +104,24 @@ pub(super) fn index_loaded_species_assets_by_species_and_variant_identifier(
         .collect();
     index.by_species = by_species;
     index.by_variant = by_variant;
-    index.complete = !index.handles.is_empty()
-        && index
-            .handles
-            .iter()
-            .all(|handle| assets.get(handle).is_some());
+    index.loaded_handles = loaded_handles;
     index.dirty = false;
 }
 
 const SPECIES_BATCH: usize = 4;
 
 fn species_batch_finished(server: &AssetServer, species: &SpeciesAssets) -> bool {
-    !species.handles.is_empty()
-        && species
-            .handles
-            .iter()
-            .rev()
-            .take(SPECIES_BATCH)
-            .all(|handle| {
-                matches!(
-                    server.get_load_state(handle.id()),
-                    Some(bevy::asset::LoadState::Loaded | bevy::asset::LoadState::Failed(_))
-                )
-            })
+    species
+        .handles
+        .iter()
+        .rev()
+        .take(SPECIES_BATCH)
+        .all(|handle| {
+            matches!(
+                server.get_load_state(handle.id()),
+                Some(bevy::asset::LoadState::Loaded | bevy::asset::LoadState::Failed(_))
+            )
+        })
 }
 
 fn request_species_batch(server: &AssetServer, species: &mut SpeciesAssets) {

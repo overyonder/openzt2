@@ -13,6 +13,7 @@ use crate::ui_document::source::lower::authored_ui_document_lowering::{
     MULTILIST_ROW_DOCUMENTS, OVERVIEW_LEGEND_ROW_DOCUMENT, PHOTO_ALBUM_CHOICE_ROW_DOCUMENT,
     PHOTO_CAMERA_ROLL_ROW_DOCUMENT, PROFILE_ROW_DOCUMENT, SELECTED_ANIMAL_NEED_ROW_DOCUMENT,
     SELECTED_ENTITY_INVENTORY_ROW_DOCUMENT, SELECTED_ENTITY_THOUGHT_ROW_DOCUMENT,
+    ZOO_MESSAGE_ROW_DOCUMENT,
 };
 use crate::ui_document::source::lower::authored_ui_node_tree_lowering::BuildOutput;
 use crate::ui_document::source::lower::authored_ui_scalar_value_lowering::invalid_at;
@@ -242,6 +243,16 @@ pub(super) fn unbound_list_source(
     match (role, name) {
         // The source game fills this list with one `optionsslider.xml` row per
         // `ui/options/settings.xml` entry.
+        (UiDocumentRole::InGameHud, Some(name))
+            if name.eq_ignore_ascii_case("feedbackLastMessage") =>
+        {
+            UiWidgetLiveCollectionSource::ZooMessageLatest
+        }
+        (UiDocumentRole::InGameHud, Some(name))
+            if name.eq_ignore_ascii_case("feedbackMessageList") =>
+        {
+            UiWidgetLiveCollectionSource::ZooMessageHistory
+        }
         (UiDocumentRole::Options, Some(name)) if name.eq_ignore_ascii_case("Slider List") => {
             UiWidgetLiveCollectionSource::GraphicsDetailSettings
         }
@@ -412,6 +423,10 @@ pub(super) fn list_row_document(
             }
             UiWidgetLiveCollectionSource::SavedGameSlots => {
                 AssetId::from_virtual_path(LOAD_SLOT_ROW_DOCUMENT)
+            }
+            UiWidgetLiveCollectionSource::ZooMessageLatest
+            | UiWidgetLiveCollectionSource::ZooMessageHistory => {
+                AssetId::from_virtual_path(ZOO_MESSAGE_ROW_DOCUMENT)
             }
             UiWidgetLiveCollectionSource::Unbound if role == UiDocumentRole::MultiList => name
                 .and_then(|name| {
