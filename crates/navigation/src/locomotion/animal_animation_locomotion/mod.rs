@@ -59,6 +59,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
         (),
         With<openzt2_zoo_state::behavior_task_execution_types::SamplingBehaviorDockPose>,
     >,
+    turning: Query<(), With<openzt2_zoo_state::locomotion::locomotion_types::TurnToHeading>>,
     mut animations: ResMut<Assets<AnimationSetAsset>>,
     asset_server: Res<AssetServer>,
     mut controllers: Query<
@@ -153,8 +154,11 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             continue;
         };
         let has_agent = agent.is_some();
-        let task_animation =
-            task_animation || held_animation || docking_poses.contains(animal_entity);
+        let task_animation = task_animation
+                || held_animation
+                || docking_poses.contains(animal_entity)
+                // Turning on the spot plays its own clips.
+                || turning.contains(animal_entity);
         if agent.is_some() && owner.is_none() {
             continue;
         }

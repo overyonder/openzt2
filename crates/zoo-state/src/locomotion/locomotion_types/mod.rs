@@ -172,6 +172,16 @@ pub struct Docking {
     pub radius_m: f32,
 }
 
+/// Asks an animal to turn on the spot until it faces `heading_radians`
+/// (about +Y, from +Z) within `tolerance_radians`, as `zt.exe` turns one with
+/// its turning clips for a dock or a target to face (`FUN_0061ded7`).
+/// Navigation removes it once the animal faces that way.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct TurnToHeading {
+    pub heading_radians: f32,
+    pub tolerance_radians: f32,
+}
+
 #[derive(Message, Debug, Clone, Copy, PartialEq)]
 pub struct NavigateTo {
     pub entity: Entity,

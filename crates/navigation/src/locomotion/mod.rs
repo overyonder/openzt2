@@ -4,6 +4,7 @@ mod animal_animation_locomotion;
 mod animal_navigation_policy;
 #[cfg(test)]
 mod animal_terrain_slope_tests;
+mod animal_turn_to_heading;
 mod animal_water_contact;
 mod avian_navigation_agent_driving;
 mod behavior_evasion_steering;
@@ -149,6 +150,11 @@ impl Plugin for LocomotionPlugin {
                     crate::locomotion::direct_locomotion_execution::integrate_non_physics_direct_locomotion,
                     avian_navigation_agent_driving::
                         drive_avian_navigation_agent_velocities_and_complete_routes,
+                    animal_turn_to_heading::end_turn_steps_after_their_clips,
+                    animal_turn_to_heading::turn_animals_to_their_headings
+                        .after(animal_turn_to_heading::end_turn_steps_after_their_clips),
+                    animal_turn_to_heading::apply_turn_step_motion
+                        .after(animal_turn_to_heading::turn_animals_to_their_headings),
                 )
                     .after(openzt2_world_state::animation_playback::locomotion_root_motion::AnimationLocomotionMotionSampling)
                     .after(openzt2_zoo_state::topology::gate_operation_types::GateOperationSet)
