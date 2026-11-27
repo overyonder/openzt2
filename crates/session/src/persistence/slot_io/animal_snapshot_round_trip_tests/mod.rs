@@ -83,6 +83,12 @@ fn spawn_named_animal(
             good: 123.5,
             bad: 71.25,
         },
+        NeedPoints {
+            good: 0.0,
+            bad: 42.6,
+            seconds_until_update: 1.25,
+            unmet: true,
+        },
         HabitatSuitability {
             space: 600,
             biome: 700,

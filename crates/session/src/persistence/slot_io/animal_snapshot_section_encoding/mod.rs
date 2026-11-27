@@ -87,6 +87,9 @@ pub(super) fn validate_animal_snapshot_records(
                         .cumulative_points
                         .iter()
                         .any(|value| !value.is_finite())
+                    || welfare.need_points.is_some_and(|(values, _)| {
+                        values.iter().any(|value| !value.is_finite() || *value < 0.0)
+                    })
             })
         {
             return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);

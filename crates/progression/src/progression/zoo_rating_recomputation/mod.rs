@@ -12,7 +12,7 @@ use openzt2_zoo_state::animal_lifecycle::animal_birth_and_release_contracts::Ani
 use openzt2_zoo_state::animal_lifecycle::animal_birth_and_release_contracts::AnimalReleased;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
-use openzt2_zoo_state::animal_welfare::types::AnimalWelfare;
+use openzt2_zoo_state::animal_welfare::types::NeedPoints;
 use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestArrived;
@@ -55,24 +55,36 @@ fn update_zoo_rating_field_and_publish_change(
     }
 }
 
+/// The zoo's animal happiness as the original rates it for fame: `ZooFame.lua`
+/// averages the animals' `f_needPointsGood`, 0 to 100.
 pub(super) fn recompute_animal_welfare_rating(
-    changed_welfare: Query<(), (With<Animal>, Without<Dead>, Changed<AnimalWelfare>)>,
-    mut removed_welfare: RemovedComponents<AnimalWelfare>,
+    changed_points: Query<(), (With<Animal>, Without<Dead>, Changed<NeedPoints>)>,
+    mut removed_points: RemovedComponents<NeedPoints>,
     mut released: MessageReader<AnimalReleased>,
     mut died: MessageReader<AnimalDied>,
-    animals: Query<&AnimalWelfare, (With<Animal>, Without<Dead>)>,
+    animals: Query<&NeedPoints, (With<Animal>, Without<Dead>)>,
     mut rating: ResMut<ZooRating>,
     mut changed: MessageWriter<ProgressionFactChanged>,
 ) {
-    let removed = removed_welfare.read().count() != 0;
+    let removed = removed_points.read().count() != 0;
     let released = message_reader_contains_any_unread_message(&mut released);
     let died = message_reader_contains_any_unread_message(&mut died);
-    if changed_welfare.is_empty() && !removed && !released && !died {
+    if changed_points.is_empty() && !removed && !released && !died {
         return;
     }
+    let (good, count) = animals
+        .iter()
+        .fold((0.0_f32, 0_u32), |(good, count), points| {
+            (good + points.good, count + 1)
+        });
+    let happiness = if count == 0 {
+        0
+    } else {
+        (good / count as f32 * 10.0).round().clamp(0.0, 1000.0) as u16
+    };
     update_zoo_rating_field_and_publish_change(
         &mut rating.animal_welfare_permille,
-        calculate_mean_permille(animals.iter().map(|value| value.0)),
+        happiness,
         &mut changed,
     );
 }
