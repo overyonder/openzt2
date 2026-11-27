@@ -27,6 +27,8 @@ pub(super) const SOURCE_POINTS_TO_PIXELS: f32 = 96.0 / 72.0;
 pub(super) const SELECTED_ENTITY_INVENTORY_ROW_DOCUMENT: &str =
     "ui/fragment/ui/layout/iconitem.xml";
 pub(super) const SELECTED_ANIMAL_NEED_ROW_DOCUMENT: &str = "ui/fragment/ui/layout/needsitem.xml";
+pub(super) const SELECTED_ENTITY_THOUGHT_ROW_DOCUMENT: &str =
+    "ui/fragment/ui/layout/thoughtitem.xml";
 pub(in crate::ui_document::source) const DISPLAY_RESOLUTION_ROW_DOCUMENT: &str =
     "ui/fragment/ui/layout/resolution.xml";
 pub(in crate::ui_document::source) const GRAPHICS_DETAIL_SETTING_ROW_DOCUMENT: &str =

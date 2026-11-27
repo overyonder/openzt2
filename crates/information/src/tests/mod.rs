@@ -23,7 +23,9 @@ fn nested_information_row_uses_its_own_subject_until_unbound() {
     use openzt2_game_data::ui_document::node_property_binding::UiIntegerPropertyBindingSource;
     use openzt2_interface_state::information::entity_selection_types::InformationEntitySource;
     use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
-    use openzt2_interface_state::ui::authored_ui_node_projection_components::{UiValue, UiValueBinding};
+    use openzt2_interface_state::ui::authored_ui_node_projection_components::{
+        UiValue, UiValueBinding,
+    };
     use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
     use openzt2_zoo_state::guests::guest_simulation_types::GuestSatisfaction;
 

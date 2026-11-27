@@ -18,8 +18,8 @@ use openzt2_ui::authored_ui_image_content_binding::UiImageBinding;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
 use super::{visit_information_row, InformationRows};
-use openzt2_interface_state::information::entity_selection_types::Inspectable;
 use openzt2_interface_state::information::entity_selection_types::InformationEntitySource;
+use openzt2_interface_state::information::entity_selection_types::Inspectable;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
 
 #[derive(Resource, Default)]

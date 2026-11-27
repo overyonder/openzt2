@@ -104,7 +104,12 @@ pub(crate) fn project_live_staff_status_to_visible_information_panels(
     >,
     jobs: Query<(&StaffJob, Option<&JobProgress>)>,
     mut bools: Query<(&UiDocumentOwner, &UiVisibleBinding, &mut Visibility)>,
-    mut values: Query<(&UiDocumentOwner, &UiValueBinding, &mut UiValue)>,
+    mut values: Query<(
+        &UiDocumentOwner,
+        &UiValueBinding,
+        &mut UiValue,
+        Option<&mut Text>,
+    )>,
 ) {
     let current_month_ordinal = u32::from(calendar.year)
         .saturating_mul(12)
@@ -119,11 +124,12 @@ pub(crate) fn project_live_staff_status_to_visible_information_panels(
         let job = current_job
             .as_ref()
             .and_then(|current| jobs.get(current.job).ok());
-        for (owner, binding, mut value) in &mut values {
+        for (owner, binding, mut value, text) in &mut values {
             if owner.0 != panel_entity {
                 continue;
             }
-            value.0 = match &binding.0 {
+            let next = match &binding.0 {
+                // `Employment::wage` is the role's monthly wage.
                 UiIntegerPropertyBindingSource::StaffWageCentsPerDay => employment.wage.0,
                 UiIntegerPropertyBindingSource::StaffMonthsEmployed => {
                     i64::from(current_month_ordinal.saturating_sub(employment.hired_month_ordinal))
@@ -134,6 +140,21 @@ pub(crate) fn project_live_staff_status_to_visible_information_panels(
                 UiIntegerPropertyBindingSource::StaffJobRemainingTicks => 0,
                 _ => continue,
             };
+            value.set_if_neq(UiValue(next));
+            // A shown value is the node's text; nothing else renders it.
+            if let Some(mut text) = text {
+                let shown = match &binding.0 {
+                    UiIntegerPropertyBindingSource::StaffWageCentsPerDay => {
+                        let mut money = String::new();
+                        openzt2_zoo_state::economy::currency_formatting::write_whole_dollar_currency_with_thousands_separators(&mut money, next);
+                        money
+                    }
+                    _ => next.to_string(),
+                };
+                if text.0 != shown {
+                    text.0 = shown;
+                }
+            }
         }
         for (owner, binding, mut visibility) in &mut bools {
             if owner.0 != panel_entity {
