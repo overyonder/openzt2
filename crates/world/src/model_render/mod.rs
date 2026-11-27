@@ -15,6 +15,7 @@ mod prefab_fixed_function_world_lighting_projection;
 mod prefab_model_billboard_orientation;
 mod prefab_model_level_of_detail_projection;
 mod prefab_model_tint_projection;
+pub(crate) mod prefab_motion_projection;
 pub(crate) mod prefab_render_lod_tier_projection;
 pub(crate) mod scoped_prefab_lighting;
 pub(crate) mod world_entity_model_suppression;
@@ -53,6 +54,8 @@ impl Plugin for ModelRenderPlugin {
     fn build(&self, app: &mut App) {
         prefab_render_layer_camera_matching::register_inherited_render_layers(app);
         prefab_model_level_of_detail_projection::register_prefab_lod_camera_visibility(app);
+        prefab_motion_projection::register_prefab_motion_projection(app);
+        prefab_render_lod_tier_projection::register_prefab_render_lod_distances(app);
         configured_model_effect_materials::register_configured_model_effect_materials(app);
         world_entity_model_suppression::register_inherited_model_render_suppression(app);
         model_scene_visibility_and_shadow_projection::register_inherited_model_draw_shadow_policy(
@@ -67,6 +70,11 @@ impl Plugin for ModelRenderPlugin {
         app.add_observer(retire_removed_prefab_scene_root)
             .add_systems(
                 SpawnScene,
+                gltf_model_scene_instantiation::finish_retiring_prefab_models
+                    .after(bevy::app::SceneSpawnerSystems::WorldInstanceSpawn),
+            )
+            .add_systems(
+                SpawnScene,
                 gltf_model_scene_instantiation::detach_attachments_from_reloading_scenes
                     .before(bevy::app::SceneSpawnerSystems::WorldInstanceSpawn)
                     .run_if(on_message::<AssetEvent<WorldAsset>>),
@@ -76,19 +84,20 @@ impl Plugin for ModelRenderPlugin {
             world_light_inputs::LinearWorldAmbient::default(),
             prefab_fixed_function_world_lighting_projection::FixedFunctionWorldLightRegisters::default(),
         ));
-        let render_app = app.sub_app_mut(RenderApp);
-        render_app
-            .remove_systems_in_set(
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app
+                .remove_systems_in_set(
+                    Render,
+                    sort_phase_system::<Transparent3d>,
+                    ScheduleCleanupPolicy::RemoveSystemsOnly,
+                )
+                .expect("the Core3d transparent sort system is registered");
+            render_app.add_systems(
                 Render,
-                sort_phase_system::<Transparent3d>,
-                ScheduleCleanupPolicy::RemoveSystemsOnly,
-            )
-            .expect("the Core3d transparent sort system is registered");
-        render_app.add_systems(
-            Render,
-            authored_effect_technique_pass_submission_order::sort_transparent_effect_phase
-                .in_set(RenderSystems::PhaseSort),
-        );
+                authored_effect_technique_pass_submission_order::sort_transparent_effect_phase
+                    .in_set(RenderSystems::PhaseSort),
+            );
+        }
         app.configure_sets(
             PostUpdate,
             ModelRenderPresentationSet::LevelOfDetail
@@ -140,7 +149,10 @@ impl Plugin for ModelRenderPlugin {
                 initialize_model_geometry_texture_coordinate_clocks.before(
                     openzt2_game_assets::material::runtime::texture_coordinate_animation::TextureCoordinateAnimationSet,
                 ),
+                prefab_render_lod_tier_projection::select_prefab_render_lod_from_camera
+                    .in_set(ModelRenderPresentationSet::LevelOfDetail),
                 prefab_render_lod_tier_projection::project_prefab_render_lod_tier
+                    .after(prefab_render_lod_tier_projection::select_prefab_render_lod_from_camera)
                     .in_set(ModelRenderPresentationSet::LevelOfDetail),
                 project_prefab_model_level_of_detail_visibility
                     .after(prefab_render_lod_tier_projection::project_prefab_render_lod_tier)

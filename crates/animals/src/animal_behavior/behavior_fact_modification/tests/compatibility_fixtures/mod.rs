@@ -23,6 +23,7 @@ pub(super) fn install_definitions(
     let variant_id = AssetId::from_key("test:variant");
     let document = SpeciesDocument {
         species: vec![Species {
+            caffeine_factors: Default::default(),
             placement_surface_policy: Default::default(),
             donation: None,
             id: species_id,
@@ -130,6 +131,7 @@ pub(super) fn install_definitions(
     ]
     .into_iter()
     .map(|(name, content)| WorldObjectDefinition {
+        collision_scores: None,
         authored_runtime: Default::default(),
         audio_cue_prefixes: Vec::new(),
         audio_stage_volumes: Vec::new(),

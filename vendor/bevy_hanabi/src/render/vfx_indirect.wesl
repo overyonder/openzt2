@@ -31,8 +31,28 @@ fn reset_particle_budget(@builtin(local_invocation_index) lane: u32) {
     workgroupBarrier();
 
     for (var index = lane; index < sim_params.num_effects; index += 64u) {
-        let metadata = spawner_buffer[index].effect_metadata_index;
+        let spawner = &spawner_buffer[index];
+        let metadata = (*spawner).effect_metadata_index;
         let alive = atomicLoad(&effect_metadatas[metadata].alive_count);
+        let group_offset = (*spawner).group_budget_offset;
+        if group_offset != 0u && alive != 0u {
+            let group_budget = &spawn_inputs.points[group_offset - 1u].group_budget;
+            var remaining = atomicLoad(group_budget);
+            loop {
+                if remaining == 0u {
+                    break;
+                }
+                let next = remaining - min(alive, remaining);
+                let reservation = atomicCompareExchangeWeak(group_budget, remaining, next);
+                if reservation.exchanged {
+                    break;
+                }
+                remaining = reservation.old_value;
+            }
+        }
+        if sim_params.particle_budget == 0xffffffffu {
+            continue;
+        }
         var remaining = atomicLoad(&available_particles);
         loop {
             if alive == 0u || remaining == 0u {

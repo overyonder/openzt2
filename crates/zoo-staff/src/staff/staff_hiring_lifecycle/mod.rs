@@ -83,7 +83,7 @@ pub(super) fn request_staff_hire_payment(
         let Some(body) = catalogue.scene(object.prefab) else {
             continue;
         };
-        let price = Money(object.price_cents);
+        let price = Money::from_cents(object.price_cents);
         if price < Money::ZERO {
             continue;
         }
@@ -95,6 +95,7 @@ pub(super) fn request_staff_hire_payment(
             operation.insert(HirePaid);
         } else {
             transactions.write(TransactionRequest {
+                domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Player,
                 operation: operation.id(),
                 debit: Account::Zoo,
                 credit: Account::External,
@@ -222,7 +223,7 @@ pub(super) fn spawn_paid_employees_from_ready_prefabs(
             Staff,
             StaffRole(hire.role),
             Employment {
-                wage: Money(i64::from(role.wage_cents_per_month)),
+                wage: Money::from_cents(i64::from(role.wage_cents_per_month)),
                 hired_tick: clock.tick,
                 hired_month_ordinal: u32::from(calendar.year) * 12
                     + u32::from(calendar.month.saturating_sub(1)),

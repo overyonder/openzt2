@@ -3,6 +3,7 @@
 pub mod behavior_auxiliary_source_document_lowering;
 pub mod behavior_auxiliary_source_types;
 pub mod ground_path_surface_images;
+pub mod interaction_policies;
 pub mod lower;
 pub mod path_placement_highlight_asset;
 mod path_placement_highlight_loading;
@@ -59,7 +60,9 @@ impl Plugin for WorldDefinitionAssetPlugin {
                             true,
                             world_definitions_requested,
                         )
-                        .or_eager(world_definition_sources_changed.and_then(world_definitions_requested)),
+                        .or_eager(world_definition_sources_changed.and_then(
+                            |definitions: Res<WorldDefinitions>| definitions.server.is_some(),
+                        )),
                     ),
                     index_loaded_world_definition_assets_by_identifier_and_singleton_kind
                         .in_set(WorldDefinitionPublicationSet)

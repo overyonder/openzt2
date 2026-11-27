@@ -13,6 +13,7 @@ pub(super) struct ResearchProjectSnapshotRecord {
     pub(super) elapsed_simulation_ticks: u64,
     pub(super) required_simulation_ticks: u64,
     pub(super) paused: bool,
+    pub(super) timer_ns: Option<(u64, u64)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -36,6 +37,7 @@ pub(super) struct ResearchAvailabilitySnapshotRecord {
     pub(super) catalogue_item_identifier: AssetId,
     pub(super) available: bool,
     pub(super) remaining_unlock_ticks: Option<u64>,
+    pub(super) unlock_timer_ns: Option<(u64, u64)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -45,13 +47,23 @@ pub(super) struct SpeciesAdoptionChanceSnapshotRecord {
     pub(super) adoption_chance_multiplier_permille: u16,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FossilSkeletonRewardSnapshot {
+    pub(super) remaining_ns: u64,
+    pub(super) reward: AssetId,
+    pub(super) message: Option<AssetId>,
+}
+
 pub(super) struct ProgressionSnapshotRecords {
     pub(super) fame: Fame,
     pub(super) zoo_rating: ZooRating,
     pub(super) unlocked_catalogue_definition_count: u32,
     pub(super) unlocked_catalogue_definition_bit_words: Vec<u64>,
     pub(super) scenario_award_points: u32,
+    pub(super) award_history: Option<openzt2_progression::progression::AwardDomainHistory>,
+    pub(super) fossil_education: std::collections::BTreeMap<u64, f32>,
+    pub(super) fossil_skeleton_rewards:
+        std::collections::BTreeMap<u64, FossilSkeletonRewardSnapshot>,
     pub(super) award_globals: std::collections::BTreeMap<AssetId, String>,
     pub(super) award_presentation: std::collections::BTreeMap<u64, (Option<AssetId>, bool)>,
     pub(super) endangered_animal_birth_count: u32,

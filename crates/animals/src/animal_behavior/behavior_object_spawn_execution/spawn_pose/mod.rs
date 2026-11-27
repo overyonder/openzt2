@@ -12,7 +12,7 @@ use openzt2_zoo_state::{
     construction::construction_interaction_types::PlacementValidity,
     habitat::{
         habitat_membership_and_containment::locate_habitat_at_world_position,
-        habitat_types::HabitatIndex,
+        habitat_types::{HabitatCellOf, HabitatIndex},
     },
     locomotion::locomotion_types::{NavAgent, NavFlags},
     placement::{
@@ -52,6 +52,7 @@ pub(super) struct SpawnPoseValidation<'w, 's> {
         ),
     >,
     occupancy: PlacedObjectFootprintQueries<'w, 's>,
+    cell_owners: Query<'w, 's, &'static HabitatCellOf>,
     occupants: Query<'w, 's, (&'static DefinitionId, &'static WorldMember)>,
     agents: Query<'w, 's, &'static NavAgent>,
     transforms: Query<'w, 's, &'static GlobalTransform>,
@@ -196,7 +197,7 @@ impl SpawnPoseValidation<'_, '_> {
                 })
             },
             ObjectPlacementAuthoritativeFacts {
-                habitat: locate_habitat_at_world_position(habitats, point, *grid),
+                habitat: locate_habitat_at_world_position(habitats, &self.cell_owners, point, *grid),
                 unlocked: true, affordable: true,
                 topology_valid: !placeable.constraints.contains_any(
                     openzt2_game_data::world_definitions::object_placement::PlacementConstraints::REQUIRE_PATH

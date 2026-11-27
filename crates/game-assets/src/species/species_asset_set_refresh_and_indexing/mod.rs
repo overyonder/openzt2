@@ -6,8 +6,8 @@ use std::{io, path::Path};
 
 use crate::{
     asset_source::{
-        ArchiveOverlayChanged, AssetArchives,
-        archive_entry_asset_path::definition_archive_entry_asset_path,
+        archive_entry_asset_path::definition_archive_entry_asset_path, ArchiveOverlayChanged,
+        AssetArchives,
     },
     world_definitions::world_definition_load_queue::load_asset_paths_in_order,
 };

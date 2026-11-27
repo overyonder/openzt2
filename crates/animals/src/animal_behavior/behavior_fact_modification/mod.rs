@@ -28,9 +28,9 @@ use openzt2_zoo_state::animal_welfare::types::AdjustRest;
 use openzt2_zoo_state::animal_welfare::types::AdjustSocial;
 use openzt2_zoo_state::animal_welfare::types::AdjustStimulation;
 use openzt2_zoo_state::animal_welfare::types::AdjustThirst;
+use openzt2_zoo_state::feeding::container_quantity::apply_authored_container_quantity_write;
 use openzt2_zoo_state::feeding::container_quantity::DrinkContainer;
 use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
-use openzt2_zoo_state::feeding::container_quantity::apply_authored_container_quantity_write;
 use openzt2_zoo_state::staff::staff_employment_types::Staff;
 
 use openzt2_zoo_state::guests::guest_simulation_types::{
@@ -433,7 +433,7 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                         task.target,
                     )
                     .expect("FoodLevel target was validated before application");
-                    if let Ok((_, mut container)) = food_containers.get_mut(target) {
+                    if let Ok((_, container)) = food_containers.get_mut(target) {
                         let amount = apply_authored_container_quantity_write(
                             container.amount_q16,
                             container.capacity_q16,
@@ -442,7 +442,7 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                         container
                             .map_unchanged(|container| &mut container.amount_q16)
                             .set_if_neq(amount);
-                    } else if let Ok((_, mut container)) = drink_containers.get_mut(target) {
+                    } else if let Ok((_, container)) = drink_containers.get_mut(target) {
                         let amount = apply_authored_container_quantity_write(
                             container.amount_q16,
                             container.capacity_q16,

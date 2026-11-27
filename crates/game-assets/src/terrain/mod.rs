@@ -21,7 +21,7 @@ impl Plugin for TerrainAssetPlugin {
     fn build(&self, application: &mut App) {
         application
             .init_asset::<TerrainAsset>()
-            .preregister_asset_loader::<TerrainSourceAssetLoader>(&["dat"]);
+            .preregister_asset_loader::<TerrainSourceAssetLoader>(&[]);
     }
 
     fn finish(&self, application: &mut App) {

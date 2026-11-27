@@ -270,6 +270,10 @@ pub(crate) struct ParticleViewDraws {
     pub(super) authored: HashMap<MainEntity, QueuedParticlePasses>,
     #[cfg(feature = "3d")]
     pub(super) binned_pipeline_key: Option<ParticleBinnedViewKey>,
+    #[cfg(feature = "3d")]
+    pub(super) opaque_pending: bevy::render::camera::ViewPendingQueues,
+    #[cfg(feature = "3d")]
+    pub(super) alpha_mask_pending: bevy::render::camera::ViewPendingQueues,
 }
 
 #[cfg(feature = "3d")]

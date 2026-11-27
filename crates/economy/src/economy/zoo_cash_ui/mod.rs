@@ -7,18 +7,15 @@ use super::{
 };
 use bevy::prelude::*;
 use openzt2_game_assets::{
-    localization::{
-        localization_asset_types::LocalizationAsset,
-        localization_precedence_index::LocalizationPrecedenceIndex,
-    },
+    localization::loaded_localization_queries::CurrencyLocalization,
     ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
 };
 use openzt2_game_data::{
-    AssetId,
     localization::LocalizationFormatArgument,
     ui_document::{
         action::economy::UiEconomyAction, node_property_binding::UiTextPropertyBindingSource,
     },
+    AssetId,
 };
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiEconomyActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
@@ -34,8 +31,7 @@ pub(super) struct UiCashGrantPendingTransaction;
 /// The String owned by Bevy's Text component is retained across updates.
 pub(super) fn project_zoo_cash_balance_into_authored_ui_text(
     worlds: Query<(Ref<ZooCash>, Ref<UnlimitedZooCash>), With<WorldRoot>>,
-    active_localization: Option<Res<LocalizationPrecedenceIndex>>,
-    localizations: Res<Assets<LocalizationAsset>>,
+    currency: CurrencyLocalization,
     mut fields: Query<(Ref<UiTextBinding>, &mut Text, &mut TextColor, &mut TextFont)>,
 ) {
     let Ok((cash, unlimited)) = worlds.single() else {
@@ -43,10 +39,8 @@ pub(super) fn project_zoo_cash_balance_into_authored_ui_text(
     };
     let is_unlimited = unlimited.0;
     let policy_changed = unlimited.is_changed();
-    let localization_changed = active_localization
-        .as_ref()
-        .is_some_and(|active| active.is_changed())
-        || localizations.is_changed();
+    let localization_changed = currency.is_changed();
+    let localization = currency.loaded_text();
 
     for (binding, mut text, mut color, mut font) in &mut fields {
         let UiTextPropertyBindingSource::ZooCash {
@@ -63,27 +57,15 @@ pub(super) fn project_zoo_cash_balance_into_authored_ui_text(
         text.0.clear();
         let selected_format;
         if is_unlimited {
-            if let Some(value) = active_localization
-                .as_deref()
-                .and_then(|sources| sources.borrow_loaded_localization_view(&localizations))
-                .and_then(|localization| {
-                    localization
-                        .find_plain_localized_text(AssetId::from_key("economy:unlimitedcash"))
-                })
-            {
+            if let Some(value) = localization.and_then(|localization| {
+                localization.find_plain_localized_text(AssetId::from_key("economy:unlimitedcash"))
+            }) {
                 text.0.push_str(value);
             }
             selected_format = *positive_format;
         } else {
             let dollars = cash.0.dollars().trunc() as i64;
-            // The original groups thousands: "$100,000".
-            if dollars < 0 {
-                text.0.push('-');
-            }
-            openzt2_zoo_state::economy::currency_formatting::write_whole_dollar_currency_with_thousands_separators(
-                &mut text.0,
-                dollars.saturating_mul(100).saturating_abs(),
-            );
+            let _ = currency.write_amount(dollars.saturating_mul(100), false, &mut text.0);
             selected_format = if dollars < 0 {
                 *negative_format
             } else {
@@ -91,10 +73,7 @@ pub(super) fn project_zoo_cash_balance_into_authored_ui_text(
             };
         }
 
-        if let Some(localization) = active_localization
-            .as_deref()
-            .and_then(|sources| sources.borrow_loaded_localization_view(&localizations))
-        {
+        if let Some(localization) = localization {
             let unformatted_text = std::mem::take(&mut text.0);
             if localization
                 .write_localized_text_with_format_arguments(

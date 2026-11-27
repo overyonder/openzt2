@@ -3,7 +3,6 @@ use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
-use openzt2_game_data::world_definitions::staff_management::StaffRoleKind;
 
 use super::{
     staff_assignment_types::{SetStaffWorkerDutyAssignment, WorkerDutyAssignments},
@@ -30,9 +29,7 @@ pub(super) fn apply_staff_worker_duty_assignments(
         let Some(role) = catalogue.find_staff(role.0) else {
             continue;
         };
-        if role.role != StaffRoleKind::Maintenance
-            || assignments.is_assigned(request.task) == request.assigned
-        {
+        if assignments.is_assigned(request.task) == request.assigned {
             continue;
         }
         if !manager

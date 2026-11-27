@@ -34,7 +34,6 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
     let mut app = App::new();
     app.add_plugins(openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndexPlugin);
     app.init_resource::<Assets<WorldDefinitionAsset>>()
-        .init_resource::<Assets<crate::transport_tours::ground_track_policy::GroundTrackPolicy>>()
         .init_resource::<WorldDefinitions>()
         .add_message::<DeleteEntity>()
         .add_message::<PrepareDeletion>()
@@ -68,6 +67,7 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
     let definition = AssetId::from_key("track");
     let document = WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
+            collision_scores: None,
             authored_runtime: Default::default(),
             audio_cue_prefixes: Vec::new(),
             audio_stage_volumes: Vec::new(),
@@ -130,6 +130,8 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
             virtual_nodes: Vec::new(),
         }],
         tracks: vec![TransportationTrackDefinition {
+            ground_track_physics: None,
+            ground_obstruction_types: None,
             id: definition,
             object: definition,
             kind: TransportationTrackKind::Ground,
@@ -249,7 +251,7 @@ fn terminal_route_quote_and_removal_include_all_owned_pieces_once() {
         // The delete tool takes one piece of a longer route.
         assert_eq!(
             app.world().get::<CurrentSellQuote>(pieces[1]).unwrap().0,
-            Money(expected / 2)
+            Money::from_cents(expected / 2)
         );
         // Leaving a quoted selection without a deletion intent cannot mutate the route.
         let owner = app
@@ -275,7 +277,7 @@ fn terminal_route_quote_and_removal_include_all_owned_pieces_once() {
         app.update();
         assert_eq!(
             app.world().get::<CurrentSellQuote>(junction).unwrap().0,
-            Money(expected)
+            Money::from_cents(expected)
         );
         app.world_mut().write_message(DeleteEntity(junction));
         app.update();
@@ -285,7 +287,7 @@ fn terminal_route_quote_and_removal_include_all_owned_pieces_once() {
             .drain()
             .collect();
         assert_eq!(prepared.len(), 1);
-        assert_eq!(prepared[0].cost, Money(-expected));
+        assert_eq!(prepared[0].cost, Money::from_cents(-expected));
         let request = ApplyPreparedTransportTrackConstructionEditRequest {
             transaction: prepared[0].transaction,
             application: EditApplication::InitialCommit,
@@ -355,7 +357,7 @@ fn removing_tail_preserves_the_incoming_route_and_its_tower_attachment() {
         .drain()
         .next()
         .unwrap();
-    assert_eq!(prepared.cost, Money(-16_000));
+    assert_eq!(prepared.cost, Money::from_cents(-16_000));
     app.world_mut()
         .write_message(ApplyPreparedTransportTrackConstructionEditRequest {
             transaction: prepared.transaction,
@@ -440,7 +442,7 @@ fn removing_one_piece_leaves_a_gap_and_undo_restores_the_route() {
         .drain()
         .next()
         .unwrap();
-    assert_eq!(prepared.cost, Money(-8_000));
+    assert_eq!(prepared.cost, Money::from_cents(-8_000));
     let apply = |app: &mut App, application| {
         app.world_mut()
             .write_message(ApplyPreparedTransportTrackConstructionEditRequest {

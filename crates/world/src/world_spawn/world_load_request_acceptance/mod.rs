@@ -42,6 +42,7 @@ pub struct PendingWorldLoad {
     request: BeginWorldLoad,
     demanded_starts: BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
     challenge_economy: Option<Handle<ChallengeEconomyInitializer>>,
+    mode_document: Option<Handle<WorldScenarioDocumentAsset>>,
 }
 
 pub fn admit_first_world_load_request(
@@ -56,8 +57,12 @@ pub fn admit_first_world_load_request(
         commands.spawn((
             PendingWorldLoad {
                 request,
+                mode_document: request
+                    .mode_document
+                    .and_then(|id| asset_server.get_id_handle(id)),
                 demanded_starts: BTreeMap::new(),
                 challenge_economy: (request.mode == WorldSessionMode::Challenge
+                    && request.mode_document.is_none()
                     && request.saved_world_document.is_none()
                     && request.starting_cash_cents.is_none())
                 .then(|| asset_server.load(CHALLENGE_MODE_DOCUMENT)),
@@ -89,6 +94,30 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         return;
     };
     let request = pending.request;
+    let custom_mode = pending.mode_document.clone();
+    let mode_economy = if let Some(mode_id) = request.mode_document {
+        if let Some(mode) = scenarios.get(mode_id) {
+            mode.mode_economy()
+        } else {
+            if custom_mode.is_none()
+                || matches!(
+                    asset_server.load_state(mode_id),
+                    bevy::asset::LoadState::Failed(_)
+                )
+            {
+                failed.write(WorldLoadFailed {
+                    operation: request.operation,
+                    root: None,
+                    scenario: request.scenario,
+                    reason: WorldLoadFailure::MissingScenario,
+                });
+                commands.entity(load_entity).despawn();
+            }
+            return;
+        }
+    } else {
+        None
+    };
     let challenge_cash = if let Some(handle) = pending.challenge_economy.as_ref() {
         if let Some(initializer) = challenge_initializers
             .as_ref()
@@ -206,7 +235,13 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
     let terrain_handle = scenarios.get(&map_asset).and_then(|document| {
         document.restored_terrain(terrain).cloned().or_else(|| {
             let source = document.terrain_path(terrain)?;
-            Some(asset_server.load::<TerrainAsset>(source.to_owned()))
+            let tank_water_source_paths = definitions.tank_water_material_paths()
+                .map(std::path::PathBuf::from).collect();
+            Some(asset_server.load_builder()
+                .with_settings(move |settings: &mut openzt2_game_assets::terrain::terrain_source_asset_loading::TerrainSourceAssetSettings| {
+                    settings.tank_water_source_paths.clone_from(&tank_water_source_paths);
+                })
+                .load::<TerrainAsset>(source.to_owned()))
         })
     });
     let Some(terrain_handle) = terrain_handle else {
@@ -226,28 +261,34 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         mode: request.mode,
         profile: request.profile,
     };
-    let starting_cash = ZooCash(Money(if request.saved_world_document.is_some() {
-        start_record.cash_cents
+    let starting_cash = ZooCash(if request.saved_world_document.is_some() {
+        Money::from_cents(start_record.cash_cents)
     } else {
         request
             .starting_cash_cents
-            .or(challenge_cash)
-            .unwrap_or(cash_cents)
-    }));
+            .map(Money::from_cents)
+            .or_else(|| {
+                mode_economy
+                    .and_then(|mode| mode.initial_cash_dollars)
+                    .and_then(Money::from_dollars)
+            })
+            .or_else(|| challenge_cash.map(Money::from_cents))
+            .unwrap_or_else(|| Money::from_cents(cash_cents))
+    });
     let general_accounts = start_record.general_cash_cents.map(|cash| {
         GeneralEconomyLedger::from_starting_balance(
             u32::from(start_record.calendar[0]) * 12
                 + u32::from(start_record.calendar[1].saturating_sub(1)),
-            Money(cash),
+            Money::from_cents(cash),
         )
     });
     let starting_admission = admission_cents
-        .map(|cents| AdmissionPrice::from_adult(Money(cents)))
+        .map(|cents| AdmissionPrice::from_adult(Money::from_cents(cents)))
         .or_else(|| {
             definitions.guest_generation().map(|policy| {
                 let [adult, child] = policy
                     .normal_admission_cents
-                    .map(|cents| Money(i64::from(cents)));
+                    .map(|cents| Money::from_cents(i64::from(cents)));
                 AdmissionPrice { adult, child }
             })
         })
@@ -262,12 +303,15 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
             openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles {
                 map: map_asset.clone(),
                 start: start_asset.clone(),
+                mode: custom_mode,
             },
             SelectedWorldTerrainAssetHandle(terrain_handle),
             starting_cash,
             starting_admission,
             ZooAdmissionsOpen(start_record.admissions_open),
-            UnlimitedZooCash(request.mode == openzt2_world_state::game_session_types::WorldSessionMode::Freeform),
+            UnlimitedZooCash(mode_economy.and_then(|mode| mode.unlimited_cash)
+                .unwrap_or(request.mode == WorldSessionMode::Freeform)),
+            WorldHydration::new_pending_world_hydration(record_count),
         ))
         .id();
     if let Some(general_accounts) = general_accounts {
@@ -324,9 +368,6 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
             .map(|policy| policy.percent)
             .or(start_record.maximum_fame_percent_reached),
     });
-    commands
-        .entity(root)
-        .insert(WorldHydration::new_pending_world_hydration(record_count));
     commands.entity(load_entity).despawn();
 }
 

@@ -1,9 +1,11 @@
 use super::*;
 use crate::habitat::habitat_types::HabitatRegion;
 use crate::locomotion::terrain_derived_navigation_graph_types::{
-    TerrainDerivedNavigationGraph, TerrainDerivedNavigationGraphNode,
+    NavigationTerrainCellEdit, TerrainDerivedNavigationGraph, TerrainDerivedNavigationGraphNode,
+    TerrainDerivedNavigationGraphTraversalKind,
 };
 use crate::topology::topology_graph_types::TopologyGrid;
+use openzt2_game_data::CaffeineFactors;
 
 #[test]
 fn shore_candidates_respect_water_clearance_capabilities_and_terrain_changes() {
@@ -47,10 +49,37 @@ fn shore_candidates_respect_water_clearance_capabilities_and_terrain_changes() {
         &mut candidates,
     );
     assert_eq!(candidates, [Vec3::new(3.5, 0.0, -0.5)]);
-    navigation
-        .terrain_derived_navigation_graph_mut()
-        .update_navigation_node_from_changed_terrain_cell(UVec2::new(3, 0), 0, true, 1.0)
+    let graph = navigation.terrain_derived_navigation_graph_mut();
+    let cell = UVec2::new(3, 0);
+    let changed_node = graph
+        .calculate_navigation_node_for_terrain_cell(cell.to_array())
         .unwrap();
+    let changes = graph.apply_terrain_cell_edits(
+        [NavigationTerrainCellEdit {
+            cell,
+            height_centimetres: 0,
+            minimum_triangle_normal_y: 1.0,
+            contains_water: true,
+            water_depth_centimetres: 100,
+        }],
+        None,
+    );
+    assert_eq!(
+        changes.affected_nodes[&changed_node][1].water_depth_centimetres,
+        100
+    );
+    assert_eq!(changes.affected_edges.len(), 4);
+    for (edge, change) in changes.affected_edges {
+        assert!(edge.contains(&changed_node));
+        assert_eq!(
+            change.before.unwrap().traversal_kind,
+            TerrainDerivedNavigationGraphTraversalKind::Ground
+        );
+        assert_eq!(
+            change.after.unwrap().traversal_kind,
+            TerrainDerivedNavigationGraphTraversalKind::Shore
+        );
+    }
     navigation.collect_dry_ground_candidates(
         None,
         &region,

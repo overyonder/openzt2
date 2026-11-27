@@ -227,8 +227,8 @@ fn map_authored_staff_kind_to_supported_facility_operator(
 }
 
 #[cfg(test)]
-pub(super) fn economy_test_simulation_timing()
--> openzt2_game_data::world_definitions::simulation_time::SimulationTimingDefinition {
+pub(super) fn economy_test_simulation_timing(
+) -> openzt2_game_data::world_definitions::simulation_time::SimulationTimingDefinition {
     use openzt2_game_data::world_definitions::simulation_time::{
         SimulationCalendarLeapPolicy, SimulationCalendarPolicy, SimulationTimingDefinition,
     };
@@ -249,13 +249,13 @@ pub(super) fn economy_test_simulation_timing()
 #[cfg(test)]
 mod authored_service_facility_hydration_tests {
     use super::*;
-    use openzt2_game_data::AssetId;
     use openzt2_game_data::world_definitions::{
         document::WorldDefinitionDocument,
         facilities_and_maintenance::{
             FacilityDefinition, FacilityPaymentTrigger, FacilityServiceKind,
         },
     };
+    use openzt2_game_data::AssetId;
 
     fn cart_object() -> AssetId {
         AssetId::from_key("snackcart_fruitcup_df")

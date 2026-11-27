@@ -11,8 +11,8 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
-    AssetId, localization::LocalizationFormatArgument,
-    ui_document::node_property_binding::UiTextPropertyBindingSource,
+    localization::LocalizationFormatArgument,
+    ui_document::node_property_binding::UiTextPropertyBindingSource, AssetId,
 };
 use openzt2_interface_state::information::entity_selection_types::SelectionChanged;
 use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;

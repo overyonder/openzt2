@@ -1,5 +1,6 @@
-use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
-use crate::source_document::ui::model::{SourceUiEvent, SourceUiPayloadNode};
+use crate::source_document::{
+    biome_automatic_placement_ranges::lower_automatic_placement_ranges, ui::model::SourceUiEvent,
+};
 use crate::ui_document::source::lower::authored_ui_action_argument_lowering::{
     event_i32, required_bool, required_i8, required_tenths,
 };
@@ -13,10 +14,6 @@ use openzt2_game_data::ui_document::action::construction::{
     UiTankEditMode, UiTerrainEditMode,
 };
 use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
-use openzt2_game_data::world_definitions::biomes_locations_and_details::{
-    BiomeAutomaticPlacementChoice, BiomeAutomaticPlacementRange,
-};
-use openzt2_game_data::AssetId;
 use std::io;
 
 pub(super) fn lower_construction_command(
@@ -206,65 +203,4 @@ pub(super) fn lower_construction_command(
         _ => return Ok(None),
     };
     result.map(Some)
-}
-
-pub(crate) fn lower_automatic_placement_ranges(
-    table: &SourceUiPayloadNode,
-) -> Result<Vec<BiomeAutomaticPlacementRange>, String> {
-    fn attribute<'a>(node: &'a SourceUiPayloadNode, name: &str) -> Option<&'a str> {
-        node.attributes.iter().find_map(|value| {
-            value
-                .name
-                .eq_ignore_ascii_case(name)
-                .then_some(value.value.as_str())
-        })
-    }
-    let mut indexed = Vec::with_capacity(table.children.len());
-    for range in &table.children {
-        let index = range
-            .name
-            .to_ascii_lowercase()
-            .strip_prefix("range")
-            .and_then(|value| value.parse::<usize>().ok())
-            .ok_or_else(|| format!("invalid automatic-placement range {:?}", range.name))?;
-        let maximum_mask_value = attribute(range, "threshold")
-            .and_then(|value| value.parse::<u8>().ok())
-            .ok_or_else(|| format!("invalid automatic-placement threshold for {:?}", range.name))?;
-        let mut choices = Vec::with_capacity(range.children.len());
-        for entry in &range.children {
-            let weight = attribute(entry, "weight")
-                .and_then(|value| value.parse::<u32>().ok())
-                .filter(|weight| *weight != 0)
-                .ok_or_else(|| {
-                    format!("invalid automatic-placement weight for {:?}", entry.name)
-                })?;
-            let key = canonicalize_source_document_record_key(&entry.name);
-            choices.push(BiomeAutomaticPlacementChoice {
-                object: (key != "nothing").then(|| AssetId::from_key(&key)),
-                weight,
-            });
-        }
-        indexed.push((
-            index,
-            BiomeAutomaticPlacementRange {
-                maximum_mask_value,
-                choices,
-            },
-        ));
-    }
-    indexed.sort_unstable_by_key(|(index, _)| *index);
-    if indexed
-        .iter()
-        .enumerate()
-        .any(|(index, (authored, _))| index != *authored)
-        || indexed
-            .windows(2)
-            .any(|pair| pair[0].1.maximum_mask_value >= pair[1].1.maximum_mask_value)
-    {
-        return Err(
-            "automatic-placement ranges require contiguous indexes and ascending thresholds"
-                .to_owned(),
-        );
-    }
-    Ok(indexed.into_iter().map(|(_, range)| range).collect())
 }

@@ -62,6 +62,16 @@ pub(super) fn validate_animal_snapshot_records(
                 .any(|value| !value.is_finite())
             || (Quat::from_array(record.rotation).length_squared() - 1.0).abs() > 0.001
             || record.scale.iter().any(|value| *value <= 0.0)
+            || record.pending_tokens.iter().any(|token| {
+                token.available_at > token.expires_at
+                    || token
+                        .context
+                        .as_ref()
+                        .is_some_and(|context| !context.is_valid())
+                    || token
+                        .payload
+                        .is_some_and(|payload| matches!(payload, 0 | u64::MAX))
+            })
             || record.treatment.is_some_and(|treatment| {
                 matches!(treatment.provider, 0 | u64::MAX)
                     || treatment.definition == AssetId::default()

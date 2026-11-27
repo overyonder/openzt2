@@ -1,12 +1,12 @@
 use super::authored_binder_reference_resolution::AuthoredBinderSources;
 use super::source_reference_discovery::{
-    AuthoredWorldDefinitionSourceReference,
     authored_biome_automatic_placement_supplement_source_paths,
     authored_hireable_generic_binder_family_variant_source_paths,
     collect_authored_typed_binder_family_references,
     collect_authored_world_definition_source_document_dependency_references,
     ordered_source_document_contains_element_named,
     resolved_world_definition_source_documents_declare_viewing_area_type,
+    AuthoredWorldDefinitionSourceReference,
 };
 use super::unresolved_reference;
 use crate::asset_source::AssetArchives;

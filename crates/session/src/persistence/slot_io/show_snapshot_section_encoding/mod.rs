@@ -7,12 +7,14 @@ use super::super::{
     snapshot_container_types::WorldSnapshotSectionDirectoryEntry,
 };
 use super::show_snapshot_types::{
-    RunningShowSnapshot, ScheduledShowBreakSnapshotRecord, ScheduledShowPerformanceSnapshotRecord,
-    ScheduledShowSnapshotRecord, ShowSnapshotRecords, ShowStageSnapshotRecord,
+    RunningShowContinuation, RunningShowSnapshot, ScheduledShowBreakSnapshotRecord,
+    ScheduledShowPerformanceSnapshotRecord, ScheduledShowSnapshotRecord, ShowSnapshotRecords,
+    ShowStageSnapshotRecord,
 };
 
 const SHOW_RATINGS_EXTENSION: &[u8; 4] = b"SRAT";
 const RUNNING_SHOW_EXTENSION: &[u8; 4] = b"SRUN";
+const SHOW_CONTINUATION_EXTENSION: &[u8; 4] = b"SCN1";
 const ABSENT_SHOW_RATING: u32 = u32::MAX;
 
 pub(super) fn append_encoded_show_snapshot_section(
@@ -89,7 +91,7 @@ pub(super) fn append_encoded_show_snapshot_section(
         bytes.extend_from_slice(RUNNING_SHOW_EXTENSION);
         bytes.extend_from_slice(&running_count.to_le_bytes());
         for stage in stages {
-            let Some(running) = stage.running else {
+            let Some(running) = stage.running.as_ref() else {
                 continue;
             };
             bytes.extend_from_slice(&stage.persistent_identifier.0.to_le_bytes());
@@ -102,6 +104,24 @@ pub(super) fn append_encoded_show_snapshot_section(
             bytes.extend_from_slice(&running.failed_tricks.to_le_bytes());
             bytes.extend_from_slice(&running.remaining_ns.to_le_bytes());
         }
+    }
+    let continuations = stages
+        .iter()
+        .filter_map(|stage| {
+            stage
+                .running
+                .as_ref()?
+                .continuation
+                .as_ref()
+                .map(|saved| (stage.persistent_identifier.0, saved))
+        })
+        .collect::<Vec<_>>();
+    if !continuations.is_empty() {
+        bytes.extend_from_slice(SHOW_CONTINUATION_EXTENSION);
+        bytes.extend(
+            postcard::to_allocvec(&continuations)
+                .expect("show continuation uses serializable fields"),
+        );
     }
 }
 
@@ -373,11 +393,12 @@ pub(super) fn decode_and_validate_show_snapshot_section(
         const RUNNING_SHOW_BYTES: usize = 45;
         if count == 0
             || count > stages.len()
-            || data.len() != count.saturating_mul(RUNNING_SHOW_BYTES)
+            || data.len() < count.saturating_mul(RUNNING_SHOW_BYTES)
         {
             return Err(CorruptSnapshotSection);
         }
-        for row in data.chunks_exact(RUNNING_SHOW_BYTES) {
+        let (rows, next) = data.split_at(count * RUNNING_SHOW_BYTES);
+        for row in rows.chunks_exact(RUNNING_SHOW_BYTES) {
             let u64_at = |offset| u64::from_le_bytes(row[offset..offset + 8].try_into().unwrap());
             let u32_at = |offset| u32::from_le_bytes(row[offset..offset + 4].try_into().unwrap());
             let stage_id = u64_at(0);
@@ -390,6 +411,7 @@ pub(super) fn decode_and_validate_show_snapshot_section(
                 completed_tricks: u32_at(29),
                 failed_tricks: u32_at(33),
                 remaining_ns: u64_at(37),
+                continuation: None,
             };
             let stage = stages
                 .binary_search_by_key(&stage_id, |stage| stage.persistent_identifier.0)
@@ -413,7 +435,70 @@ pub(super) fn decode_and_validate_show_snapshot_section(
             }
             stage.running = Some(running);
         }
-        remaining = &[];
+        remaining = next;
+    }
+    if let Some(data) = remaining.strip_prefix(SHOW_CONTINUATION_EXTENSION) {
+        let (restored, rest) =
+            postcard::take_from_bytes::<Vec<(u64, RunningShowContinuation)>>(data)
+                .map_err(|_| CorruptSnapshotSection)?;
+        if restored.is_empty() || restored.len() > stages.len() || !rest.is_empty() {
+            return Err(CorruptSnapshotSection);
+        }
+        for (stage_id, continuation) in restored {
+            let index = stages
+                .binary_search_by_key(&stage_id, |stage| stage.persistent_identifier.0)
+                .map_err(|_| CorruptSnapshotSection)?;
+            let running = stages[index]
+                .running
+                .as_mut()
+                .ok_or(CorruptSnapshotSection)?;
+            let plan = scheduled
+                .iter()
+                .find(|row| row.persistent_identifier.0 == running.row_id);
+            let slots = plan.map_or(&[][..], |plan| plan.performance_records.as_slice());
+            let valid = |slot: u32| (slot as usize) < slots.len();
+            if running.continuation.is_some()
+                || running.current_slot as usize > continuation.columns.len()
+                || continuation
+                    .columns
+                    .iter()
+                    .any(|column| column.is_empty() || !column.iter().copied().all(valid))
+                || continuation
+                    .scores
+                    .as_ref()
+                    .is_some_and(|(predicted, actual)| {
+                        predicted
+                            .iter()
+                            .chain(actual)
+                            .any(|(slot, score)| !valid(*slot) || !score.is_finite())
+                            || !predicted.windows(2).all(|pair| pair[0].0 < pair[1].0)
+                            || !actual.windows(2).all(|pair| pair[0].0 < pair[1].0)
+                    })
+                || !continuation
+                    .tricks
+                    .windows(2)
+                    .all(|pair| pair[0].slot < pair[1].slot)
+                || continuation.tricks.iter().any(|trick| {
+                    let Some(slot) = slots.get(trick.slot as usize) else {
+                        return true;
+                    };
+                    slot.performer_persistent_identifier.0 != trick.performer
+                        || slot.trick_definition_identifier != Some(trick.definition)
+                        || (trick.pending_token_duration.is_some() && !trick.tokens.is_empty())
+                        || trick.tokens.iter().any(|token| {
+                            token.available_at > token.expires_at
+                                || token.execution == Some(0)
+                                || token
+                                    .destination
+                                    .is_some_and(|value| !value.into_iter().all(f32::is_finite))
+                        })
+                })
+            {
+                return Err(CorruptSnapshotSection);
+            }
+            running.continuation = Some(continuation);
+        }
+        remaining = rest;
     }
     if !remaining.is_empty() {
         return Err(CorruptSnapshotSection);

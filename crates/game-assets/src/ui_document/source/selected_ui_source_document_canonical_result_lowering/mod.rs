@@ -104,3 +104,6 @@ pub(super) fn lower_selected_ui_source_documents_to_canonical_result_documents(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;

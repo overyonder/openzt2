@@ -68,6 +68,8 @@ pub struct GraphicsSettings {
     pub water_detail: FourLevelGraphicsDetail,
     pub detail_objects: EnvironmentalDetailObjectDensity,
     pub object_detail: ThreeLevelGraphicsDetail,
+    #[serde(skip, default = "default_object_lod_distance_scales")]
+    pub object_lod_distance_scales: [u32; 4],
     pub physical_animations: bool,
     pub prop_attachments: bool,
     pub object_texture_detail: ThreeLevelGraphicsDetail,
@@ -89,6 +91,26 @@ pub struct GraphicsSettings {
     pub particle_budget_tier: Option<ThreeLevelGraphicsDetail>,
 }
 
+const fn default_object_lod_distance_scales() -> [u32; 4] {
+    [1.0_f32.to_bits(); 4]
+}
+
+impl GraphicsSettings {
+    /// The default model LOD distance group uses lane two.
+    #[must_use]
+    pub fn object_lod_distance_scale(&self) -> f32 {
+        f32::from_bits(self.object_lod_distance_scales[2])
+    }
+
+    #[must_use]
+    pub fn object_lod_distance_scale_for_group(&self, group: usize) -> f32 {
+        self.object_lod_distance_scales
+            .get(group)
+            .copied()
+            .map_or_else(|| self.object_lod_distance_scale(), f32::from_bits)
+    }
+}
+
 impl Default for GraphicsSettings {
     fn default() -> Self {
         Self {
@@ -104,6 +126,7 @@ impl Default for GraphicsSettings {
             water_detail: FourLevelGraphicsDetail::Ultra,
             detail_objects: EnvironmentalDetailObjectDensity::High,
             object_detail: ThreeLevelGraphicsDetail::High,
+            object_lod_distance_scales: default_object_lod_distance_scales(),
             physical_animations: true,
             prop_attachments: true,
             object_texture_detail: ThreeLevelGraphicsDetail::High,

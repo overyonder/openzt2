@@ -22,7 +22,12 @@ pub fn calculate_authored_object_sale_refund(object: &WorldObjectDefinition) -> 
     if transaction.kind != EconomyTransactionKind::Credit {
         return None;
     }
-    let amount =
-        evaluate_authored_transaction_amount(transaction, None, object.price_cents, None, || None)?;
+    let amount = evaluate_authored_transaction_amount(
+        transaction,
+        None,
+        Money::from_cents(object.price_cents),
+        None,
+        || None,
+    )?;
     authored_currency_to_money(amount)
 }

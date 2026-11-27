@@ -127,6 +127,9 @@ impl Plugin for AnimationPlaybackPlugin {
                 (
                     procedural_ground_fit::clear_procedural_ground_fit_pose
                         .before(bevy::app::AnimationSystems),
+                    locomotion_root_motion::bind_root_motion_joints
+                        .after(bind_new_named_model_entities_and_new_animation_playback_controller_descendants)
+                        .before(locomotion_root_motion::remove_consumed_root_trajectory),
                     procedural_ground_fit::index_ground_fit_joints
                         .after(bind_new_named_model_entities_and_new_animation_playback_controller_descendants)
                         .before(procedural_ground_fit::apply_procedural_ground_fit_pose),

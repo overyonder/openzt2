@@ -70,6 +70,7 @@ impl AssetLoader for NativeModelAssetLoader {
             .path()
             .to_string_lossy()
             .into_owned();
+        let mut model_source = blake3::Hasher::new();
         let lowered_native_model =
             if is_gltf_model_asset_path(native_model_load_context.path().path()) {
                 if let Some(replacement) = self
@@ -78,6 +79,7 @@ impl AssetLoader for NativeModelAssetLoader {
                 {
                     native_model_source_bytes = replacement.to_vec();
                 }
+                model_source.update(&native_model_source_bytes);
                 LoweredNativeModel {
                     scene_prefab_document: gltf_model_scene_prefab(
                         &native_model_asset_path,
@@ -93,6 +95,11 @@ impl AssetLoader for NativeModelAssetLoader {
                 let replacement = self
                     .archives
                     .gltf_model_replacement(native_model_load_context.path().path())?;
+                model_source.update(&[u8::from(replacement.is_some())]);
+                model_source.update(&native_model_source_bytes);
+                if let Some(replacement) = &replacement {
+                    model_source.update(blake3::hash(replacement).as_bytes());
+                }
                 let lowered = lower_native_model_source(
                     &native_model_asset_path,
                     &native_model_source_bytes,
@@ -220,7 +227,8 @@ impl AssetLoader for NativeModelAssetLoader {
                 scene_prefab::create_scene_prefab_asset_and_load_dependencies(
                     lowered_native_model.scene_prefab_document,
                     label_context,
-                ),
+                )
+                .with_model_source_digest(*model_source.finalize().as_bytes()),
             )
         })?;
 

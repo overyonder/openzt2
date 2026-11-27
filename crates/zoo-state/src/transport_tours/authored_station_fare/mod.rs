@@ -25,7 +25,7 @@ pub fn station_fare(
     evaluate_authored_transaction_amount(
         transaction,
         price_index.map(usize::from),
-        object.price_cents,
+        Money::from_cents(object.price_cents),
         None,
         || None,
     )

@@ -36,11 +36,11 @@ pub(super) struct StaffRequestJobKey {
     pub(super) routing: StaffJobRouting,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum StaffRequestJobEvent {
     Raised {
         key: StaffRequestJobKey,
-        urgency: u32,
+        priority: f32,
     },
     Cancelled {
         key: StaffRequestJobKey,

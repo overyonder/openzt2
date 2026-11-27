@@ -8,7 +8,7 @@ use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
-use crate::fossil_site_types::FossilSiteKind;
+use openzt2_zoo_state::extinct_animals::fossil_recovery_types::FossilSiteKind;
 use openzt2_zoo_state::extinct_animals::{
     fossil_collection_and_assembly_types::{
         FossilAssemblyTable, FossilPlacementScope, FossilPlacementSurface,

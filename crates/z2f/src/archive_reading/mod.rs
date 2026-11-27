@@ -64,6 +64,7 @@ impl ArchiveSet {
         Some(ArchiveReadEntry {
             archive_priority_index: winner.archive_priority_index,
             zip_entry_ordinal: winner.zip_entry_index,
+            content_revision: winner.content_revision,
         })
     }
 
@@ -74,13 +75,19 @@ impl ArchiveSet {
         zip_entry_ordinal: usize,
     ) -> Option<ArchiveReadEntry> {
         let path = normalize_asset_path_for_case_insensitive_archive_lookup(path);
-        let entry = self
-            .archive_entries_by_normalized_path
+        let state = self
+            .overlay_state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = state
+            .archives
             .get(archive_priority_index)?
+            .entries
             .get(&path)?;
         (entry.zip_entry_index == zip_entry_ordinal).then_some(ArchiveReadEntry {
             archive_priority_index,
             zip_entry_ordinal,
+            content_revision: entry.content_revision,
         })
     }
 
@@ -94,14 +101,28 @@ impl ArchiveSet {
         winner: ArchiveReadEntry,
         maximum_byte_count: usize,
     ) -> io::Result<Vec<u8>> {
-        let mut archive = self
-            .open_zip_archives
+        let state = self
+            .overlay_state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut archive = state
+            .archives
             .get(winner.archive_priority_index)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unknown Z2F archive"))?
+            .zip
             .clone();
+        drop(state);
         let mut entry = archive
             .by_index(winner.zip_entry_ordinal)
             .map_err(io::Error::other)?;
+        if entry.size() != winner.content_revision.uncompressed_size
+            || entry.crc32() != winner.content_revision.crc32
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Z2F entry was replaced",
+            ));
+        }
         let capacity = usize::try_from(entry.size())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Z2F entry is too large"))?;
         if capacity > maximum_byte_count {

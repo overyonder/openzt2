@@ -1,7 +1,7 @@
 use std::io;
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
 
@@ -92,9 +92,5 @@ impl AssetLoader for PathPlacementHighlightLoader {
             fallback: context.load("entities/objects/paths/shared/west_hilite.tga"),
             curves,
         })
-    }
-
-    fn extensions(&self) -> &[&str] {
-        &["xml"]
     }
 }

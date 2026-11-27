@@ -80,21 +80,12 @@ pub(crate) fn project_camera_actions_into_camera_intent(
             .or_else(|| {
                 (*mode == CameraMode::FirstPerson).then(|| AssetId::from_key("mode_first_person"))
             });
-        let first_person = mode_policy
-            .into_iter()
-            .flat_map(|mode| commands.first_person(mode))
-            .collect::<bevy::platform::collections::HashSet<_>>();
-        use openzt2_game_data::ui_document::action::camera::UiFirstPersonCommand as Command;
-        next.first_person_commands = crate::camera::camera_execution_types::FirstPersonCommands {
-            forward: first_person.contains(&Command::Forward),
-            backward: first_person.contains(&Command::Backward),
-            turn_left: first_person.contains(&Command::TurnLeft),
-            turn_right: first_person.contains(&Command::TurnRight),
-            up: first_person.contains(&Command::Up),
-            down: first_person.contains(&Command::Down),
-            crouch: first_person.contains(&Command::Crouch),
-            free_mouse_look: first_person.contains(&Command::FreeMouseLook),
-        };
+        next.first_person_commands =
+            crate::camera::ui_actions::resolve_first_person_command_actions(
+                mode_policy
+                    .into_iter()
+                    .flat_map(|mode| commands.first_person_actions(mode)),
+            );
         let edge = next.edge_pan.filter(|(surface, _)| {
             *mode == CameraMode::Overhead
                 && tuning.edge_scroll

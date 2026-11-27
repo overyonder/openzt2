@@ -1,17 +1,12 @@
-use std::{io, path::Path};
+use std::io;
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
 
 use crate::{
-    asset_source::{
-        AssetArchives,
-        archive_entry_asset_path::{
-            ARCHIVE_ENTRY_ASSET_EXTENSION, archive_entry_asset_source_path,
-        },
-    },
+    asset_source::{archive_entry_asset_path::archive_entry_asset_source_path, AssetArchives},
     world_definitions::world_definition_asset_loading::authored_binder_reference_resolution::resolve_binder_file_reference,
     {
         source_document::{
@@ -19,7 +14,7 @@ use crate::{
             blue_fang_source_document_parsing::parse_blue_fang_source_document,
             ordered_source_document_collection_precedence::reorder_ordered_source_documents_by_requested_normalized_path_keys_and_last_definition_precedence,
             ordered_source_document_types::OrderedSourceDocument,
-            path::{AssetPath, is_authored_file_reference},
+            path::{is_authored_file_reference, AssetPath},
         },
         species::source::{
             collect_authored_species_type_source_references,
@@ -121,12 +116,12 @@ impl AssetLoader for SpeciesAssetLoader {
             )
             .await?;
 
-        let mut variant_need_adjustments = Box::default();
+        let mut binder = Default::default();
         let document = lower_resolved_species_source_document_closure_to_canonical_document(
             &documents,
             &actor_manifest_resolution_index,
             &primary_path,
-            &mut variant_need_adjustments,
+            &mut binder,
         )
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         let mut animation_sets = actor_manifest_resolution_index
@@ -143,12 +138,8 @@ impl AssetLoader for SpeciesAssetLoader {
         animation_sets.dedup_by_key(|dependency| dependency.id);
         Ok(SpeciesAsset {
             document,
-            variant_need_adjustments,
+            binder,
             animation_sets: animation_sets.into_boxed_slice(),
         })
-    }
-
-    fn extensions(&self) -> &[&str] {
-        &["xml", ARCHIVE_ENTRY_ASSET_EXTENSION]
     }
 }

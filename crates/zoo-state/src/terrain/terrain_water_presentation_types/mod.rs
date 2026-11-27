@@ -179,6 +179,14 @@ impl TerrainWaterRegionSource {
 }
 
 pub type TerrainWaterSupportLimits = HashMap<u32, [f32; 2]>;
+
+#[derive(Message, Debug, Clone)]
+pub struct TerrainWaterCellsChanged {
+    pub root: Entity,
+    pub terrain: bevy::asset::AssetId<TerrainAsset>,
+    /// Inclusive source-grid point rectangles. `None` replaces the whole source.
+    pub source_bounds: Option<Box<[(UVec2, UVec2)]>>,
+}
 type FenceProbeSegments = Box<[[Vec2; 2]]>;
 pub type TerrainWaterSelectorTilePatch = (UVec2, [u8; 4], [FenceProbeSegments; 8]);
 

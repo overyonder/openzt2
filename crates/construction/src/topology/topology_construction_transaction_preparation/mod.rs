@@ -1,5 +1,4 @@
 use super::elevated_curb_layout::ElevatedCurbSurfaces;
-use super::elevated_path_layout::{elevated_path_tiles, ElevatedPathSurfaceEdits};
 use crate::construction::construction_transaction_preparation::SubmittedPreview;
 use bevy::prelude::*;
 use openzt2_zoo_state::topology::{
@@ -283,13 +282,14 @@ fn prepare_path_construction_snapshots(
         terrain_chunks,
     )?;
     let mut snapshots = Vec::with_capacity(cells.len());
-    for cell in cells {
+    for (cell, surface) in cells {
         snapshots.push(TopologySnapshot::Path {
             id: ids
                 .allocate()
                 .map_err(|_| PlacementFailure::InvalidTopology)?,
             definition: preview.definition,
             cell,
+            height_cm: surface.height_cm,
         });
     }
     Ok((snapshots, cost))
@@ -528,25 +528,6 @@ pub(super) fn prepare_topology_construction_transaction(
                         );
                         continue;
                     }
-                }
-                if let Some(samples) = path.and_then(|preview| {
-                    let definition = definitions.find_path(preview.definition)?;
-                    elevated_path_tiles(preview, definition)
-                }) {
-                    let samples: bevy::platform::collections::HashMap<_, _> =
-                        samples.into_iter().collect();
-                    let surfaces = created
-                        .iter()
-                        .filter_map(|snapshot| {
-                            let TopologySnapshot::Path { id, cell, .. } = *snapshot else {
-                                return None;
-                            };
-                            Some((id, *samples.get(&cell)?))
-                        })
-                        .collect();
-                    commands
-                        .entity(request.transaction)
-                        .insert(ElevatedPathSurfaceEdits(surfaces));
                 }
                 commands.entity(request.transaction).insert(TopologyEdit {
                     created: created.into_boxed_slice(),

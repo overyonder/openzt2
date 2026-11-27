@@ -64,6 +64,21 @@ pub(super) struct ScenarioLuaQueryFactSources<'w, 's> {
         &'static openzt2_interface_state::camera::camera_runtime_state_types::OverheadRig,
         With<openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera>,
     >,
+    guest_view_sessions: Query<
+        'w,
+        's,
+        (
+            &'static openzt2_interface_state::immersive_modes::immersive_mode_state_types::GuestViewTileCount,
+            &'static openzt2_interface_state::immersive_modes::immersive_mode_state_types::ImmersiveCamera,
+        ),
+        With<openzt2_interface_state::immersive_modes::immersive_mode_state_types::ActiveImmersiveMode>,
+    >,
+    guest_view_cameras: Query<
+        'w,
+        's,
+        &'static openzt2_world_state::world_spawn::world_membership_types::WorldMember,
+        With<openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera>,
+    >,
 }
 
 impl ScenarioLuaQueryFactSources<'_, '_> {
@@ -138,6 +153,7 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
             fence_edges,
             path_tiles,
             biome_cells: selected.and_then(|(root, ..)| self.biome_cells.get(root).ok()),
+            ui_receiver: None,
             ui_nodes,
             ui_roots,
             ui_documents: &self.ui_documents,
@@ -150,6 +166,14 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
             real_seconds: self.real_time.elapsed_secs_f64(),
             overhead_camera: self.overhead_cameras.iter().next(),
             construction_tool: self.construction_tool.as_deref().copied(),
+            guest_view_tile_count: selected
+                .and_then(|(root, ..)| {
+                    self.guest_view_sessions.iter().find_map(|(count, camera)| {
+                        (self.guest_view_cameras.get(camera.0).ok()?.root == root)
+                            .then_some(count.0)
+                    })
+                })
+                .unwrap_or_default(),
         }
     }
 

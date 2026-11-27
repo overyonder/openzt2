@@ -22,7 +22,7 @@ pub(super) fn build_authored_axis_and_diagonal_transport_track_piece_chain(
             .then(|| {
                 (
                     vec![from_position, to_position],
-                    Money(definition.purchase_cost_cents),
+                    Money::from_cents(definition.purchase_cost_cents),
                 )
             });
     }
@@ -128,10 +128,8 @@ pub(super) fn build_authored_axis_and_diagonal_transport_track_piece_chain(
     if !authored_transport_track_piece_chain_is_valid(definition, &path_points) {
         return None;
     }
-    let cost = definition
-        .purchase_cost_cents
-        .checked_mul(i64::from(piece_count))
-        .map(Money)?;
+    let cost =
+        Money::from_cents(definition.purchase_cost_cents).checked_scale(f32::from(piece_count))?;
     Some((path_points, cost))
 }
 
@@ -157,7 +155,7 @@ pub(super) fn build_projected_authored_axis_or_diagonal_transport_track_piece_ch
                         from_position,
                         from_position + displacement * (distance / horizontal),
                     ],
-                    Money(definition.purchase_cost_cents),
+                    Money::from_cents(definition.purchase_cost_cents),
                 )
             });
     }
@@ -240,10 +238,8 @@ pub(super) fn build_projected_authored_axis_or_diagonal_transport_track_piece_ch
     if !authored_transport_track_piece_chain_is_valid(definition, &path_points) {
         return None;
     }
-    let cost = definition
-        .purchase_cost_cents
-        .checked_mul(i64::from(piece_count))
-        .map(Money)?;
+    let cost =
+        Money::from_cents(definition.purchase_cost_cents).checked_scale(f32::from(piece_count))?;
     Some((path_points, cost))
 }
 

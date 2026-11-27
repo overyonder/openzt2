@@ -64,7 +64,7 @@ pub(super) struct ParticlePointsAwaitingUpload;
 #[derive(Component)]
 pub(super) struct ParticleSpawnAwaitingClear;
 
-pub(crate) fn prepare_explicit_particle_emitters(
+pub(super) fn prepare_explicit_particle_emitters(
     mut commands: Commands,
     mut emitters: Query<
         (

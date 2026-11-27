@@ -5,6 +5,7 @@ use bevy::{
 };
 use openzt2_game_data::ui_document::node_property_binding::UiIntegerPropertyBindingSource;
 
+use openzt2_game_assets::localization::loaded_localization_queries::CurrencyLocalization;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValueBinding;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooDay;
@@ -12,13 +13,12 @@ use openzt2_zoo_state::animal_health::types::Disease;
 use openzt2_zoo_state::animal_lifecycle::types::Pregnancy;
 use openzt2_zoo_state::animal_welfare::types::CumulativeNeedPoints;
 use openzt2_zoo_state::donations::donation_payment_types::DonationTotal;
-use openzt2_zoo_state::economy::currency_formatting::write_whole_dollar_currency_with_thousands_separators;
 use openzt2_zoo_state::economy::facility_economy_types::FacilityProfit;
 use openzt2_zoo_state::economy::facility_economy_types::OperatingSinceDay;
 use openzt2_zoo_state::economy::service_types::FacilityReservations;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestSatisfaction;
 use openzt2_zoo_state::staff::staff_assignment_types::{
-    StaffAssignmentArea, StaffAssignmentTarget,
+    StaffAssignmentArea, StaffAssignmentRecord, StaffAssignmentTarget,
 };
 use openzt2_zoo_state::transport_tours::transport_rider_types::VehicleRiders;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
@@ -38,6 +38,7 @@ pub(crate) struct InformationValueInvalidation<'w, 's> {
             Changed<GuestSatisfaction>,
             Changed<StaffAssignmentArea>,
             Changed<StaffAssignmentTarget>,
+            Changed<Children>,
             Changed<FacilityReservations>,
             Changed<OperatingSinceDay>,
             Changed<FacilityProfit>,
@@ -59,18 +60,30 @@ pub(crate) struct InformationValueInvalidation<'w, 's> {
         RemovedComponents<'w, 's, DonationTotal>,
         RemovedComponents<'w, 's, TransportVehicle>,
         RemovedComponents<'w, 's, VehicleRiders>,
+        RemovedComponents<'w, 's, Children>,
     ),
 }
 
 /// Updates information-list values from the referenced entities.
 pub(crate) fn project_live_world_subject_values_to_information_list_rows(
     information_entity_sources: InformationRows,
+    currency: CurrencyLocalization,
     mut formatted: Local<String>,
     animal_need_points: Query<&CumulativeNeedPoints>,
     animal_diseases: Query<(), With<Disease>>,
     animal_pregnancies: Query<(), With<Pregnancy>>,
     guest_satisfaction: Query<&GuestSatisfaction>,
-    staff_assignments: Query<(Has<StaffAssignmentArea>, Has<StaffAssignmentTarget>)>,
+    (staff_assignments, assignment_records): (
+        Query<
+            (
+                Has<StaffAssignmentArea>,
+                Has<StaffAssignmentTarget>,
+                Option<&Children>,
+            ),
+            With<openzt2_zoo_state::staff::staff_employment_types::Staff>,
+        >,
+        Query<(), With<StaffAssignmentRecord>>,
+    ),
     facility_reservations: Query<&FacilityReservations>,
     facility_operating_dates: Query<&OperatingSinceDay>,
     facility_profits: Query<&FacilityProfit>,
@@ -82,6 +95,7 @@ pub(crate) fn project_live_world_subject_values_to_information_list_rows(
 ) {
     let zoo_day = zoo_day.into_inner();
     let day_changed = zoo_day.is_changed();
+    let localization_changed = currency.is_changed();
     let removed = &mut invalidation.removed;
     let dirty_subjects = invalidation
         .subjects
@@ -98,6 +112,7 @@ pub(crate) fn project_live_world_subject_values_to_information_list_rows(
         .chain(removed.9.read())
         .chain(removed.10.read())
         .chain(removed.11.read())
+        .chain(removed.12.read())
         .collect::<std::collections::HashSet<_>>();
     for (source, fields) in &information_entity_sources {
         let refresh_row = source.is_changed()
@@ -110,12 +125,13 @@ pub(crate) fn project_live_world_subject_values_to_information_list_rows(
                 continue;
             };
             if !refresh_row
+                && !localization_changed
                 && !value_binding.is_changed()
                 && !text.as_ref().is_some_and(|text| text.is_added())
             {
                 continue;
             }
-            let Some((next_value, currency)) = project_information_list_value(
+            let Some((next_value, is_currency)) = project_information_list_value(
                 &value_binding.0,
                 source.0,
                 &animal_need_points,
@@ -123,6 +139,7 @@ pub(crate) fn project_live_world_subject_values_to_information_list_rows(
                 &animal_pregnancies,
                 &guest_satisfaction,
                 &staff_assignments,
+                &assignment_records,
                 &facility_reservations,
                 &facility_operating_dates,
                 &facility_profits,
@@ -135,11 +152,8 @@ pub(crate) fn project_live_world_subject_values_to_information_list_rows(
             projected_value.set_if_neq(UiValue(next_value));
             if let Some(mut text) = text {
                 formatted.clear();
-                if currency {
-                    write_whole_dollar_currency_with_thousands_separators(
-                        &mut formatted,
-                        next_value,
-                    );
+                if is_currency {
+                    let _ = currency.write_amount(next_value, false, &mut *formatted);
                 } else {
                     use std::fmt::Write;
                     let _ = write!(&mut formatted, "{next_value}");
@@ -160,7 +174,15 @@ fn project_information_list_value(
     animal_diseases: &Query<(), With<Disease>>,
     animal_pregnancies: &Query<(), With<Pregnancy>>,
     guest_satisfaction: &Query<&GuestSatisfaction>,
-    staff_assignments: &Query<(Has<StaffAssignmentArea>, Has<StaffAssignmentTarget>)>,
+    staff_assignments: &Query<
+        (
+            Has<StaffAssignmentArea>,
+            Has<StaffAssignmentTarget>,
+            Option<&Children>,
+        ),
+        With<openzt2_zoo_state::staff::staff_employment_types::Staff>,
+    >,
+    assignment_records: &Query<(), With<StaffAssignmentRecord>>,
     facility_reservations: &Query<&FacilityReservations>,
     facility_operating_dates: &Query<&OperatingSinceDay>,
     facility_profits: &Query<&FacilityProfit>,
@@ -185,7 +207,14 @@ fn project_information_list_value(
             .unwrap_or(0),
         UiIntegerPropertyBindingSource::InformationListStaffAssignmentCount => staff_assignments
             .get(subject)
-            .map(|(area, target)| i64::from(area) + i64::from(target))
+            .map(|(area, target, children)| {
+                let records = children
+                    .into_iter()
+                    .flat_map(RelationshipTarget::iter)
+                    .filter(|&child| assignment_records.contains(child))
+                    .count();
+                i64::try_from(records).unwrap_or(i64::MAX - 2) + i64::from(area) + i64::from(target)
+            })
             .unwrap_or(0),
         UiIntegerPropertyBindingSource::FacilityOperatingMonths => facility_operating_dates
             .get(subject)

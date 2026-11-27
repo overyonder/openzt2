@@ -61,5 +61,5 @@ pub struct LoadSaveSlotCatalogue;
 pub struct SaveSlotCatalogueReady;
 
 /// Present for the lifetime of a save, load, or delete operation.
-#[derive(Component)]
+#[derive(Component, Default)]
 pub struct PersistenceBusy;

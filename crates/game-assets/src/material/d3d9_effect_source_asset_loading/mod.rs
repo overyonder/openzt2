@@ -28,7 +28,7 @@ impl AssetLoader for D3d9EffectSourceAssetLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["fx", "fxh", "h"]
+        &["fx", "fxh"]
     }
 }
 

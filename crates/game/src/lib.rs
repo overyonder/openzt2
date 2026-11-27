@@ -7,6 +7,8 @@ mod missing_game_content_screen;
 #[cfg(feature = "mod-audit")]
 mod mod_audit;
 mod openzt2_game_plugin_group;
+#[cfg(test)]
+mod schedule_initialization_tests;
 
 use bevy::{
     asset::{io::AssetSourceId, AssetApp, AssetPlugin},
@@ -49,20 +51,10 @@ fn run_game_application(launch_configuration: GameLaunchConfiguration) -> std::i
         missing_game_content_screen::show_missing_game_content_screen(&error);
         return Err(error);
     }
-    let original_saves =
-        openzt2_game_assets::original_saved_game_source::OriginalSavedGameSources::new(
-            2 * 1024 * 1024 * 1024,
-        );
-    game_application.register_asset_source("original-saves", original_saves.asset_source());
-    game_application.insert_resource(original_saves);
+    add_original_save_asset_source(&mut game_application);
     add_game_persistence_directories(&mut game_application)?;
-    add_default_bevy_platform_plugins(&mut game_application);
-    add_openzt2_game_states_and_update_schedules(&mut game_application);
-    game_application
-        .add_plugins(bevy_hanabi::HanabiPlugin)
-        .add_plugins(avian3d::prelude::PhysicsPlugins::default())
-        .add_plugins(OpenZt2AssetLoadingPluginGroup)
-        .add_plugins(OpenZt2GamePluginGroup);
+    game_application.add_plugins(game_platform_plugins());
+    add_openzt2_game_plugins(&mut game_application);
     add_developer_diagnostics_when_enabled(&mut game_application);
     #[cfg(feature = "mod-audit")]
     mod_audit::install(&mut game_application);
@@ -100,8 +92,17 @@ fn add_game_persistence_directories(game_application: &mut App) -> std::io::Resu
     Ok(())
 }
 
-fn add_default_bevy_platform_plugins(game_application: &mut App) {
-    let default_plugins = DefaultPlugins
+fn add_original_save_asset_source(game_application: &mut App) {
+    let original_saves =
+        openzt2_game_assets::original_saved_game_source::OriginalSavedGameSources::new(
+            2 * 1024 * 1024 * 1024,
+        );
+    game_application.register_asset_source("original-saves", original_saves.asset_source());
+    game_application.insert_resource(original_saves);
+}
+
+fn game_platform_plugins() -> bevy::app::PluginGroupBuilder {
+    DefaultPlugins
         .set(
             bevy::gltf::GltfPlugin::default()
                 .add_custom_vertex_attribute(
@@ -156,9 +157,11 @@ fn add_default_bevy_platform_plugins(game_application: &mut App) {
             }),
             exit_condition: ExitCondition::OnAllClosed,
             ..default()
-        });
+        })
+}
+
+fn add_openzt2_game_plugins(game_application: &mut App) {
     game_application
-        .add_plugins(default_plugins)
         .add_plugins(MeshPickingPlugin)
         .register_required_components::<
             openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera,
@@ -172,6 +175,12 @@ fn add_default_bevy_platform_plugins(game_application: &mut App) {
         require_markers: true,
         ..default()
     });
+    add_openzt2_game_states_and_update_schedules(game_application);
+    game_application
+        .add_plugins(bevy_hanabi::HanabiPlugin)
+        .add_plugins(avian3d::prelude::PhysicsPlugins::default())
+        .add_plugins(OpenZt2AssetLoadingPluginGroup)
+        .add_plugins(OpenZt2GamePluginGroup);
 }
 
 fn add_openzt2_game_states_and_update_schedules(game_application: &mut App) {

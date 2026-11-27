@@ -3,6 +3,7 @@ use openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter;
 use openzt2_zoo_state::economy::facility_economy_types::MaintenanceScheduleIndex;
 use openzt2_game_data::world_definitions::staff_management::StaffJobKind;
 use openzt2_game_data::world_definitions::staff_management::StaffRequestControllerDefinition;
+use openzt2_game_data::world_definitions::staff_management::StaffRequestProperty;
 use openzt2_game_data::world_definitions::staff_management::StaffRequestThresholdValue;
 use openzt2_game_data::AssetId;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -13,6 +14,7 @@ use openzt2_zoo_state::maintenance::maintenance_types::{FacilityContainedWaste, 
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_health::types::Disease;
 use openzt2_zoo_state::animal_health::types::Escaped;
+use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_welfare::types::HealthNeed;
 use openzt2_zoo_state::animal_welfare::types::Hunger;
@@ -21,13 +23,9 @@ use openzt2_zoo_state::animal_welfare::types::StimulationNeed;
 use openzt2_zoo_state::animal_welfare::types::Thirst;
 use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
 use openzt2_world_state::world_spawn::world_entity_crating::{AnimalCrate, ScriptedCrating, UncratedWorldEntity};
-use openzt2_zoo_state::staff::staff_job_types::authored_staff_request_urgency;
-use openzt2_zoo_state::staff::staff_job_types::StaffJob;
-use openzt2_zoo_state::staff::staff_job_types::{StaffJobRouting, StaffJobsAtTarget};
-use bevy::ecs::relationship::RelationshipTarget;
-use openzt2_zoo_state::staff::staff_lifecycle_messages::CancelStaffJobRequest;
+use openzt2_zoo_state::staff::staff_job_types::StaffJobRouting;
 use openzt2_zoo_state::staff::staff_lifecycle_messages::StaffJobRequest;
-use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
+use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
 use super::staff_request_fact_changes::{StaffRequestFactChanged, StaffRequestFactValue};
 use super::staff_request_state_types::StaffRequestRowIdentity;
 use super::staff_request_state_types::StaffRequestRuntimeState;
@@ -35,6 +33,7 @@ use super::staff_request_state_types::StaffRequestRuntimeBinding;
 use super::staff_request_state_types::StaffRequestJobKey;
 use super::staff_request_state_types::StaffRequestJobEvent;
 use super::staff_request_threshold_comparison::staff_threshold_matches;
+use super::StaffControllerJobChange;
 
 #[cfg(test)]
 mod tests;
@@ -50,6 +49,36 @@ fn empty_trash_token() -> AssetId {
 }
 fn empty_recycling_bin_token() -> AssetId {
     AssetId::from_key("t_emptyrecyclingbin")
+}
+
+fn authored_request_sample(
+    property: StaffRequestProperty,
+    attributes: Option<&AuthoredFloatAttributes>,
+    authored: Option<
+        &openzt2_game_data::world_definitions::world_objects::AuthoredWorldObjectRuntime,
+    >,
+) -> Option<StaffRequestFactValue> {
+    match property {
+        StaffRequestProperty::Number(key) => attributes
+            .and_then(|attributes| attributes.get(key))
+            .or_else(|| {
+                authored?
+                    .numeric_behavior_properties
+                    .iter()
+                    .find_map(|&(property, value)| (property == key).then_some(value))
+            })
+            .map(StaffRequestFactValue::Number),
+        StaffRequestProperty::Boolean(key) => attributes
+            .and_then(|attributes| attributes.get(key))
+            .map(|value| value != 0.0)
+            .or_else(|| {
+                authored?
+                    .boolean_behavior_properties
+                    .iter()
+                    .find_map(|&(property, value)| (property == key).then_some(value))
+            })
+            .map(StaffRequestFactValue::Boolean),
+    }
 }
 
 type AnimalRequestFacts = (
@@ -189,9 +218,7 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
     mut removed_definitions: RemovedComponents<DefinitionId>,
     orphaned: Query<&StaffRequestRuntimeBinding, Without<DefinitionId>>,
     mut entities: Query<(&DefinitionId, Option<&mut StaffRequestRuntimeBinding>)>,
-    jobs: Query<(&StaffJob, Option<&StaffJobRouting>)>,
-    job_targets: Query<&StaffJobsAtTarget>,
-    mut cancellations: MessageWriter<CancelStaffJobRequest>,
+    mut changes: MessageWriter<StaffControllerJobChange>,
 ) {
     for entity in removed_definitions.read() {
         let Ok(binding) = orphaned.get(entity) else {
@@ -199,7 +226,7 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
         };
         for state in &binding.rows {
             if let Some(key) = state.job_key(entity) {
-                cancel_staff_jobs(key, &jobs, &job_targets, &mut cancellations);
+                cancel_staff_jobs(key, &mut changes);
             }
         }
         commands
@@ -275,7 +302,7 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
                     continue;
                 }
                 if let Some(key) = old.job_key(entity) {
-                    cancel_staff_jobs(key, &jobs, &job_targets, &mut cancellations);
+                    cancel_staff_jobs(key, &mut changes);
                 }
             }
             if next.is_empty() {
@@ -314,6 +341,7 @@ pub(super) struct RemovedStaffRequestFacts<'w, 's> {
     crated: RemovedComponents<'w, 's, AnimalCrate>,
     script_crated: RemovedComponents<'w, 's, ScriptedCrating>,
     disabled: RemovedComponents<'w, 's, Disabled>,
+    authored: RemovedComponents<'w, 's, AuthoredFloatAttributes>,
 }
 
 impl RemovedStaffRequestFacts<'_, '_> {
@@ -337,6 +365,7 @@ impl RemovedStaffRequestFacts<'_, '_> {
             .chain(self.dead.read())
             .chain(self.crated.read().chain(self.script_crated.read()))
             .chain(self.disabled.read())
+            .chain(self.authored.read())
     }
 }
 
@@ -346,52 +375,56 @@ pub(super) fn evaluate_staff_request_rows(
     active_world_definitions: Res<WorldDefinitions>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     mut asset_events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
-    changed_facts: Query<
-        Entity,
-        (
-            With<StaffRequestRuntimeBinding>,
-            Or<(
-                Changed<StaffRequestRuntimeBinding>,
-                Changed<FoodContainer>,
-                Changed<DrinkContainer>,
-                Changed<FacilityContainedWaste>,
-                Changed<LooseLitterWaste>,
-                Changed<AnimalHabitatWaste>,
-                Changed<WaterFilter>,
-                Changed<MaintenanceScheduleIndex>,
-                Changed<Hunger>,
-                Changed<Thirst>,
-                Changed<HealthNeed>,
-                Changed<HygieneNeed>,
-                Changed<StimulationNeed>,
-                Or<(
-                    Added<Animal>,
-                    Added<Escaped>,
-                    Added<Disease>,
-                    Added<Dead>,
-                    Or<(Added<AnimalCrate>, Added<ScriptedCrating>)>,
-                )>,
-            )>,
-        ),
-    >,
     mut removed_facts: RemovedStaffRequestFacts,
-    mut entities: Query<(
-        Entity,
-        &DefinitionId,
-        &mut StaffRequestRuntimeBinding,
-        Option<&FoodContainer>,
-        Option<&DrinkContainer>,
-        Option<&FacilityContainedWaste>,
-        Option<&LooseLitterWaste>,
-        Option<&AnimalHabitatWaste>,
-        Option<&WaterFilter>,
-        Option<&MaintenanceScheduleIndex>,
+    mut requests: ParamSet<(
+        Query<
+            Entity,
+            (
+                With<StaffRequestRuntimeBinding>,
+                Or<(
+                    Or<(
+                        Changed<StaffRequestRuntimeBinding>,
+                        Changed<AuthoredFloatAttributes>,
+                    )>,
+                    Changed<FoodContainer>,
+                    Changed<DrinkContainer>,
+                    Changed<FacilityContainedWaste>,
+                    Changed<LooseLitterWaste>,
+                    Changed<AnimalHabitatWaste>,
+                    Changed<WaterFilter>,
+                    Changed<MaintenanceScheduleIndex>,
+                    Changed<Hunger>,
+                    Changed<Thirst>,
+                    Changed<HealthNeed>,
+                    Changed<HygieneNeed>,
+                    Changed<StimulationNeed>,
+                    Or<(
+                        Added<Animal>,
+                        Added<Escaped>,
+                        Added<Disease>,
+                        Added<Dead>,
+                        Or<(Added<AnimalCrate>, Added<ScriptedCrating>)>,
+                    )>,
+                )>,
+            ),
+        >,
+        Query<(
+            Entity,
+            &DefinitionId,
+            &mut StaffRequestRuntimeBinding,
+            Option<&FoodContainer>,
+            Option<&DrinkContainer>,
+            Option<&FacilityContainedWaste>,
+            Option<&LooseLitterWaste>,
+            Option<&AnimalHabitatWaste>,
+            Option<&WaterFilter>,
+            Option<&MaintenanceScheduleIndex>,
+            Option<&AuthoredFloatAttributes>,
+        )>,
     )>,
     animal_needs: Query<AnimalRequestFacts, (With<Animal>, Without<Dead>, UncratedWorldEntity)>,
-    jobs: Query<(&StaffJob, Option<&StaffJobRouting>)>,
-    job_targets: Query<&StaffJobsAtTarget>,
-    mut requests: MessageWriter<StaffJobRequest>,
-    mut cancellations: MessageWriter<CancelStaffJobRequest>,
+    worlds: Query<&WorldMember>,
+    mut changes: MessageWriter<StaffControllerJobChange>,
 ) {
     let assets_changed = asset_events.read().fold(false, |changed, event| {
         changed
@@ -406,15 +439,17 @@ pub(super) fn evaluate_staff_request_rows(
     };
     let removed = removed_facts.read();
     let candidates: Vec<Entity> = if refresh_all {
-        entities.iter().map(|(entity, ..)| entity).collect()
+        requests.p1().iter().map(|(entity, ..)| entity).collect()
     } else {
         let mut seen = EntityHashSet::default();
-        changed_facts
+        requests
+            .p0()
             .iter()
             .chain(removed)
             .filter(|&entity| seen.insert(entity))
             .collect()
     };
+    let mut entities = requests.p1();
     for candidate in candidates {
         let Ok((
             entity,
@@ -427,6 +462,7 @@ pub(super) fn evaluate_staff_request_rows(
             animal_waste,
             filter,
             schedule,
+            attributes,
         )) = entities.get_mut(candidate)
         else {
             continue;
@@ -434,6 +470,9 @@ pub(super) fn evaluate_staff_request_rows(
         let Some(rows) = definitions.staff_request_rows(definition.0) else {
             continue;
         };
+        let authored = definitions
+            .find_object(definition.0)
+            .map(|object| &object.authored_runtime);
         let sample = match (food, drink) {
             (Some(_), Some(_)) | (None, None) => None,
             (Some(food), None) => Some(food.amount_q16),
@@ -443,16 +482,25 @@ pub(super) fn evaluate_staff_request_rows(
             let Some(row) = rows.get(state.row_index) else {
                 continue;
             };
-            let sample = if row.attribute_key == Some(food_level_key()) {
+            let property = row.tracked_property();
+            let sample = if property == Some(StaffRequestProperty::Number(food_level_key())) {
                 sample.map(|q16| StaffRequestFactValue::Number(q16 as f32 / 65_536.0))
-            } else if row.attribute_key == Some(AssetId::from_key("f_trashlevel")) {
+            } else if property
+                == Some(StaffRequestProperty::Number(AssetId::from_key(
+                    "f_trashlevel",
+                )))
+            {
                 // The container's contained waste is its authored trash level.
                 waste.map(|waste| {
                     StaffRequestFactValue::Number(f32::from(waste.contained_waste_units))
                 })
-            } else if row.attribute_key == Some(AssetId::from_key("f_filterdirtylevel")) {
+            } else if property
+                == Some(StaffRequestProperty::Number(AssetId::from_key(
+                    "f_filterdirtylevel",
+                )))
+            {
                 filter.map(|filter| StaffRequestFactValue::Number(filter.dirt_percent))
-            } else if row.attribute_key.is_none() {
+            } else if property.is_none() {
                 // A controller without an attribute raises on creation only.
                 if litter.is_some_and(|litter| litter.uncontained_waste_units == 0)
                     || animal_waste.is_some_and(|waste| !waste.is_valid())
@@ -470,30 +518,38 @@ pub(super) fn evaluate_staff_request_rows(
                     // care work. Resume with a fresh sample if it returns.
                     state.previous = None;
                     if let Some(key) = state.job_key(entity) {
-                        cancel_staff_jobs(key, &jobs, &job_targets, &mut cancellations);
+                        cancel_staff_jobs(key, &mut changes);
                     }
                     continue;
                 };
                 Some(sample)
             } else {
-                None
+                property
+                    .and_then(|property| authored_request_sample(property, attributes, authored))
             };
             let scheduled = filter.and_then(|filter| filter_schedule_row(row, filter, schedule));
             if let Some(event) =
                 evaluate_staff_request_row(scheduled.as_ref().unwrap_or(row), state, entity, sample)
             {
                 match event {
-                    StaffRequestJobEvent::Raised { key, urgency } => {
-                        requests.write(StaffJobRequest {
+                    StaffRequestJobEvent::Raised { key, priority } => {
+                        let Ok(member) = worlds.get(key.target) else {
+                            continue;
+                        };
+                        changes.write(StaffControllerJobChange::Raise(StaffJobRequest {
+                            root: member.root,
                             kind: state.job_kind,
-                            target: key.target,
-                            urgency,
+                            target: Some(key.target),
+                            point: None,
+                            priority,
+                            issued_at_seconds: 0.0,
+                            remaining_wait_seconds: 0.0,
                             token: Some(key.token),
                             routing: key.routing,
-                        });
+                        }));
                     }
                     StaffRequestJobEvent::Cancelled { key } => {
-                        cancel_staff_jobs(key, &jobs, &job_targets, &mut cancellations);
+                        cancel_staff_jobs(key, &mut changes);
                     }
                 }
             }
@@ -533,21 +589,12 @@ impl StaffRequestRuntimeState {
 
 fn cancel_staff_jobs(
     key: StaffRequestJobKey,
-    jobs: &Query<(&StaffJob, Option<&StaffJobRouting>)>,
-    targets: &Query<&StaffJobsAtTarget>,
-    cancellations: &mut MessageWriter<CancelStaffJobRequest>,
+    changes: &mut MessageWriter<StaffControllerJobChange>,
 ) {
-    let Ok(candidates) = targets.get(key.target) else {
-        return;
-    };
-    for entity in candidates.iter() {
-        if jobs
-            .get(entity)
-            .is_ok_and(|(job, _)| job.token == Some(key.token))
-        {
-            cancellations.write(CancelStaffJobRequest { job: entity });
-        }
-    }
+    changes.write(StaffControllerJobChange::Cancel {
+        target: key.target,
+        token: key.token,
+    });
 }
 
 fn evaluate_staff_request_row(
@@ -581,7 +628,7 @@ fn evaluate_staff_request_row(
     if event {
         Some(StaffRequestJobEvent::Raised {
             key,
-            urgency: authored_staff_request_urgency(row.request.priority)?,
+            priority: row.request.priority,
         })
     } else {
         Some(StaffRequestJobEvent::Cancelled { key })
@@ -593,10 +640,8 @@ pub(super) fn apply_staff_request_fact_changes(
     assets: Res<Assets<WorldDefinitionAsset>>,
     mut facts: MessageReader<StaffRequestFactChanged>,
     mut bindings: Query<(&DefinitionId, &mut StaffRequestRuntimeBinding)>,
-    jobs: Query<(&StaffJob, Option<&StaffJobRouting>)>,
-    job_targets: Query<&StaffJobsAtTarget>,
-    mut requests: MessageWriter<StaffJobRequest>,
-    mut cancellations: MessageWriter<CancelStaffJobRequest>,
+    worlds: Query<&WorldMember>,
+    mut changes: MessageWriter<StaffControllerJobChange>,
 ) {
     let Some(definitions) = active.get(&assets) else {
         facts.clear();
@@ -618,17 +663,24 @@ pub(super) fn apply_staff_request_fact_changes(
             };
             state.previous = Some(change.previous);
             match evaluate_staff_request_row(row, state, change.owner, Some(change.current)) {
-                Some(StaffRequestJobEvent::Raised { key, urgency }) => {
-                    requests.write(StaffJobRequest {
+                Some(StaffRequestJobEvent::Raised { key, priority }) => {
+                    let Ok(member) = worlds.get(key.target) else {
+                        continue;
+                    };
+                    changes.write(StaffControllerJobChange::Raise(StaffJobRequest {
+                        root: member.root,
                         kind: state.job_kind,
-                        target: key.target,
-                        urgency,
+                        target: Some(key.target),
+                        point: None,
+                        priority,
+                        issued_at_seconds: 0.0,
+                        remaining_wait_seconds: 0.0,
                         token: Some(key.token),
                         routing: key.routing,
-                    });
+                    }));
                 }
                 Some(StaffRequestJobEvent::Cancelled { key }) => {
-                    cancel_staff_jobs(key, &jobs, &job_targets, &mut cancellations);
+                    cancel_staff_jobs(key, &mut changes);
                 }
                 None => {}
             }

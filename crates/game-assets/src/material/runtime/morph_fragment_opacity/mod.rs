@@ -1,10 +1,8 @@
 use std::io;
 
-pub(super) const MORPH_OPACITY_BINDING: u32 = 48;
+pub(super) const MORPH_OPACITY_BINDING: u32 = 49;
 
 const MORPH_OPACITY_SHADER: &str = r#"
-@group(3) @binding(48) var<uniform> openzt2_morph_opacity: vec4<f32>;
-
 fn openzt2_apply_morph_opacity(colour: vec4<f32>, position: vec4<f32>) -> vec4<f32> {
     if openzt2_morph_opacity.x <= 0.0 {
         discard;
@@ -23,6 +21,18 @@ fn openzt2_apply_morph_opacity(colour: vec4<f32>, position: vec4<f32>) -> vec4<f
     return vec4(rgb, alpha);
 }
 "#;
+
+fn append_morph_opacity_shader(source: &mut String) {
+    use std::fmt::Write as _;
+
+    let group = super::effect_pass_gpu_data::EFFECT_SHADER_BINDING_LAYOUT.descriptor_set;
+    writeln!(
+        source,
+        "\n@group({group}) @binding({MORPH_OPACITY_BINDING}) var<uniform> openzt2_morph_opacity: vec4<f32>;"
+    )
+    .expect("writing to a String cannot fail");
+    source.push_str(MORPH_OPACITY_SHADER);
+}
 
 const DEPTH_BIAS_SHADER: &str = r#"
 struct D3d9ColourOutput {
@@ -44,7 +54,7 @@ pub(super) fn fixed_function_source_with_morph_opacity(source: &str) -> String {
         "output.colour = evaluate_fixed_function_texture_stages(fragment_inputs, false);",
         "output.colour = openzt2_apply_morph_opacity(evaluate_fixed_function_texture_stages(fragment_inputs, false), input.position);",
     );
-    source.push_str(MORPH_OPACITY_SHADER);
+    append_morph_opacity_shader(&mut source);
     source.push_str(DEPTH_BIAS_SHADER);
     source
 }
@@ -149,7 +159,7 @@ pub(super) fn apply_morph_opacity_to_translated_fragment(source: &mut String) ->
             },
         );
     }
-    source.push_str(MORPH_OPACITY_SHADER);
+    append_morph_opacity_shader(source);
     source.push_str(DEPTH_BIAS_SHADER);
     source.push_str(&extra_output_type);
     Ok(())

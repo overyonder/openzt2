@@ -21,6 +21,9 @@ use super::world_entity_model_suppression::{ModelRenderVisibilityGate, ModelRend
 #[require(ModelRenderVisibilityGate)]
 pub(super) struct ResidentPrefabModel;
 
+#[derive(Component)]
+pub(super) struct RetiringPrefabModel;
+
 pub(super) fn retire_removed_prefab_scene_root(
     removed: On<Remove<WorldAssetRoot>>,
     mut commands: Commands,
@@ -237,8 +240,19 @@ pub(super) fn retire_hidden_prefab_model_assets(
             )>,
         ),
     >,
-    residents: Query<Option<&WorldInstance>, (With<ResidentPrefabModel>, Allow<Disabled>)>,
-    spawner: Res<WorldInstanceSpawner>,
+    mut residents: Query<
+        (
+            Option<&WorldInstance>,
+            &mut Visibility,
+            Has<RetiringPrefabModel>,
+        ),
+        (
+            With<ResidentPrefabModel>,
+            Without<NamedPresentationNodeAttachment>,
+            Allow<Disabled>,
+        ),
+    >,
+    mut spawner: ResMut<WorldInstanceSpawner>,
     mut attachments: SceneExternalAttachments,
 ) {
     for (entity, mut model, mut overrides, visibility, children, expanded, rebuilding) in
@@ -247,21 +261,24 @@ pub(super) fn retire_hidden_prefab_model_assets(
         if visibility.get() && !rebuilding {
             continue;
         }
+        let mut pending_retirement = false;
         if let Some(children) = children {
             for child in children.iter() {
-                let Ok(instance) = residents.get(child) else {
+                let Ok((instance, mut visible, retiring)) = residents.get_mut(child) else {
                     continue;
                 };
                 if let Some(instance) = instance {
-                    let instance = **instance;
-                    attachments.detach(&mut commands, spawner.iter_instance_entities(instance));
-                    commands.queue(move |world: &mut World| {
-                        world.resource_scope(|world, mut spawner: Mut<WorldInstanceSpawner>| {
-                            spawner.despawn_instance_sync(world, &instance);
-                        });
-                    });
+                    pending_retirement = true;
+                    if !retiring {
+                        let instance = **instance;
+                        attachments.detach(&mut commands, spawner.iter_instance_entities(instance));
+                        visible.set_if_neq(Visibility::Hidden);
+                        spawner.despawn_instance(instance);
+                        commands.entity(child).try_insert(RetiringPrefabModel);
+                    }
+                } else {
+                    commands.entity(child).try_despawn();
                 }
-                commands.entity(child).try_despawn();
             }
         }
         if model.handle.is_some() {
@@ -270,8 +287,26 @@ pub(super) fn retire_hidden_prefab_model_assets(
         for material in &mut overrides.0 {
             material.handle = None;
         }
-        if expanded {
+        if expanded && !pending_retirement {
             commands.entity(entity).remove::<ModelExpanded>();
+        }
+    }
+}
+
+pub(super) fn finish_retiring_prefab_models(
+    mut commands: Commands,
+    spawner: Res<WorldInstanceSpawner>,
+    retiring: Query<
+        (Entity, &ChildOf, &WorldInstance),
+        (With<RetiringPrefabModel>, Allow<Disabled>),
+    >,
+) {
+    for (gate, owner, instance) in &retiring {
+        if !spawner.instance_is_ready(**instance) {
+            commands.entity(gate).try_despawn();
+            commands
+                .entity(owner.parent())
+                .try_remove::<ModelExpanded>();
         }
     }
 }

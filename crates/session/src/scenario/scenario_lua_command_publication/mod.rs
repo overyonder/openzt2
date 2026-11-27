@@ -24,7 +24,7 @@ pub(super) struct ScenarioLuaOutputs<'w, 's> {
         openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables,
     >,
     camera: MessageWriter<'w, openzt2_interface_state::camera::camera_control_message_types::ScriptedOverheadCameraMotion>,
-    fossil: MessageWriter<'w, openzt2_extinct_animals::fossil_site_types::SetFossilPuzzleToFind>,
+    fossil: MessageWriter<'w, openzt2_zoo_state::extinct_animals::fossil_recovery_types::SetFossilPuzzleToFind>,
     ui: MessageWriter<'w, super::scenario_lua_ui::ScenarioUiCommand>,
     entities: MessageWriter<'w, super::scenario_lua_entity_commands::ScenarioEntityCommand>,
     fame: MessageWriter<'w, openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame>,
@@ -57,7 +57,7 @@ impl ScenarioLuaOutputs<'_, '_> {
                 }
                 ScenarioUiCommand::FossilPuzzle(puzzle) => {
                     self.fossil.write(
-                        openzt2_extinct_animals::fossil_site_types::SetFossilPuzzleToFind {
+                        openzt2_zoo_state::extinct_animals::fossil_recovery_types::SetFossilPuzzleToFind {
                             root,
                             puzzle,
                         },

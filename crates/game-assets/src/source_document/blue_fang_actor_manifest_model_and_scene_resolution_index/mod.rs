@@ -15,7 +15,7 @@ use super::{
     blue_fang_source_document_format::BlueFangSourceDocumentFormat,
     blue_fang_source_document_parsing::parse_blue_fang_source_document,
     ordered_source_document_types::OrderedSourceDocument,
-    path::{AssetPath, authored_source_reference_paths},
+    path::{authored_source_reference_paths, AssetPath},
     source_document_semantic_name::source_document_names_are_semantically_equal,
 };
 
@@ -68,19 +68,56 @@ impl BlueFangActorManifestModelAndSceneResolutionIndex {
                         .read_asset_bytes(resolved)
                         .await
                         .map_err(io::Error::other)?;
-                    let manifest =
-                        parse_blue_fang_source_document(AssetPath::new(&manifest_path), &bytes)
-                            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-                    index.insert_parsed_blue_fang_actor_model_manifest(&manifest);
-                    if let Some(model) = index
-                        .native_model_source_paths_by_actor_manifest_key
-                        .get_mut(&manifest_path)
-                        && let Some(resolved_model) =
-                            archives.resolve_model_reference(Path::new(&manifest_path), model)
-                    {
-                        *model = AssetPath::new(resolved_model.to_string_lossy()).key();
-                        index.scene_asset_paths_by_authored_actor_key.insert(manifest_path.clone(), crate::model_source::native_model_source_lowering::native_model_scene_labelled_asset_path(model));
+                    let model = if manifest_path.ends_with(".kfm") {
+                        Some(crate::animation::kfm_animation_set_lowering::lower_kfm_source_to_animation_set_document(&manifest_path, &bytes)?.model_asset_path)
+                    } else {
+                        let manifest =
+                            parse_blue_fang_source_document(AssetPath::new(&manifest_path), &bytes)
+                                .map_err(|error| {
+                                    io::Error::new(io::ErrorKind::InvalidData, error)
+                                })?;
+                        if manifest.format == BlueFangSourceDocumentFormat::BlueFangModelManifest {
+                            manifest
+                                .root
+                                .element_children()
+                                .find(|node| node.name.eq_ignore_ascii_case("BFM"))
+                                .and_then(|node| node.attribute("modelname"))
+                                .map(str::to_owned)
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(reference) = model {
+                        let model = authored_source_reference_paths(&manifest_path, &reference)
+                            .map(|path| PathBuf::from(path.key()))
+                            .find(|path| archives.source_exists(path))
+                            .or_else(|| {
+                                archives
+                                    .resolve_model_reference(Path::new(&manifest_path), &reference)
+                            })
+                            .map_or_else(
+                                || AssetPath::new(&reference).key(),
+                                |path| AssetPath::new(path.to_string_lossy()).key(),
+                            );
+                        index
+                            .native_model_source_paths_by_actor_manifest_key
+                            .insert(manifest_path.clone(), model.clone());
+                        index.scene_asset_paths_by_authored_actor_key.insert(
+                            manifest_path.clone(),
+                            crate::model_source::native_model_source_lowering::native_model_scene_labelled_asset_path(&model),
+                        );
                     }
+                }
+                if index
+                    .native_model_source_paths_by_actor_manifest_key
+                    .contains_key(&manifest_path)
+                {
+                    index
+                        .animation_set_asset_paths_by_actor_manifest_key
+                        .insert(manifest_path.clone(), manifest_path.clone());
+                    index
+                        .animation_set_asset_paths_by_actor_manifest_key
+                        .insert(AssetPath::new(reference).key(), manifest_path.clone());
                 }
                 if let Some(scene) = index
                     .scene_asset_paths_by_authored_actor_key
@@ -108,36 +145,6 @@ impl BlueFangActorManifestModelAndSceneResolutionIndex {
             .get(&(declaring_path.to_owned(), reference.to_owned()))
             .cloned()
             .unwrap_or_else(|| AssetPath::new(reference).key())
-    }
-
-    fn insert_parsed_blue_fang_actor_model_manifest(
-        &mut self,
-        actor_manifest: &OrderedSourceDocument,
-    ) {
-        if actor_manifest.format != BlueFangSourceDocumentFormat::BlueFangModelManifest {
-            return;
-        }
-        let Some(native_model_source_path) = actor_manifest
-            .root
-            .element_children()
-            .find(|source_node| source_node.name.eq_ignore_ascii_case("BFM"))
-            .and_then(|blue_fang_model_manifest| blue_fang_model_manifest.attribute("modelname"))
-            .map(|native_model_source_path| AssetPath::new(native_model_source_path).key())
-        else {
-            return;
-        };
-        let actor_manifest_key = actor_manifest.path.key();
-        self.animation_set_asset_paths_by_actor_manifest_key.insert(
-            actor_manifest_key.clone(),
-            actor_manifest.path.as_str().to_owned(),
-        );
-        self.scene_asset_paths_by_authored_actor_key.insert(
-            actor_manifest_key.clone(),
-            crate::model_source::native_model_source_lowering::
-                native_model_scene_labelled_asset_path(&native_model_source_path),
-        );
-        self.native_model_source_paths_by_actor_manifest_key
-            .insert(actor_manifest_key, native_model_source_path);
     }
 
     pub fn register_archive_resolved_actor_scene_asset_path(

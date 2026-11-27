@@ -16,7 +16,9 @@ use openzt2_zoo_state::{
         habitat_cell_ownership_changes::HabitatCellOwnershipChanged,
         habitat_topology_cell_queries::convert_finite_world_position_to_topology_cell,
     },
-    locomotion::locomotion_types::{AnimalTerrainWaterContact, LocomotionMode, SwimLayer},
+    locomotion::locomotion_types::{
+        AnimalFloatingFallback, AnimalTerrainWaterContact, LocomotionMode, SwimLayer,
+    },
     terrain::dry_surface_eligibility::DrySurfaceEligibility,
     terrain::{
         terrain_chunk_types::{TerrainChunk, TerrainIndex},
@@ -26,6 +28,7 @@ use openzt2_zoo_state::{
             TerrainWaterRegionRetired, TerrainWaterRegionSource,
         },
     },
+    topology::topology_graph_types::TopologyGrid,
 };
 
 #[derive(SystemParam)]
@@ -78,6 +81,7 @@ pub(super) fn project_animal_water_contact(
             &mut Transform,
             Option<&mut LocomotionMode>,
             Option<&mut AnimalTerrainWaterContact>,
+            Has<AnimalFloatingFallback>,
         ),
         (Without<Dead>, UncratedWorldEntity),
     >,
@@ -171,7 +175,9 @@ pub(super) fn project_animal_water_contact(
         .chain(changes.changed_modes.read())
         .chain(changes.enabled.read())
         .collect();
-    for (entity, member, variant, mut transform, current_mode, contact) in &mut animals {
+    for (entity, member, variant, mut transform, current_mode, contact, was_floating) in
+        &mut animals
+    {
         let position = transform.translation.xz();
         if !refresh_all
             && !replaced_terrain.contains(&member.root)
@@ -215,13 +221,34 @@ pub(super) fn project_animal_water_contact(
                 .entity(entity)
                 .insert(AnimalTerrainWaterContact { depth_m });
         }
-        let Some(policy) = species
-            .find_variant(variant.0)
-            .and_then(|variant| variant.surface_water_locomotion.as_ref())
-        else {
+        let Some(definition) = species.find_variant(variant.0) else {
             continue;
         };
+        let policy = definition.surface_water_locomotion.as_ref();
         let current = current_mode.as_deref().copied().unwrap_or_default();
+        let floating_surface = surface.filter(|&height| {
+            current == LocomotionMode::Ground
+                && policy.is_none()
+                && (transform.translation.y < height
+                    || (was_floating && transform.translation.y == height))
+        });
+        match (was_floating, floating_surface) {
+            (false, Some(_)) => {
+                commands.entity(entity).insert(AnimalFloatingFallback);
+            }
+            (true, None) => {
+                commands.entity(entity).remove::<AnimalFloatingFallback>();
+            }
+            _ => {}
+        }
+        if let Some(height) = floating_surface {
+            if transform.translation.y != height {
+                transform.translation.y = height;
+            }
+        }
+        let Some(policy) = policy else {
+            continue;
+        };
         if !matches!(current, LocomotionMode::Ground | LocomotionMode::Swim) {
             continue;
         }

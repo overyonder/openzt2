@@ -2,7 +2,6 @@ use bevy::prelude::*;
 use openzt2_animals::animal_lifecycle::scripted_animal_spawning::{
     resolve_scripted_animal_spawn, ScriptedAnimalSpawnRequest,
 };
-use openzt2_audio::audio::ambient_audio_emitter_playback::AddAwardAmbientCue;
 use openzt2_game_assets::{
     species::species_asset_types::{SpeciesAsset, SpeciesAssets},
     world_definitions::{
@@ -30,27 +29,20 @@ impl Plugin for AwardWorldEffectsPlugin {
         app.add_systems(
             Update,
             (
-                route_award_world_effects.run_if(on_message::<AwardProgramEffect>),
+                route_award_crate_deliveries.run_if(on_message::<AwardProgramEffect>),
                 deliver_award_animals.run_if(on_message::<DeliverCratedAwardAnimal>),
             ),
         );
     }
 }
 
-fn route_award_world_effects(
+fn route_award_crate_deliveries(
     mut effects: MessageReader<AwardProgramEffect>,
     mut crates: MessageWriter<PlaceAwardCratedObject>,
-    mut ambients: MessageWriter<AddAwardAmbientCue>,
 ) {
     for effect in effects.read() {
-        match *effect {
-            AwardProgramEffect::PlaceCratedObject { root, definition } => {
-                crates.write(PlaceAwardCratedObject { root, definition });
-            }
-            AwardProgramEffect::AddAmbientSound { root, cue } => {
-                ambients.write(AddAwardAmbientCue { root, cue });
-            }
-            _ => {}
+        if let AwardProgramEffect::PlaceCratedObject { root, definition } = *effect {
+            crates.write(PlaceAwardCratedObject { root, definition });
         }
     }
 }

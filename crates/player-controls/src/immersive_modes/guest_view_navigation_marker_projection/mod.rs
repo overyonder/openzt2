@@ -1,18 +1,18 @@
 use avian3d::prelude::{RigidBody, SpatialQuery, SpatialQueryFilter};
 use bevy::{gltf::Gltf, prelude::*};
 
-use openzt2_game_assets::{
-    scene_prefab::ScenePrefabAsset,
-    world_definitions::{
-        world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
-        world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
-    },
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_interface_state::{
+    camera::world_pointer_ray_types::WorldPointerRay, ui::pointer_capture_types::UiPointerCapture,
 };
-use openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay;
+use openzt2_world::world_spawn::prefab_world_instance_spawning::{
+    hydrate_loaded_scene_prefab_into_world_instance_root, PrefabWorldInstanceRootValues,
+};
 use openzt2_world_state::world_spawn::{
     persistent_id_types::PersistentId,
     prefab_model_readiness::first_missing_prefab_collider_model_asset_id,
-    world_membership_types::WorldRoot,
+    prefab_transform_conversion::transform_from_authored,
+    world_membership_types::{WorldMember, WorldRoot},
 };
 use openzt2_zoo_state::{
     aquatic::tank_navigation_water::TankNavigationWater,
@@ -22,27 +22,32 @@ use openzt2_zoo_state::{
 use super::{
     guest_view_navigation_marker_types::{
         GuestViewMarkerSlot, GuestViewNavigationMarker, GuestViewNavigationMarkerOf,
-        GuestViewNavigationMarkers,
+        GuestViewNavigationMarkers, GuestViewProjection,
     },
-    immersive_control_execution_types::{GuestViewControl, GuestViewTileCount},
-    immersive_mode_entry_and_policy_operations::find_authored_immersive_mode_policy,
-    immersive_mode_state_types::{ImmersiveMode, ImmersiveSubject},
+    immersive_control_execution_types::GuestViewControl,
+    immersive_mode_state_types::{GuestViewTileCount, ImmersiveCamera},
 };
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn project_guest_view_cursor_and_navigation_markers(
     pointer: Res<WorldPointerRay>,
     spatial: SpatialQuery,
-    definitions: Res<WorldDefinitions>,
-    definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    capture: Res<UiPointerCapture>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
     models: Res<Assets<Gltf>>,
-    world: Single<(Entity, Option<&TankNavigationWater>), With<WorldRoot>>,
-    navigation: Option<Single<&ActiveTerrainDerivedNavigationGraph>>,
+    worlds: Query<
+        (
+            Option<&TankNavigationWater>,
+            Option<&ActiveTerrainDerivedNavigationGraph>,
+        ),
+        With<WorldRoot>,
+    >,
+    members: Query<&WorldMember>,
     session: Single<
         (
             Entity,
-            &ImmersiveSubject,
+            &ImmersiveCamera,
+            &GuestViewProjection,
             &mut GuestViewTileCount,
             Option<&GuestViewNavigationMarkers>,
         ),
@@ -52,13 +57,16 @@ pub(super) fn project_guest_view_cursor_and_navigation_markers(
     mut visuals: Query<(&GuestViewNavigationMarker, &mut Transform)>,
     mut commands: Commands,
 ) {
-    let (world, tank_water) = world.into_inner();
-    let (session_entity, subject, count, existing) = session.into_inner();
-    let definitions = definitions.get(&definition_assets);
-    let policy = definitions.and_then(|definitions| {
-        find_authored_immersive_mode_policy(definitions, ImmersiveMode::GuestView)
-    });
-    let hit_point = pointer.0.and_then(|ray| {
+    let (session_entity, camera, scenes, count, existing) = session.into_inner();
+    let Ok(member) = members.get(camera.0) else {
+        return;
+    };
+    let world = member.root;
+    let Ok((tank_water, navigation)) = worlds.get(world) else {
+        return;
+    };
+    let subject = scenes.excluded_subject;
+    let hit_point = pointer.0.filter(|_| !capture.over_ui).and_then(|ray| {
         spatial
             .cast_ray_predicate(
                 ray.origin,
@@ -67,12 +75,13 @@ pub(super) fn project_guest_view_cursor_and_navigation_markers(
                 false,
                 &SpatialQueryFilter::DEFAULT,
                 &|entity| {
-                    entity != session_entity
-                        && entity != subject.0
-                        && !visuals.contains(entity)
-                        && !parents
-                            .iter_ancestors::<ChildOf>(entity)
-                            .any(|ancestor| ancestor == subject.0 || visuals.contains(ancestor))
+                    let ancestors =
+                        || std::iter::once(entity).chain(parents.iter_ancestors::<ChildOf>(entity));
+                    ancestors()
+                        .find_map(|ancestor| members.get(ancestor).ok())
+                        .is_some_and(|member| member.root == world)
+                        && !ancestors()
+                            .any(|ancestor| Some(ancestor) == subject || visuals.contains(ancestor))
                 },
             )
             .map(|hit| ray.origin + *ray.direction * hit.distance)
@@ -89,13 +98,7 @@ pub(super) fn project_guest_view_cursor_and_navigation_markers(
 
     let targets = hit_point
         .into_iter()
-        .filter_map(|hit| {
-            Some((
-                GuestViewMarkerSlot::Cursor,
-                policy?.guest_ground_cursor,
-                hit,
-            ))
-        })
+        .filter_map(|hit| Some((GuestViewMarkerSlot::Cursor, scenes.cursor.as_ref()?, hit)))
         .chain(
             positions
                 .into_iter()
@@ -104,7 +107,7 @@ pub(super) fn project_guest_view_cursor_and_navigation_markers(
                     let position = IVec3::from_array(position).as_vec3() * 0.01;
                     Some((
                         GuestViewMarkerSlot::Position(index),
-                        policy?.guest_navigation_marker,
+                        scenes.marker.as_ref()?,
                         position,
                     ))
                 }),
@@ -113,37 +116,35 @@ pub(super) fn project_guest_view_cursor_and_navigation_markers(
         .into_iter()
         .flat_map(|markers| markers.iter())
         .collect::<Vec<_>>();
-    for (slot, definition, position) in targets {
-        let Some(handle) = definitions.and_then(|definitions| definitions.scene(definition)) else {
-            continue;
-        };
+    for (slot, (definition, handle), position) in targets {
         if let Some(index) = unused.iter().position(|&entity| {
             visuals
                 .get(entity)
-                .is_ok_and(|(marker, _)| marker.slot == slot && marker.prefab == handle)
+                .is_ok_and(|(marker, _)| marker.slot == slot && &marker.prefab == handle)
         }) {
             let entity = unused.swap_remove(index);
-            if let Ok((_, transform)) = visuals.get_mut(entity) {
+            if let Ok((marker, transform)) = visuals.get_mut(entity) {
                 transform
                     .map_unchanged(|transform| &mut transform.translation)
-                    .set_if_neq(position);
+                    .set_if_neq(position + marker.translation_offset);
             }
             continue;
         }
-        let Some(prefab) = prefabs.get(&handle) else {
+        let Some(prefab) = prefabs.get(handle) else {
             continue;
         };
         if first_missing_prefab_collider_model_asset_id(prefab, &models).is_some() {
             continue;
         }
         let entity = commands.spawn_empty().id();
-        openzt2_world::world_spawn::prefab_world_instance_spawning::hydrate_loaded_scene_prefab_into_world_instance_root(
+        hydrate_loaded_scene_prefab_into_world_instance_root(
             &mut commands,
             entity,
+            PrefabWorldInstanceRootValues::default(),
             prefab,
             handle.clone(),
             world,
-            definition,
+            *definition,
             PersistentId(u64::MAX - entity.to_bits()),
             Transform::from_translation(position),
             true,
@@ -154,7 +155,12 @@ pub(super) fn project_guest_view_cursor_and_navigation_markers(
             GuestViewNavigationMarkerOf(session_entity),
             GuestViewNavigationMarker {
                 slot,
-                prefab: handle,
+                prefab: handle.clone(),
+                translation_offset: transform_from_authored(
+                    &prefab.canonical_scene_prefab_document().entities[0].transform,
+                )
+                .translation
+                    + Vec3::Y * prefab.ground_fit_height_offset_m().unwrap_or_default(),
             },
         ));
     }

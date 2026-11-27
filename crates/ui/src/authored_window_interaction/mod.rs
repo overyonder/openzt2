@@ -24,18 +24,23 @@ impl UiAuthoredWindowInteractionPolicy {
 
 pub(super) fn move_authored_windows_from_pointer_drags(
     mut drags: MessageReader<PointerDrag>,
-    mut windows: Query<(&UiAuthoredWindowInteractionPolicy, &mut Node)>,
-    context: super::active_authored_ui_context::ActiveAuthoredUiContext,
+    mut windows: ParamSet<(
+        (
+            super::active_authored_ui_context::ActiveAuthoredUiContext,
+            Query<&UiAuthoredWindowInteractionPolicy, With<Node>>,
+        ),
+        Query<&mut Node, With<UiAuthoredWindowInteractionPolicy>>,
+    )>,
     modal: Res<openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture>,
 ) {
     for drag in drags.read() {
         if !drag.pointer.id.is_mouse() || drag.button != PointerButton::Primary {
             continue;
         }
-        let Ok((policy, mut node)) = windows.get_mut(drag.entity) else {
-            continue;
-        };
-        if !policy.draggable
+        let (context, policies) = windows.p0();
+        if !policies
+            .get(drag.entity)
+            .is_ok_and(|policy| policy.draggable)
             || !context.visible_and_enabled(drag.entity)
             || modal
                 .0
@@ -43,6 +48,10 @@ pub(super) fn move_authored_windows_from_pointer_drags(
         {
             continue;
         }
+        let mut nodes = windows.p1();
+        let Ok(mut node) = nodes.get_mut(drag.entity) else {
+            continue;
+        };
         if let Val::Px(left) = &mut node.left {
             *left += drag.delta.x;
         }

@@ -36,7 +36,7 @@ use openzt2_zoo_state::{
     },
     habitat::{
         habitat_membership_and_containment::locate_habitat_at_world_position,
-        habitat_types::{HabitatChanged, HabitatIndex},
+        habitat_types::{HabitatCellOf, HabitatChanged, HabitatIndex},
     },
     terrain::{
         terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER,
@@ -587,6 +587,7 @@ pub(super) fn update_tank_wall_water_bindings(
     water_quality: Query<(&WaterQuality, Option<&WaterQualityFraction>)>,
     cameras: Query<(&Camera, &Transform, &WorldMember), With<ZooCamera>>,
     habitats: Query<(&HabitatIndex, &TopologyGrid)>,
+    cell_owners: Query<&HabitatCellOf>,
     tanks: Query<&TankGeometry, With<Tank>>,
     water_indexes: Query<(&TerrainWaterMembershipIndex, &WorldMember)>,
     water_regions: TerrainWaterRegionQuery,
@@ -599,11 +600,13 @@ pub(super) fn update_tank_wall_water_bindings(
         let eye = transform.translation;
         if let Ok((habitats, grid)) = habitats.get(member.root) {
             if let Some(tank) =
-                locate_habitat_at_world_position(habitats, eye.xz(), *grid).filter(|&tank| {
-                    tanks.get(tank).is_ok_and(|geometry| {
-                        eye.y > geometry.floor_height && eye.y <= geometry.water_height
-                    })
-                })
+                locate_habitat_at_world_position(habitats, &cell_owners, eye.xz(), *grid).filter(
+                    |&tank| {
+                        tanks.get(tank).is_ok_and(|geometry| {
+                            eye.y > geometry.floor_height && eye.y <= geometry.water_height
+                        })
+                    },
+                )
             {
                 return Some(tank);
             }

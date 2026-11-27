@@ -211,7 +211,7 @@ pub(super) fn evaluate_dirty_object_placement_previews(
         // A relocation keeps the purchase it was paid with; its preview costs nothing.
         let validity = match validity {
             PlacementValidity::Valid { .. } if relocation.is_some() => {
-                PlacementValidity::Valid { cost: Money(0) }
+                PlacementValidity::Valid { cost: Money::ZERO }
             }
             validity => validity,
         };

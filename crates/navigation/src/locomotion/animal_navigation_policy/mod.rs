@@ -19,6 +19,112 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailure;
 use openzt2_zoo_state::locomotion::locomotion_types::Route;
 
+pub(super) fn project_animal_floating_fact(
+    active: Query<
+        Entity,
+        Added<openzt2_zoo_state::locomotion::locomotion_types::AnimalFloatingFallback>,
+    >,
+    floating: Query<
+        (),
+        With<openzt2_zoo_state::locomotion::locomotion_types::AnimalFloatingFallback>,
+    >,
+    mut ended: RemovedComponents<
+        openzt2_zoo_state::locomotion::locomotion_types::AnimalFloatingFallback,
+    >,
+    mut animals: Query<
+        Option<&mut openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes>,
+        With<AnimalVariant>,
+    >,
+    mut commands: Commands,
+) {
+    use openzt2_game_data::AssetId;
+    use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
+
+    let attribute = AssetId::from_key("isfloating");
+    for entity in active.iter().chain(ended.read()) {
+        let Ok(attributes) = animals.get_mut(entity) else {
+            continue;
+        };
+        let value = if floating.contains(entity) { 1.0 } else { 0.0 };
+        if let Some(mut attributes) = attributes {
+            if attributes.get(attribute) != Some(value) {
+                attributes.set(attribute, value);
+            }
+        } else if value != 0.0 {
+            let mut attributes = AuthoredFloatAttributes::default();
+            attributes.set(attribute, value);
+            commands.entity(entity).insert(attributes);
+        }
+    }
+}
+
+pub(super) fn project_obstacle_priorities(
+    active: Option<Res<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>>,
+    assets: Option<Res<Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>>,
+    definitions_by_entity: Query<
+        &openzt2_world_state::world_spawn::world_membership_types::DefinitionId,
+    >,
+    fences: Query<&openzt2_zoo_state::topology::topology_graph_types::FenceEdge>,
+    parents: Query<&ChildOf>,
+    mut colliders: Query<(Entity, Option<&mut openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorObstaclePriority>), With<avian3d::prelude::Collider>>,
+    mut commands: Commands,
+) {
+    use openzt2_game_data::AssetId;
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorObstaclePriority;
+
+    let Some(definitions) = active
+        .as_deref()
+        .zip(assets.as_deref())
+        .and_then(|(active, assets)| active.get(assets))
+    else {
+        return;
+    };
+    let animal = AssetId::from_key("animal");
+    for (collider, current) in &mut colliders {
+        let mut owner = collider;
+        let definition = loop {
+            if let Ok(definition) = definitions_by_entity.get(owner) {
+                break Some(definition.0);
+            }
+            if let Some(fence) = fences
+                .get(owner)
+                .ok()
+                .and_then(|fence| definitions.find_fence(fence.definition))
+            {
+                break Some(fence.object);
+            }
+            let Ok(parent) = parents.get(owner) else {
+                break None;
+            };
+            owner = parent.parent();
+        };
+        let score = definition
+            .and_then(|definition| definitions.collision_scores(definition))
+            .and_then(|scores| {
+                scores
+                    .by_type
+                    .iter()
+                    .find_map(|&(kind, score)| (kind == animal).then_some(score))
+                    .or(scores.base)
+            })
+            .map(|score| BehaviorObstaclePriority(score.max(0) as u32));
+        match (current, score) {
+            (Some(mut current), Some(score)) => {
+                current.set_if_neq(score);
+            }
+            (None, Some(score)) => {
+                commands.entity(collider).insert(score);
+            }
+            (Some(_), None) => {
+                commands
+                    .entity(collider)
+                    .remove::<BehaviorObstaclePriority>();
+            }
+            (None, None) => {}
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 struct CollisionLimits {
     radius_m: f32,

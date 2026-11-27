@@ -9,7 +9,7 @@ pub fn terrain_test_asset(grid: TerrainGrid) -> TerrainAsset {
         )
         .unwrap(),
         canonical_terrain_grid: grid,
-        water_biomes_by_material: Default::default(),
+        tank_water_materials: Default::default(),
         chunk_meshes: Default::default(),
         terrain_effect_material: Default::default(),
         water_bump_combination_effect_material: Default::default(),
@@ -20,7 +20,7 @@ pub fn terrain_test_asset(grid: TerrainGrid) -> TerrainAsset {
         texture_images_by_normalized_source_path: Default::default(),
         waterfall_scene_prefab: None,
         waterfall_audio: None,
-        water_scene_prefabs_by_normalized_system: Default::default(),
+        shoreline_ripples: Default::default(),
         water_materials_by_normalized_source_path: Default::default(),
         water_particle_effects_by_normalized_system: Default::default(),
         named_water_particle_sources: Default::default(),

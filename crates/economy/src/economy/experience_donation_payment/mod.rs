@@ -7,11 +7,11 @@ use openzt2_world_state::{
 use openzt2_zoo_state::{
     animal_behavior::behavior_token_types::{BehaviorSelfToken, ClaimedBehaviorSelfToken},
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
         running_actions::{
-            BehaviorInstructionId, RunBehaviorEconomy, RunningBehaviorInstruction,
-            WhenBehaviorAction, mark_behavior_task_for_failure_and_stop_navigation,
+            mark_behavior_task_for_failure_and_stop_navigation, BehaviorInstructionId,
+            RunBehaviorEconomy, RunningBehaviorInstruction, WhenBehaviorAction,
         },
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     donations::{
         donation_opportunity_types::{DonationAcceptor, DonationOpportunity},

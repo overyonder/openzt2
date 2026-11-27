@@ -276,6 +276,10 @@ struct GpuSimParams {
     num_effects: u32,
 
     particle_budget: u32,
+    budget_groups: u32,
+    _budget_padding_0: u32,
+    _budget_padding_1: u32,
+    _budget_padding_2: u32,
 }
 
 impl Default for GpuSimParams {
@@ -291,6 +295,10 @@ impl Default for GpuSimParams {
             real_time: 0.0,
             num_effects: 0,
             particle_budget: u32::MAX,
+            budget_groups: 0,
+            _budget_padding_0: 0,
+            _budget_padding_1: 0,
+            _budget_padding_2: 0,
         }
     }
 }
@@ -456,7 +464,7 @@ pub(crate) struct GpuSpawnerParams {
     particle_size_scale: f32,
     properties_array_index: u32,
     simulation_delta_time: f32,
-    _spawn_padding: f32,
+    group_budget_offset: u32,
 }
 
 #[repr(C)]
@@ -2417,6 +2425,7 @@ impl SpecializedRenderPipeline for ParticlesRenderPipeline {
 #[derive(Debug, Clone, PartialEq, Component)]
 #[require(CachedPipelines, CachedReadyState, CachedEffectMetadata)]
 pub(crate) struct ExtractedEffect {
+    pub spawn_group: Option<Entity>,
     /// Handle to the effect asset this instance is based on.
     /// The handle is weak to prevent refcount cycles and gracefully handle
     /// assets unloaded or destroyed after a draw call has been submitted.
@@ -2426,6 +2435,8 @@ pub(crate) struct ExtractedEffect {
     /// Effect capacity, in number of particles.
     pub capacity: u32,
     pub event_binding_count: u32,
+    pub incoming_event_capacity: Option<u32>,
+    pub collision_slot: u32,
     pub compilation: Tick,
     /// Layout flags.
     pub layout_flags: LayoutFlags,
@@ -2465,6 +2476,7 @@ pub(crate) struct ExtractedSpawner {
     pub spawn_points: Vec<crate::ParticleSpawnPoint>,
     pub spawn_submission: u32,
     pub particle_size_scale: f32,
+    pub spawn_group: Option<crate::EffectSpawnBudgetGroup>,
     /// Effective simulation delta for this effect instance.
     pub delta_time: f32,
 }
@@ -2506,8 +2518,6 @@ pub(crate) struct ChildEffectOf {
     /// Render entity of the parent.
     #[relationship]
     pub parent: Entity,
-    /// Index of this collision child in the authored order of its parent.
-    pub slot: u32,
 }
 
 /// Extracted children information for a parent effect.
@@ -2561,25 +2571,25 @@ pub(crate) struct ExtractedProperties {
     pub property_data: Vec<u8>,
 }
 
-#[derive(Default, Resource)]
-pub(crate) struct EffectAssetEvents {
-    pub images: Vec<AssetEvent<Image>>,
-}
+#[derive(Message)]
+pub(crate) struct ParticleImageChanged(AssetId<Image>);
 
 /// System extracting all the asset events for the [`Image`] assets to enable
 /// dynamic update of images bound to any effect.
 ///
 /// This system runs in parallel of [`extract_effects`].
 pub(crate) fn extract_effect_events(
-    mut events: ResMut<EffectAssetEvents>,
+    mut events: MessageWriter<ParticleImageChanged>,
     mut image_events: Extract<MessageReader<AssetEvent<Image>>>,
 ) {
     #[cfg(feature = "trace")]
     let _span = bevy::log::info_span!("extract_effect_events").entered();
     trace!("extract_effect_events()");
 
-    let EffectAssetEvents { ref mut images } = *events;
-    *images = image_events.read().copied().collect();
+    events.write_batch(image_events.read().filter_map(|event| match *event {
+        AssetEvent::Modified { id } | AssetEvent::Removed { id } => Some(ParticleImageChanged(id)),
+        _ => None,
+    }));
 }
 
 /// Debugging settings.
@@ -2736,8 +2746,15 @@ pub(crate) fn extract_effects(
             Option<&crate::ParticleSpawnBatch>,
             Option<Ref<crate::ParticleAliveCount>>,
             Option<&crate::EffectParticleSizeScale>,
-            Option<(&crate::EffectParent, &crate::asset::EffectCollisionSlot)>,
-            &crate::EffectPrngState,
+            Option<(
+                &crate::EffectParent,
+                &crate::asset::EffectCollisionSlot,
+                Option<&crate::EffectEventCapacity>,
+            )>,
+            (
+                &crate::EffectPrngState,
+                Option<&crate::EffectSpawnBudgetGroup>,
+            ),
         )>,
     >,
     // Render world effects extracted from a previous frame, if any
@@ -2772,7 +2789,7 @@ pub(crate) fn extract_effects(
         alive_count,
         particle_size_scale,
         collision_parent,
-        prng,
+        (prng, spawn_group),
     ) in q_effects.iter()
     {
         let (Some(effect_shaders), Some(asset)) = (
@@ -2875,10 +2892,14 @@ pub(crate) fn extract_effects(
             layout_flags,
         );
         let new_extracted_effect = ExtractedEffect {
+            spawn_group: spawn_group.map(|group| group.owner),
             handle: compiled_effect.asset.clone(),
             particle_layout: compiled_effect.particle_layout.clone(),
             capacity: asset.capacity(),
             event_binding_count: compiled_effect.event_binding_count,
+            incoming_event_capacity: collision_parent
+                .and_then(|(_, _, capacity)| capacity.map(|capacity| capacity.0)),
+            collision_slot: collision_parent.map_or(u32::MAX, |(_, slot, _)| slot.0),
             compilation: compiled_effect.last_changed(),
             layout_flags,
             texture_layout,
@@ -2923,6 +2944,7 @@ pub(crate) fn extract_effects(
             spawn_points: spawn_batch.map_or_else(Vec::new, |batch| batch.points.clone()),
             spawn_submission: spawn_batch.map_or(0, |batch| batch.submission),
             particle_size_scale: particle_size_scale.map_or(1.0, |scale| scale.0),
+            spawn_group: spawn_group.copied(),
             delta_time: effect_delta.map_or(time.delta_secs(), |delta| delta.0.max(0.0)),
         };
         trace!(
@@ -2976,14 +2998,11 @@ pub(crate) fn extract_effects(
             cmd.insert(new_mesh);
         }
 
-        let new_parent = collision_parent.and_then(|(parent, slot)| {
+        let new_parent = collision_parent.and_then(|(parent, _, _)| {
             render_entities
                 .get(parent.entity)
                 .ok()
-                .map(|parent| ChildEffectOf {
-                    parent,
-                    slot: slot.0,
-                })
+                .map(|parent| ChildEffectOf { parent })
         });
         match (new_parent, maybe_child_of) {
             (Some(parent), previous) if previous != Some(&parent) => {
@@ -3655,11 +3674,18 @@ pub fn allocate_effects(
         // Insert or update the effect into the EffectCache
         if let Some(mut cached_effect) = maybe_cached_effect {
             if cached_effect.slice.len() != extracted_effect.capacity
-                || cached_effect.slice.particle_layout != extracted_effect.particle_layout
+                || !effect_cache.get_slab(&cached_effect.slab_id).is_some_and(|slab| {
+                    slab.is_compatible(
+                        &extracted_effect.handle,
+                        extracted_effect.spawn_group,
+                        &extracted_effect.particle_layout,
+                    )
+                })
             {
                 let _ = effect_cache.remove(cached_effect.as_ref());
                 *cached_effect = effect_cache.insert(
                     extracted_effect.handle.clone(),
+                    extracted_effect.spawn_group,
                     extracted_effect.capacity,
                     &extracted_effect.particle_layout,
                 );
@@ -3668,6 +3694,7 @@ pub fn allocate_effects(
             trace!("Allocating new entry in EffectCache for entity {entity:?}...");
             let cached_effect = effect_cache.insert(
                 extracted_effect.handle.clone(),
+                extracted_effect.spawn_group,
                 extracted_effect.capacity,
                 &extracted_effect.particle_layout,
             );
@@ -3911,8 +3938,13 @@ pub fn allocate_parent_child_infos(
     }
 
     // Loop on all child effects and ensure their CachedChildInfo is up-to-date.
-    for (child_entity, _, child_effect_of, cached_effect_events, maybe_cached_child_info) in
-        &mut q_child_effects
+    for (
+        child_entity,
+        child_effect,
+        child_effect_of,
+        cached_effect_events,
+        maybe_cached_child_info,
+    ) in &mut q_child_effects
     {
         // Fetch the parent effect
         let parent_entity = child_effect_of.parent;
@@ -3945,7 +3977,7 @@ pub fn allocate_parent_child_infos(
             parent_slab_offset: parent_cached_effect.slice.range().start,
             parent_particle_layout: parent_cached_effect.slice.particle_layout.clone(),
             parent_buffer_binding_source,
-            local_child_index: child_effect_of.slot,
+            local_child_index: child_effect.collision_slot,
             global_child_index: u32::MAX, // fixed up later by fixup_parents()
             init_indirect_dispatch_index: cached_effect_events.init_indirect_dispatch_index,
         };
@@ -3972,11 +4004,11 @@ pub fn allocate_parent_child_infos(
             .iter_many(children_effects.0.iter().copied())
             .filter_map(Result::ok)
             .collect();
-        ordered_children.sort_unstable_by_key(|(_, _, child_of, ..)| child_of.slot);
-        for (slot, (child_entity, child_extracted_effect, child_of, cached_effect_events, _)) in
+        ordered_children.sort_unstable_by_key(|(_, child, ..)| child.collision_slot);
+        for (slot, (child_entity, child_extracted_effect, _, cached_effect_events, _)) in
             ordered_children.into_iter().enumerate()
         {
-            if child_of.slot as usize != slot {
+            if child_extracted_effect.collision_slot as usize != slot {
                 break;
             }
 
@@ -4759,6 +4791,7 @@ pub(crate) fn prepare_batch_inputs(
     // components for each effect on the fly.
     let mut extracted_effect_count = 0;
     let mut prepared_effect_count = 0;
+    let mut group_budgets = HashMap::<Entity, u32>::new();
     for (
         main_entity,
         render_entity,
@@ -4911,6 +4944,17 @@ pub(crate) fn prepare_batch_inputs(
         );
         gpu_spawner_params.particle_size_scale = extracted_spawner.particle_size_scale;
         gpu_spawner_params.simulation_delta_time = extracted_spawner.delta_time;
+        if let Some(group) = extracted_spawner.spawn_group {
+            gpu_spawner_params.group_budget_offset =
+                *group_budgets.entry(group.owner).or_insert_with(|| {
+                    let offset = effects_meta.spawn_point_buffer.len() as u32;
+                    effects_meta.spawn_point_buffer.push(GpuParticleSpawnPoint {
+                        position: [0.0, 0.0, 0.0, f32::from_bits(group.capacity)],
+                        velocity: [0.0; 4],
+                    });
+                    offset
+                });
+        }
         gpu_spawner_params.properties_array_index = maybe_cached_effect_properties
             .map(|properties| properties.array_index)
             .unwrap_or(u32::MAX);
@@ -4963,6 +5007,7 @@ pub(crate) fn prepare_batch_inputs(
         gpu_sim_params.frustum = render_camera.frustum;
         gpu_sim_params.camera_position = render_camera.position.extend(0.0);
         gpu_sim_params.num_effects = prepared_effect_count;
+        gpu_sim_params.budget_groups = group_budgets.len() as u32;
         trace!(
             "Simulation parameters: time={} delta_time={} virtual_time={} \
                 virtual_delta_time={} real_time={} real_delta_time={} num_effects={}",
@@ -6014,7 +6059,7 @@ fn emit_sorted_draw<T, F>(
 
 #[cfg(feature = "3d")]
 fn emit_binned_draw<T, F, G>(
-    views: &Query<(
+    views: &mut Query<(
         &RenderVisibleEntities,
         &ExtractedView,
         &Msaa,
@@ -6044,8 +6089,7 @@ fn emit_binned_draw<T, F, G>(
     trace!("emit_binned_draw() {} views", views.iter().len());
 
     let mut queued = bevy::render::sync_world::MainEntityHashSet::default();
-    let pending = default();
-    for (visible_entities, view, msaa, _) in views.iter() {
+    for (visible_entities, view, msaa, mut draws) in views.iter_mut() {
         trace!("Process new binned view (alpha_mask={:?})", alpha_mask);
 
         let Some(render_phase) = render_phases.get_mut(&view.retained_view_entity) else {
@@ -6058,13 +6102,21 @@ fn emit_binned_draw<T, F, G>(
         for &entity in dirty.iter_to_dequeue(view.retained_view_entity, visible_effect_entities) {
             render_phase.remove(entity);
         }
+        let pending = if alpha_mask == ParticleRenderAlphaMaskPipelineKey::AlphaMask {
+            &mut draws.alpha_mask_pending
+        } else {
+            &mut draws.opaque_pending
+        };
+        std::mem::swap(&mut pending.current_frame, &mut pending.prev_frame);
+        pending.current_frame.clear();
         for (&draw_entity, &main_entity) in dirty.iter_to_queue(
             view.retained_view_entity,
             visible_effect_entities,
-            &pending,
+            &pending.prev_frame,
             &mut queued,
         ) {
             let Ok(draw_batch) = effect_draw_batches.get(draw_entity) else {
+                pending.current_frame.insert((draw_entity, main_entity));
                 continue;
             };
             #[cfg(feature = "trace")]
@@ -6078,6 +6130,7 @@ fn emit_binned_draw<T, F, G>(
 
             // Get the EffectBatches this EffectDrawBatch is part of.
             let Some(effect_batch) = batcher.get(draw_batch.effect_batch_index) else {
+                pending.current_frame.insert((draw_entity, main_entity));
                 continue;
             };
 
@@ -6131,6 +6184,7 @@ fn emit_binned_draw<T, F, G>(
             let alpha_mode = effect_batch.alpha_mode;
 
             let Some(mesh_layout) = render_mesh.map(|gpu_mesh| gpu_mesh.layout.clone()) else {
+                pending.current_frame.insert((draw_entity, main_entity));
                 trace!("Missing mesh vertex buffer layout. Skipped.");
                 continue;
             };
@@ -6248,7 +6302,7 @@ pub(crate) fn queue_effects(
     mut effect_bind_groups: ResMut<EffectBindGroups>,
     batcher: Res<Batcher>,
     effect_draw_batches: Query<&EffectDrawBatch, With<BatchInput>>,
-    events: Res<EffectAssetEvents>,
+    mut image_changes: ResMut<Messages<ParticleImageChanged>>,
     render_meshes: Res<RenderAssets<RenderMesh>>,
     #[cfg(feature = "3d")] mesh_allocator: Res<MeshAllocator>,
     #[cfg(feature = "3d")] mut changes: ParticlePhaseChanges,
@@ -6274,24 +6328,11 @@ pub(crate) fn queue_effects(
     let pipeline_cache = read_params.pipeline_cache.into_inner();
 
     // If an image has changed, the GpuImage has (probably) changed
-    for event in &events.images {
-        match event {
-            AssetEvent::Added { .. } => (),
-            AssetEvent::LoadedWithDependencies { .. } => (),
-            AssetEvent::Unused { .. } => (),
-            AssetEvent::Modified { id } => {
-                property_bind_groups.invalidate_image(*id);
-                if effect_bind_groups.images.remove(id).is_some() {
-                    trace!("Destroyed bind group of modified image asset {:?}", id);
-                }
-            }
-            AssetEvent::Removed { id } => {
-                property_bind_groups.invalidate_image(*id);
-                if effect_bind_groups.images.remove(id).is_some() {
-                    trace!("Destroyes bind group of removed image asset {:?}", id);
-                }
-            }
-        };
+    for ParticleImageChanged(id) in image_changes.drain() {
+        property_bind_groups.invalidate_image(id);
+        if effect_bind_groups.images.remove(&id).is_some() {
+            trace!("Destroyed bind group of changed image asset {:?}", id);
+        }
     }
 
     #[cfg(feature = "3d")]
@@ -6428,7 +6469,7 @@ pub(crate) fn queue_effects(
                 .unwrap();
 
             emit_binned_draw(
-                &views,
+                &mut views,
                 &mut alpha_mask_3d_render_phases,
                 &dirty,
                 &batcher,
@@ -6469,7 +6510,7 @@ pub(crate) fn queue_effects(
                 .unwrap();
 
             emit_binned_draw(
-                &views,
+                &mut views,
                 &mut opaque_3d_render_phases,
                 &dirty,
                 &batcher,
@@ -7755,7 +7796,8 @@ fn simulate(
         return;
     };
 
-    if effects_meta.sim_params_uniforms.get().particle_budget != u32::MAX {
+    let simulation = effects_meta.sim_params_uniforms.get();
+    if simulation.particle_budget != u32::MAX || simulation.budget_groups != 0 {
         let mut compute_pass = HanabiComputePass::new(
             "hanabi:reset_particle_budget",
             &pipeline_cache,

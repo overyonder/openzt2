@@ -51,6 +51,11 @@ pub(super) enum ScenarioUiCommand {
         name: String,
         enabled: bool,
     },
+    CatalogueEnabled {
+        list: AssetId,
+        definition: AssetId,
+        enabled: bool,
+    },
     Sound(String),
     UnlockDefinition(AssetId),
     ResearchDuration {
@@ -74,6 +79,7 @@ pub(super) enum NodeOperation {
     Construction(presentation::ScenarioConstructionRequest),
     SelectSubject(Option<Entity>),
     Visible(bool),
+    InteractionEnabled(bool),
     Selected(bool),
     Press,
     Localized(AssetId),
@@ -96,6 +102,21 @@ pub(super) enum NodeOperation {
 
 /// Marks a path step naming a document node by index, for unnamed children.
 const INDEX_PATH_STEP: char = '\u{1}';
+const DOCUMENT_PATH_STEP: char = '\u{3}';
+
+fn scoped_document(path: &[String]) -> (Option<Entity>, &[String]) {
+    if let Some(bits) = path
+        .first()
+        .and_then(|step| step.strip_prefix(DOCUMENT_PATH_STEP))
+    {
+        return (
+            bits.parse().ok().and_then(Entity::try_from_bits),
+            &path[1..],
+        );
+    }
+    (None, path)
+}
+
 const REFERENCE_PATH_SEPARATOR: char = '\u{2}';
 
 pub(super) fn register(app: &mut App) {
@@ -105,17 +126,14 @@ pub(super) fn register(app: &mut App) {
         .add_message::<TimedScenarioUiActionCompleted>()
         .add_message::<openzt2_zoo_state::scenario::timed_scenario_ui_actions::ScenarioUiSelectionCompleted>()
         .add_message::<presentation::ScenarioConstructionRequest>()
-        .register_required_components::<
-            openzt2_world_state::world_spawn::world_membership_types::WorldRoot,
-            openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions,
-        >()
         .add_systems(
             Update,
             (
                 route_activated_authored_ui_scripts,
                 create_named_ui_lua_contexts_for_requested_scripts,
                 run_authored_ui_scripts,
-                presentation::apply_scenario_ui_commands,
+                presentation::apply_scenario_ui_commands
+                    .after(presentation::present_awarded_challenge_results),
                 presentation::apply_scenario_tool_requests,
             )
                 .chain()
@@ -129,6 +147,7 @@ pub(super) fn register(app: &mut App) {
                 presentation::apply_scenario_zoo_messages,
                 presentation::apply_scenario_tutorial_status,
                 presentation::bind_challenge_result_panels,
+                presentation::present_awarded_challenge_results,
             ).in_set(openzt2_interface_state::ui::UiSet::DomainProjection),
         )
         .add_systems(Update, presentation::preload_scenario_ui_documents
@@ -377,7 +396,21 @@ pub(super) fn create_ui_root<'scope, 'env: 'scope>(
     let root = lua.create_table()?;
     root.set(
         "UI_GET_CHILD",
-        lua.create_function(|lua, (_, name): (Table, String)| create_node(lua, &[name]))?,
+        scope.create_function(move |lua, (_, name): (Table, String)| {
+            let Some((document, receiver)) = queries.ui_receiver else {
+                return create_node(lua, &[name]);
+            };
+            let scope = format!("{DOCUMENT_PATH_STEP}{}", document.to_bits());
+            let relative = [
+                scope.clone(),
+                format!("{INDEX_PATH_STEP}{receiver}"),
+                name.clone(),
+            ];
+            if locate_ui_node(queries, &relative).is_some() {
+                return create_node(lua, &relative);
+            }
+            create_node(lua, &[scope, name])
+        })?,
     )?;
     root.set(
         "UI_PLAY_SOUND",
@@ -428,16 +461,21 @@ fn locate_ui_node<'a>(
     queries: ScenarioLuaQueryFacts<'a>,
     path: &[String],
 ) -> Option<LocatedUiNode<'a>> {
+    let (scope, path) = scoped_document(path);
     queries.ui_roots.iter().find_map(|(root_entity, root)| {
+        if scope.is_some_and(|document| root_entity != document) {
+            return None;
+        }
         let document = queries
             .ui_documents
             .get(&root.document)?
             .canonical_ui_document();
         let id = presentation::resolve_node(document, path)?;
-        let (node, _, inherited, computed, transform, selected, enabled, interaction) = queries
-            .ui_nodes
-            .iter()
-            .find(|(node, owner, ..)| owner.0 == root_entity && node.id == id)?;
+        let (node, _, inherited, computed, transform, selected, enabled, restriction, interaction) =
+            queries
+                .ui_nodes
+                .iter()
+                .find(|(node, owner, ..)| owner.0 == root_entity && node.id == id)?;
         let authored = &document.nodes[node.index as usize];
         let computed_size = computed.size() * computed.inverse_scale_factor();
         let center = transform.translation / queries.ui_canvas_scale;
@@ -446,7 +484,10 @@ fn locate_ui_node<'a>(
             index: node.index as usize,
             lineage_visible: inherited.get(),
             selected: selected.is_some_and(|selected| selected.0),
-            enabled: enabled.is_none_or(|enabled| enabled.0),
+            enabled: restriction.map_or_else(
+                || enabled.is_none_or(|enabled| enabled.0),
+                |restriction| restriction.0,
+            ),
             highlighted: interaction.is_some_and(|hovered| hovered.get()),
             size: if computed_size.min_element() > 0.0 {
                 computed_size.to_array()
@@ -600,6 +641,14 @@ fn install_node_methods<'scope, 'env: 'scope>(
         })?,
     )?;
     node.set(
+        "UI_GET_NAME",
+        scope.create_function(move |_, node: Table| {
+            let path = node_path(&node)?;
+            Ok(locate_ui_node(queries, &path)
+                .map(|located| located.document.nodes[located.index].name.clone()))
+        })?,
+    )?;
+    node.set(
         "UI_IS_HIDDEN",
         scope.create_function(move |_, node: Table| {
             let path = node_path(&node)?;
@@ -750,10 +799,25 @@ fn install_node_methods<'scope, 'env: 'scope>(
         node.set(
             method,
             scope.create_function(move |_, node: Table| {
-                if let Some(name) = node_path(&node)?.pop() {
-                    commands
-                        .borrow_mut()
-                        .push(ScenarioUiCommand::Enabled { name, enabled });
+                let path = node_path(&node)?;
+                if locate_ui_node(queries, &path).is_some() {
+                    push(path, NodeOperation::InteractionEnabled(enabled));
+                } else if let Some((name, parent)) = path.split_last() {
+                    let list = locate_ui_node(queries, parent)
+                        .and_then(|parent| parent.document.nodes.get(parent.index))
+                        .filter(|parent| matches!(parent.widget, UiWidgetRecord::TypeList { .. }))
+                        .map(|parent| parent.id);
+                    commands.borrow_mut().push(match list {
+                        Some(list) => ScenarioUiCommand::CatalogueEnabled {
+                            list,
+                            definition: AssetId::from_key(name),
+                            enabled,
+                        },
+                        None => ScenarioUiCommand::Enabled {
+                            name: name.clone(),
+                            enabled,
+                        },
+                    });
                 }
                 Ok(())
             })?,
@@ -1008,37 +1072,6 @@ fn run_authored_ui_scripts(
                     )
                 });
             let Some((script_path, script_handle)) = resolved else {
-                if invocation.context.eq_ignore_ascii_case("global")
-                    && invocation
-                        .authored_path
-                        .eq_ignore_ascii_case("scripts/uiutil.lua")
-                    && entry == "setReplacementText"
-                {
-                    use openzt2_game_data::localization::LocalizationFormatArgument;
-                    if let ([node, key, value], Some(locale)) =
-                        (invocation.arguments.as_slice(), queries.localization)
-                    {
-                        let argument = value
-                            .parse::<i64>()
-                            .map(LocalizationFormatArgument::Integer)
-                            .unwrap_or(LocalizationFormatArgument::Text(value));
-                        let mut text = String::new();
-                        if locale
-                            .write_localized_text_with_format_arguments(
-                                AssetId::from_key(key),
-                                &[argument],
-                                &mut text,
-                            )
-                            .is_ok()
-                        {
-                            outputs.write_timed_boundary(ScenarioUiCommand::Node {
-                                path: vec![node.clone()],
-                                operation: NodeOperation::Text(text),
-                            });
-                            return true;
-                        }
-                    }
-                }
                 warn!(path = %invocation.authored_path, "UI script does not resolve");
                 return false;
             };
@@ -1057,6 +1090,35 @@ fn run_authored_ui_scripts(
             let Ok(mut context) = runtime.get_mut(owner) else {
                 return false;
             };
+            let mut queries = queries;
+            let Some(document) = queries.ui_documents.get(&root.document) else {
+                return false;
+            };
+            let authored = document.canonical_ui_document();
+            let receiver = if let Some(index) = authored
+                .nodes
+                .iter()
+                .position(|node| node.id == invocation.receiver)
+            {
+                (request.document_root, index)
+            } else if let Some(receiver) = queries.ui_roots.iter().find_map(|(root, view)| {
+                let document = queries
+                    .ui_documents
+                    .get(&view.document)?
+                    .canonical_ui_document();
+                (Some(document.role) == invocation.document_role).then_some(())?;
+                document
+                    .nodes
+                    .iter()
+                    .position(|node| node.id == invocation.receiver)
+                    .map(|index| (root, index))
+            }) {
+                receiver
+            } else {
+                warn!(receiver = ?invocation.receiver, path = %invocation.authored_path, "UI script receiver does not resolve");
+                return false;
+            };
+            queries.ui_receiver = Some(receiver);
             let arguments = invocation
                 .arguments
                 .iter()
@@ -1102,6 +1164,13 @@ fn run_authored_ui_scripts(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct SavedCatalogueRestriction {
+    pub(crate) list: Option<AssetId>,
+    pub(crate) definition: AssetId,
+    pub(crate) enabled: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ScenarioUiSavedState {
@@ -1109,6 +1178,8 @@ pub(crate) struct ScenarioUiSavedState {
     #[serde(default)]
     pub(crate) shown: std::collections::BTreeMap<String, bool>,
     pub(crate) continuation: Option<AssetId>,
+    #[serde(skip)]
+    pub(crate) catalogue: Option<Vec<SavedCatalogueRestriction>>,
 }
 
 impl ScenarioUiSavedState {
@@ -1154,22 +1225,39 @@ pub(crate) struct ScenarioUiSnapshotCapture<'w, 's> {
         (
             Option<&'static presentation::ScenarioUiState>,
             Option<&'static presentation::ScenarioUiNodeOverrides>,
+            Option<&'static openzt2_interface_state::information::catalogue_types::ScenarioCatalogueRestrictions>,
         ),
         With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
     >,
     overrides: Query<'w, 's, &'static presentation::ScenarioUiNodeOverride>,
+    restrictions: Query<'w, 's, &'static openzt2_interface_state::information::catalogue_types::ScenarioCatalogueRestriction>,
 }
 
 impl ScenarioUiSnapshotCapture<'_, '_> {
     pub(crate) fn capture(&self) -> ScenarioUiSavedState {
         use bevy::ecs::relationship::RelationshipTarget;
         let mut saved = ScenarioUiSavedState::default();
-        if let Ok((pending, overrides)) = self.pending.single() {
+        if let Ok((pending, overrides, catalogue)) = self.pending.single() {
+            let mut restrictions = self
+                .restrictions
+                .iter_many(catalogue.into_iter().flat_map(RelationshipTarget::iter))
+                .flatten()
+                .map(|restriction| SavedCatalogueRestriction {
+                    list: restriction.list,
+                    definition: restriction.definition,
+                    enabled: restriction.enabled,
+                })
+                .collect::<Vec<_>>();
+            restrictions
+                .sort_unstable_by_key(|restriction| (restriction.list, restriction.definition));
             saved.continuation = pending.and_then(|state| state.continuation);
             if let Some(overrides) = overrides {
                 for node in self.overrides.iter_many(overrides.iter()).flatten() {
                     saved.capture_override(node);
                 }
+            }
+            if !restrictions.is_empty() || !saved.enabled.is_empty() {
+                saved.catalogue = Some(restrictions);
             }
         }
         saved
@@ -1179,7 +1267,7 @@ impl ScenarioUiSnapshotCapture<'_, '_> {
 pub(crate) fn restore_saved_scenario_ui(
     commands: &mut Commands,
     root: Entity,
-    saved: ScenarioUiSavedState,
+    mut saved: ScenarioUiSavedState,
 ) {
     let mut state = presentation::ScenarioUiState::default();
     state.continuation = saved.continuation;
@@ -1187,5 +1275,32 @@ pub(crate) fn restore_saved_scenario_ui(
         .entity(root)
         .despawn_related::<presentation::ScenarioUiNodeOverrides>()
         .insert(state);
+    use openzt2_interface_state::information::catalogue_types::{
+        ScenarioCatalogueRestriction, ScenarioCatalogueRestrictionOf, ScenarioCatalogueRestrictions,
+    };
+    commands
+        .entity(root)
+        .despawn_related::<ScenarioCatalogueRestrictions>();
+    let catalogue = saved.catalogue.take().unwrap_or_else(|| {
+        saved
+            .enabled
+            .iter()
+            .map(|(name, &enabled)| SavedCatalogueRestriction {
+                list: None,
+                definition: AssetId::from_key(name),
+                enabled,
+            })
+            .collect()
+    });
+    commands.spawn_batch(catalogue.into_iter().map(move |entry| {
+        (
+            ScenarioCatalogueRestrictionOf(root),
+            ScenarioCatalogueRestriction {
+                list: entry.list,
+                definition: entry.definition,
+                enabled: entry.enabled,
+            },
+        )
+    }));
     saved.spawn_overrides(commands, root);
 }

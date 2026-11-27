@@ -8,8 +8,8 @@ use super::{
     world_scenario_document_asset_and_dependency_handles::DemandLoadedAssetPath,
     world_scenario_document_source::WorldScenarioDocumentSource,
 };
+use openzt2_game_data::world_scenario::{WorldScenarioDocument, WORLD_SCENARIO_VERSION};
 use openzt2_game_data::AssetId;
-use openzt2_game_data::world_scenario::{WORLD_SCENARIO_VERSION, WorldScenarioDocument};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,

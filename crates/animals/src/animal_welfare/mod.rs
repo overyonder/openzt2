@@ -42,7 +42,7 @@ impl Plugin for AnimalWelfarePlugin {
                 FixedUpdate,
                 (
                     systems::project_need_point_policy,
-                    systems::update_need_points.after(systems::project_need_point_policy).in_set(ZooSlowTick),
+                    systems::update_need_points.after(FixedGameSet::Clock).after(systems::project_need_point_policy).in_set(ZooSlowTick),
                     systems::accumulate_need_points.after(systems::update_need_points),
                 )
                     .in_set(FixedGameSet::Act)
@@ -56,6 +56,7 @@ impl Plugin for AnimalWelfarePlugin {
                     systems::derive_animal_welfare,
                 )
                     .chain()
+                    .after(FixedGameSet::Clock)
                     .in_set(FixedGameSet::Think)
                     .run_if(in_state(GamePhase::InGame))
                     .run_if(simulation_is_running),
@@ -66,7 +67,7 @@ impl Plugin for AnimalWelfarePlugin {
                     systems::initialize_animal_needs,
                     systems::initialize_missing_reproduction_needs,
                 )
-                    .in_set(FixedGameSet::Cleanup)
+                    .in_set(FixedGameSet::Clock)
                     .run_if(in_state(GamePhase::InGame)),
             );
     }

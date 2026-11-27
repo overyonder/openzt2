@@ -18,4 +18,6 @@ pub enum UiStaffAction {
     ClearSelectedKeeperAssignmentTarget,
     SetWorkerDutyAssignment { task: AssetId, assigned: bool },
     EnterStaffAssignmentMode,
+    RemoveSelectedStaffAssignment,
+    SetTrainerTrickEnabled { trick: AssetId, enabled: bool },
 }

@@ -10,11 +10,11 @@ use super::{
         SourceUiHotkeyModeReference, SourceUiHotkeyTrigger, SourceUiNamedEventList,
         SourceUiPayloadNode, SourceUiXmlObjectEvent,
     },
-    SourceUiDiagnostic,
     source_scalar_and_attribute_reading::{
         copy_unknown_source_ui_attributes, optional_nonempty_source_attribute, parse_source_bool,
     },
     ui_aspect_and_visual_source_parsing::parse_source_ui_color as parse_color,
+    SourceUiDiagnostic,
 };
 
 pub(super) fn parse_authored_ui_event_block(

@@ -13,7 +13,9 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailure;
 use openzt2_zoo_state::locomotion::locomotion_types::Route;
 use openzt2_zoo_state::locomotion::locomotion_types::RouteScratch;
-use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph;
+use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::{
+    NavigationTerrainCellEdit, TerrainDerivedNavigationGraph,
+};
 
 fn terrain_with_ridge(rows: std::ops::RangeInclusive<usize>) -> TerrainGrid {
     let mut samples = vec![
@@ -121,11 +123,16 @@ fn slope_barrier_blocks_routes_until_terrain_geometry_is_refreshed() {
     ));
     // Flatten a complete corridor across the ridge through the same graph
     // mutation used by terrain-edit refresh, without changing agent clearance.
-    for x in 1..=2 {
-        graph
-            .update_navigation_node_from_changed_terrain_cell(UVec2::new(x, 1), 0, false, 1.0)
-            .unwrap();
-    }
+    graph.apply_terrain_cell_edits(
+        (1..=2).map(|x| NavigationTerrainCellEdit {
+            cell: UVec2::new(x, 1),
+            height_centimetres: 0,
+            minimum_triangle_normal_y: 1.0,
+            contains_water: false,
+            water_depth_centimetres: 0,
+        }),
+        None,
+    );
     let route = route_across_terrain(&graph, Some(0.3), destination).unwrap();
     assert!(route.points.iter().all(|point| point.z == -1.5));
 }

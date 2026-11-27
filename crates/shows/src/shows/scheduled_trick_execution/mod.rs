@@ -4,8 +4,8 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::{
-    AssetId,
     world_definitions::animal_shows_and_training::{TrickDefinition, TrickLevel},
+    AssetId,
 };
 use openzt2_world_state::{
     simulation_time::simulation_clock_types::ZooClock,
@@ -22,15 +22,17 @@ use openzt2_zoo_state::{
     shows::{
         performer_training::PerformerTraining,
         running_show_types::{
-            AnimalPerformingShowTrick, BeginScheduledShowTrick, WorldTrickPopularity,
+            AnimalPerformingShowTrick, RunningShowOnStage, RunningShowTrick,
+            ShowTrickBeingPerformedBy, WorldTrickPopularity,
         },
     },
 };
 
 use super::{
     authored_show_rewards::{AuthoredShowRewards, AuthoredShowRewardsSource},
+    running_show_schedule::ActiveShowTrickOf,
     show_scoring::{decay_popularity, zoo_fame},
-    show_timing_operations::fixed_ticks_for_seconds,
+    show_timing_operations::{fixed_ticks_for_seconds, RunningShowPhaseTimer},
     show_trick_props::ShowPropPlacement,
 };
 
@@ -47,10 +49,20 @@ pub struct ScheduledTrickToken {
     pub slot: Entity,
 }
 
+#[derive(Component)]
+pub struct PendingShowTrickToken(pub u32);
+
 pub(super) fn start_scheduled_tricks_with_authored_outcome_tokens(
     mut commands: Commands,
-    mut requests: MessageReader<BeginScheduledShowTrick>,
-    clock: Single<&ZooClock>,
+    actions: Query<(
+        Entity,
+        &ActiveShowTrickOf,
+        &ShowTrickBeingPerformedBy,
+        &RunningShowTrick,
+        &PendingShowTrickToken,
+    )>,
+    shows: Query<(&RunningShowOnStage, &RunningShowPhaseTimer)>,
+    clocks: Query<&ZooClock, With<WorldRoot>>,
     time: Res<Time<Fixed>>,
     rewards_source: Res<AuthoredShowRewardsSource>,
     rewards: Res<Assets<AuthoredShowRewards>>,
@@ -71,21 +83,35 @@ pub(super) fn start_scheduled_tricks_with_authored_outcome_tokens(
     let (Some(definitions), Some(rewards)) =
         (definitions.get(&assets), rewards.get(&rewards_source.0))
     else {
-        requests.clear();
         return;
     };
-    for request in requests.read() {
-        let (Some(trick), Some(tokens), Ok((world, training, mut random, active))) = (
-            definitions.find_trick(request.trick),
-            definitions.find_trick_outcome_tokens(request.trick),
-            performers.get_mut(request.performer),
-        ) else {
+    for (action, run, performer, performance, pending) in &actions {
+        let (
+            Some(trick),
+            Some(tokens),
+            Ok((world, training, mut random, active)),
+            Ok((stage, phase)),
+        ) = (
+            definitions.find_trick(performance.definition),
+            definitions.find_trick_outcome_tokens(performance.definition),
+            performers.get_mut(performer.0),
+            shows.get(run.0),
+        )
+        else {
+            continue;
+        };
+        if *active.collection() != action {
+            continue;
+        }
+        let Ok(clock) = clocks.get(world.root) else {
             continue;
         };
         let Some(level) = performance_level(trick, training) else {
+            commands.entity(action).remove::<PendingShowTrickToken>();
             continue;
         };
-        let roll = random.range_u32(100).unwrap_or_default();
+        let mut next_random = *random;
+        let roll = next_random.range_u32(100).unwrap_or_default();
         let name = if roll < u32::from(level.failure_percent) {
             tokens.failure
         } else if roll < u32::from(level.failure_percent) + u32::from(level.success_percent) {
@@ -97,38 +123,44 @@ pub(super) fn start_scheduled_tricks_with_authored_outcome_tokens(
         {
             tokens.critical
         } else {
-            continue;
+            AssetId::default()
         };
         if name == AssetId::default() {
+            *random = next_random;
+            commands.entity(action).remove::<PendingShowTrickToken>();
             continue;
         }
         let Some((target, position)) = props.spawn(
             definitions,
             trick,
-            request.stage,
-            request.performer,
-            request.show,
-            *active.collection(),
+            stage.0,
+            performer.0,
+            run.0,
+            action,
             &mut commands,
         ) else {
             continue;
         };
+        *random = next_random;
+        commands.entity(action).remove::<PendingShowTrickToken>();
         if let Ok((mut popularity, fame)) = popularity.get_mut(world.root) {
             decay_popularity(&mut popularity, trick, zoo_fame(fame), &rewards.popularity);
         }
         let token_lifetime =
             fixed_ticks_for_seconds(rewards.trick_token_timeout_seconds, time.timestep());
         commands.spawn((
-            ChildOf(request.performer),
-            TrickTokenForShow(*active.collection()),
-            ScheduledTrickToken { slot: request.slot },
+            ChildOf(performer.0),
+            TrickTokenForShow(action),
+            ScheduledTrickToken {
+                slot: performance.slot,
+            },
             BehaviorTrickDestination(position),
             BehaviorSelfToken {
                 name,
                 available_at: clock.tick,
-                expires_at: clock
-                    .tick
-                    .saturating_add(token_lifetime.min(u64::from(request.duration_ticks))),
+                expires_at: clock.tick.saturating_add(token_lifetime.min(u64::from(
+                    pending.0.min(phase.remaining_ticks(time.timestep())),
+                ))),
                 payload: Some(target),
                 retain_on_failure: false,
             },

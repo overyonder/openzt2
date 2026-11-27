@@ -24,6 +24,9 @@ use crate::{
     },
 };
 
+#[cfg(test)]
+mod tests;
+
 pub(in crate::ui_document::source) const SELECTED_SCRIPT_PATH_ATTRIBUTE: &str =
     "openzt2SelectedScriptPath";
 
@@ -192,7 +195,19 @@ pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
 
         for source_attribute in &source_document_node.attributes {
             let authored_reference = source_attribute.value().trim();
-            if authored_reference.is_empty() || authored_reference.chars().any(char::is_whitespace)
+            if authored_reference.is_empty() {
+                continue;
+            }
+            let authored_reference_without_label = authored_reference
+                .split_once('#')
+                .map_or(authored_reference, |(path, _)| path);
+            if authored_reference_without_label
+                .chars()
+                .any(char::is_whitespace)
+                && !Path::new(authored_reference_without_label)
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| !extension.chars().any(char::is_whitespace))
             {
                 continue;
             }
@@ -206,9 +221,6 @@ pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
                     insert_selected_dependency_winner(&selected_path, selected_path.clone());
                 }
             }
-            let authored_reference_without_label = authored_reference
-                .split_once('#')
-                .map_or(authored_reference, |(path, _)| path);
             let selected_winner_path = if source_attribute.name().eq_ignore_ascii_case("modelfile")
             {
                 asset_archives.resolve_model_reference_with_blue_fang_bfb_preference(
@@ -225,6 +237,12 @@ pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
                     authored_reference_without_label,
                 )
             }
+            .or_else(|| {
+                let reference = crate::original_game_asset_typo_fixups::corrected_ui_image_path(
+                    &AssetPath::new(authored_reference_without_label).key(),
+                )?;
+                asset_archives.resolve_ui_reference(Path::new(source_document_path), reference)
+            })
             .or_else(|| {
                 authored_reference_without_label
                     .rsplit_once('.')

@@ -103,14 +103,6 @@ pub(super) fn slow_tick_elapsed(mut events: MessageReader<ZooTimekeeperElapsed>)
     due
 }
 
-pub(super) fn heartbeat_elapsed(mut events: MessageReader<ZooTimekeeperElapsed>) -> bool {
-    let due = events
-        .read()
-        .any(|pulse| pulse.event == TimekeeperEvent::Heartbeat);
-    events.clear();
-    due
-}
-
 pub(super) fn sample_heartbeat_frame(
     real_time: Res<Time<Real>>,
     virtual_time: Res<Time<Virtual>>,

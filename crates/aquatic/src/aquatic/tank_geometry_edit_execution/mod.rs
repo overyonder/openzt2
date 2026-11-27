@@ -14,9 +14,10 @@ use openzt2_zoo_state::construction::construction_transaction_types::EditApplica
 use openzt2_zoo_state::construction::construction_transaction_types::PrepareConstruction;
 use openzt2_zoo_state::construction::construction_transaction_types::RollbackContext;
 use openzt2_zoo_state::economy::money_types::Money;
-use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
+use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_topology_cell;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
+use openzt2_zoo_state::habitat::habitat_types::{HabitatCellOf, HabitatIndex};
 use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
 
 use super::{
@@ -174,9 +175,10 @@ fn resolve_edited_tank(
     edit: &TankGeometryEdit,
     root: Entity,
     habitat_index: &HabitatIndex,
+    cell_owners: &Query<&HabitatCellOf>,
     seeds: impl Fn(Entity) -> Option<(Entity, Tank, HabitatRegionFacts)>,
 ) -> Option<Entity> {
-    let habitat = habitat_index.habitat_for_topology_cell(edit.seed_cell)?;
+    let habitat = locate_habitat_at_topology_cell(habitat_index, cell_owners, edit.seed_cell)?;
     let (entity, tank, facts) = seeds(habitat)?;
     (tank.definition == edit.definition
         && facts.root == root
@@ -254,6 +256,7 @@ pub(super) fn prepare_tank_geometry_construction_edits(
     mut requests: MessageReader<PrepareConstruction>,
     transactions: Query<(&SubmittedTankGeometry, &WorldMember)>,
     habitat_indexes: Query<&HabitatIndex>,
+    cell_owners: Query<&HabitatCellOf>,
     tanks: Query<(
         &Tank,
         &TankGeometry,
@@ -279,7 +282,7 @@ pub(super) fn prepare_tank_geometry_construction_edits(
             .get(world.root)
             .ok()
             .and_then(|habitat_index| {
-                resolve_edited_tank(edit, world.root, habitat_index, |habitat| {
+                resolve_edited_tank(edit, world.root, habitat_index, &cell_owners, |habitat| {
                     let (tank, geometry, region, summary, member) = tanks.get(habitat).ok()?;
                     let expected = live.map_or(edit.before, |_| edit.after);
                     (*geometry == expected && region.area_square_metres == geometry.area).then(
@@ -328,7 +331,7 @@ pub(super) fn prepare_tank_geometry_construction_edits(
             }
             prepared.write(TankGeometryEditPrepared {
                 transaction: request.transaction,
-                cost: Money(0),
+                cost: Money::ZERO,
             });
         } else {
             rejected.write(TankGeometryEditPreparationRejected {
@@ -352,6 +355,7 @@ pub(super) fn apply_tank_geometry_construction_edits(
         Option<&LiveAppliedTankGeometry>,
     )>,
     habitat_indexes: Query<&HabitatIndex>,
+    cell_owners: Query<&HabitatCellOf>,
     mut tanks: Query<(
         &Tank,
         &mut TankGeometry,
@@ -399,7 +403,7 @@ pub(super) fn apply_tank_geometry_construction_edits(
             .get(member.root)
             .ok()
             .and_then(|habitat_index| {
-                resolve_edited_tank(edit, member.root, habitat_index, |habitat| {
+                resolve_edited_tank(edit, member.root, habitat_index, &cell_owners, |habitat| {
                     let (tank, geometry, region, summary, member) = tanks.get(habitat).ok()?;
                     (*geometry == expected && region.area_square_metres == expected.area).then(
                         || {
@@ -431,7 +435,7 @@ pub(super) fn apply_tank_geometry_construction_edits(
                                 |entity| {
                                     let (_, geometry, adjacent, _, adjacent_world) =
                                         tanks.get(entity).ok()?;
-                                    (world.root == member.root
+                                    (adjacent_world.root == member.root
                                         && tank_habitat_seed_cell(adjacent) != Some(edit.seed_cell))
                                     .then_some(geometry.water_height)
                                 },

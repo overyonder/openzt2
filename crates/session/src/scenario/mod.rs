@@ -125,11 +125,13 @@ impl Plugin for ScenarioPlugin {
                 (
                     challenge_offer_execution::
                         create_challenge_offers_requested_by_scenario_scripts,
-                    challenge_offer_execution::validate_and_apply_requested_challenge_responses,
-                    challenge_offer_presentation::apply_authored_challenge_panel_requests,
-                    challenge_offer_execution::project_award_program_suspension,
+                    challenge_offer_execution::validate_and_apply_requested_challenge_responses
+                        .after(challenge_offer_execution::create_challenge_offers_requested_by_scenario_scripts),
+                    challenge_offer_presentation::apply_authored_challenge_panel_requests
+                        .after(challenge_offer_execution::create_challenge_offers_requested_by_scenario_scripts),
+                    challenge_offer_execution::project_award_program_suspension
+                        .after(challenge_offer_execution::validate_and_apply_requested_challenge_responses),
                 )
-                    .chain()
                     .in_set(GameSet::Intent)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -141,10 +143,13 @@ impl Plugin for ScenarioPlugin {
                         project_running_scenario_ui_modifications,
                     challenge_offer_presentation::project_authored_challenge_panel_text,
                     challenge_offer_presentation::reopen_restored_challenge_panel,
+                    challenge_offer_execution::bind_active_photo_challenge_scope,
                     scenario_goal_panel_presentation::size_and_bind_authored_scenario_goal_rows,
                     scenario_goal_panel_presentation::project_changed_scenario_goal_rows
                         .after(scenario_goal_panel_presentation::size_and_bind_authored_scenario_goal_rows)
                         .after_ignore_deferred(scenario_rule_visibility::show_requested_scenario_rules),
+                    scenario_goal_panel_presentation::project_scenario_goal_group_visibility
+                        .after_ignore_deferred(scenario_goal_panel_presentation::project_changed_scenario_goal_rows),
                     scenario_goal_panel_presentation::project_scenario_description_visibility
                         .after(scenario_goal_panel_presentation::size_and_bind_authored_scenario_goal_rows),
                 )

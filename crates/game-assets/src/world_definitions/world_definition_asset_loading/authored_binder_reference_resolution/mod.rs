@@ -9,7 +9,7 @@ use crate::{
     asset_source::AssetArchives,
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document,
-        path::{AssetPath, authored_source_reference_paths, is_authored_file_reference},
+        path::{authored_source_reference_paths, is_authored_file_reference, AssetPath},
         source_document_semantic_name::canonicalize_source_document_record_key,
     },
 };

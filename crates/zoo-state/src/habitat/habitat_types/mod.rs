@@ -59,29 +59,77 @@ pub struct Containment {
 
 #[derive(Component, Debug, Default)]
 pub struct HabitatIndex {
-    habitats_by_topology_cell: HashMap<IVec2, Entity>,
+    cells_by_coordinate: HashMap<IVec2, Entity>,
+    partitioned_cells: HashMap<IVec2, [Option<Entity>; 4]>,
 }
 
 impl HabitatIndex {
-    pub fn habitat_for_topology_cell(&self, topology_cell: IVec2) -> Option<Entity> {
-        self.habitats_by_topology_cell.get(&topology_cell).copied()
+    pub fn cell_at(&self, coordinate: IVec2) -> Option<Entity> {
+        self.cells_by_coordinate.get(&coordinate).copied()
     }
 
-    pub fn record_habitat_for_topology_cell(&mut self, topology_cell: IVec2, habitat: Entity) {
-        self.habitats_by_topology_cell
-            .insert(topology_cell, habitat);
+    pub fn record_cell(&mut self, coordinate: IVec2, cell: Entity) {
+        if self.cell_at(coordinate) != Some(cell) {
+            self.cells_by_coordinate.insert(coordinate, cell);
+        }
     }
 
-    pub fn remove_habitat_for_topology_cell_if_it_matches(
-        &mut self,
-        topology_cell: IVec2,
-        habitat: Entity,
-    ) {
-        if self.habitat_for_topology_cell(topology_cell) == Some(habitat) {
-            self.habitats_by_topology_cell.remove(&topology_cell);
+    pub fn remove_cell(&mut self, coordinate: IVec2, cell: Entity) {
+        if self.cell_at(coordinate) == Some(cell) {
+            self.cells_by_coordinate.remove(&coordinate);
+            self.partitioned_cells.remove(&coordinate);
+        }
+    }
+
+    /// Each entry names the sector cell bearing the live habitat relationship.
+    /// An empty sector of a partitioned tile is outside every habitat.
+    pub fn set_cell_partition(&mut self, coordinate: IVec2, cells: Option<[Option<Entity>; 4]>) {
+        if let Some(cells) = cells {
+            self.partitioned_cells.insert(coordinate, cells);
+        } else {
+            self.partitioned_cells.remove(&coordinate);
+        }
+    }
+
+    pub fn cell_in_sector(&self, coordinate: IVec2, sector: HabitatSector) -> Option<Entity> {
+        match self.partitioned_cells.get(&coordinate) {
+            Some(cells) => cells[sector as usize],
+            None => self.cell_at(coordinate),
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HabitatSector {
+    North,
+    East,
+    South,
+    West,
+}
+
+impl HabitatSector {
+    pub fn from_centre_offset(offset_xz: Vec2) -> Self {
+        let x = offset_xz.x;
+        let y = -offset_xz.y;
+        match (y >= x, y > -x) {
+            (true, true) => Self::North,
+            (false, true) => Self::East,
+            (false, false) => Self::South,
+            (true, false) => Self::West,
+        }
+    }
+}
+
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HabitatGridCell(pub IVec2);
+
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+#[relationship(relationship_target = HabitatGridCells)]
+pub struct HabitatCellOf(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = HabitatCellOf)]
+pub struct HabitatGridCells(Vec<Entity>);
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HabitatChanged {

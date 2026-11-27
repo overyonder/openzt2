@@ -24,7 +24,7 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::animal_lineage::{
-    AnimalMate, PregnancyFather, insert_animal_parentage,
+    insert_animal_parentage, AnimalMate, PregnancyFather,
 };
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation;
@@ -34,7 +34,7 @@ use openzt2_zoo_state::behavior_task_execution_types::{
 use openzt2_zoo_state::{
     habitat::{
         habitat_membership_and_containment::locate_habitat_at_world_position,
-        habitat_types::{HabitatIndex, HabitatMember},
+        habitat_types::{HabitatCellOf, HabitatIndex, HabitatMember},
     },
     topology::topology_graph_types::TopologyGrid,
 };
@@ -62,6 +62,7 @@ pub(super) fn spawn_children_for_authored_births(
     prefabs: Option<Res<Assets<ScenePrefabAsset>>>,
     server: Option<Res<AssetServer>>,
     habitat_grid: Query<(&HabitatIndex, &TopologyGrid)>,
+    cell_owners: Query<&HabitatCellOf>,
     mut mothers: Query<
         (
             Entity,
@@ -129,6 +130,7 @@ pub(super) fn spawn_children_for_authored_births(
                 {
                     if locate_habitat_at_world_position(
                         habitats,
+                        &cell_owners,
                         position.translation.xz(),
                         *topology,
                     ) != Some(habitat.habitat_entity)

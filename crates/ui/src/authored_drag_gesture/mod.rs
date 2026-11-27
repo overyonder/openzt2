@@ -28,9 +28,11 @@ pub(super) fn apply_authored_drag_gestures_to_bevy_layout_or_scroll_position(
     drag_commands: Query<&UiAuthoredDragCommand>,
     parents: Query<&ChildOf>,
     layout: Query<(&ComputedNode, &UiGlobalTransform)>,
-    mut receivers: Query<(&mut Node, Option<&mut ScrollPosition>)>,
+    mut receivers: ParamSet<(
+        super::active_authored_ui_context::ActiveAuthoredUiContext,
+        Query<(&mut Node, Option<&mut ScrollPosition>)>,
+    )>,
     ui_scale: Res<UiScale>,
-    context: super::active_authored_ui_context::ActiveAuthoredUiContext,
     modal: Res<openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture>,
 ) {
     for drag in drags.read() {
@@ -54,6 +56,7 @@ pub(super) fn apply_authored_drag_gestures_to_bevy_layout_or_scroll_position(
             ),
             None => continue,
         };
+        let context = receivers.p0();
         if !context.visible_and_enabled(handle_entity)
             || modal
                 .0
@@ -61,6 +64,7 @@ pub(super) fn apply_authored_drag_gestures_to_bevy_layout_or_scroll_position(
         {
             continue;
         }
+        let mut receivers = receivers.p1();
         let Ok((mut node, mut scroll)) = receivers.get_mut(receiver) else {
             continue;
         };

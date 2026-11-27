@@ -159,6 +159,7 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
             FixedUpdate,
             apply_tank_geometry_construction_edits
                 .in_set(FixedConstructionSet::Apply)
+                .after(openzt2_zoo_state::construction::ConstructionDomainApplicationDispatchSet)
                 .after(openzt2_zoo_state::construction::ConstructionFailureRollbackDispatchSet),
         );
     app.world_mut().spawn(PointerId::Mouse);
@@ -276,9 +277,16 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
         ));
     }
     let other = app.world_mut().spawn((Tank { definition }, geometry)).id();
-    let mut habitat_index = app.world_mut().get_mut::<HabitatIndex>(root).unwrap();
     for cell in [IVec2::ZERO, IVec2::X, IVec2::Y, IVec2::ONE] {
-        habitat_index.record_habitat_for_topology_cell(cell, tank);
+        use openzt2_zoo_state::habitat::habitat_types::{HabitatCellOf, HabitatGridCell};
+        let world = app.world_mut();
+        let cell_entity = world
+            .spawn((HabitatGridCell(cell), HabitatCellOf(tank), ChildOf(root)))
+            .id();
+        world
+            .get_mut::<HabitatIndex>(root)
+            .unwrap()
+            .record_cell(cell, cell_entity);
     }
     app.world_mut().spawn(ConstructionCursor {
         world: Vec3::new(0.5, 0.0, 0.5),

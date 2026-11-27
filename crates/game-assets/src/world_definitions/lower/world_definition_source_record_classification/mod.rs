@@ -170,6 +170,10 @@ pub(super) fn classify_world_definition_source_record(
             "ztsuperstaffmode",
             WorldDefinitionSourceRecordKind::ImmersiveModePolicy,
         ),
+        (
+            "ztpuzzlemode",
+            WorldDefinitionSourceRecordKind::ImmersiveModePolicy,
+        ),
         ("hotkeys", WorldDefinitionSourceRecordKind::Container),
         (
             "bfscriptcontextmgr",

@@ -22,6 +22,8 @@ const fn is_camera_button_view(mode: ImmersiveMode) -> bool {
             | ImmersiveMode::GuestView
             | ImmersiveMode::Photo
             | ImmersiveMode::SuperStaff
+            | ImmersiveMode::FossilSearch
+            | ImmersiveMode::FossilAssembly
     )
 }
 

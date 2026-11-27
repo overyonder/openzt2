@@ -54,6 +54,7 @@ impl AssetLoader for GatedPrefabLoader {
         }
         Ok(ScenePrefabAsset::from_test_document(ScenePrefabDocument {
             entities: vec![PrefabEntity {
+                terrain_decal: None,
                 stable_id: AssetId::from_key("root"),
                 attachment_id: AssetId::from_key("root"),
                 model_joint_binding: None,
@@ -93,6 +94,7 @@ impl AssetLoader for GatedPrefabLoader {
 
 fn litter(id: AssetId) -> WorldObjectDefinition {
     WorldObjectDefinition {
+        collision_scores: None,
         authored_runtime: Default::default(),
         audio_cue_prefixes: Vec::new(),
         audio_stage_volumes: Vec::new(),

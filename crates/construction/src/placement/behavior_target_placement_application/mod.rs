@@ -44,7 +44,7 @@ use openzt2_zoo_state::economy::account_transaction_types::TransactionRejected;
 use openzt2_zoo_state::economy::account_transaction_types::TransactionRequest;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
-use openzt2_zoo_state::habitat::habitat_types::{HabitatIndex, HabitatRegion};
+use openzt2_zoo_state::habitat::habitat_types::{HabitatCellOf, HabitatIndex, HabitatRegion};
 use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
 use openzt2_zoo_state::locomotion::locomotion_types::{ActiveTerrainDerivedNavigationGraph, NavAgent};
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
@@ -89,7 +89,7 @@ use openzt2_game_data::AssetId;
 #[derive(Component)]
 pub(super) struct BehaviorTargetPlacementPayment {
     placement: Entity,
-    definition_price: i64,
+    definition_price: Money,
     terms: Vec<EconomyTransactionDefinition>,
 }
 
@@ -137,6 +137,7 @@ pub(super) struct BehaviorTargetPlacementWorld<'w, 's> {
         ),
     >,
     regions: Query<'w, 's, &'static HabitatRegion>,
+    cell_owners: Query<'w, 's, &'static HabitatCellOf>,
     headroom: ObjectPlacementHeadroomQueries<'w, 's>,
 }
 
@@ -277,7 +278,8 @@ pub(super) fn put_down_behavior_target_placements(
             continue;
         };
         let mut random = random_streams.get_mut(actor).ok();
-        let charge = authored_build_charge(&terms, object.price_cents, || {
+        let definition_price = Money::from_cents(object.price_cents);
+        let charge = authored_build_charge(&terms, definition_price, || {
             random.as_deref_mut().map(BehaviorRandomStream::next_u32)
         });
         if let Some(amount) = charge.filter(|amount| amount.is_positive()) {
@@ -292,7 +294,7 @@ pub(super) fn put_down_behavior_target_placements(
             let payment = commands
                 .spawn(BehaviorTargetPlacementPayment {
                     placement: operation,
-                    definition_price: object.price_cents,
+                    definition_price,
                     terms: terms.into_iter().cloned().collect::<Vec<_>>(),
                 })
                 .id();
@@ -394,7 +396,7 @@ pub(super) fn settle_behavior_target_placement_payments(
         };
         let terms_still_match =
             authored_build_terms(catalogue, placement.definition).is_some_and(|(object, terms)| {
-                object.price_cents == owner.definition_price
+                Money::from_cents(object.price_cents) == owner.definition_price
                     && terms.into_iter().eq(owner.terms.iter())
             });
         let accepted = if terms_still_match {
@@ -624,8 +626,12 @@ fn site_is_still_valid(
         return false;
     };
     let expected_habitat = habitat.map(|member| member.habitat_entity);
-    if locate_habitat_at_world_position(habitats, site.transform.translation.xz(), *grid)
-        != expected_habitat
+    if locate_habitat_at_world_position(
+        habitats,
+        &world.cell_owners,
+        site.transform.translation.xz(),
+        *grid,
+    ) != expected_habitat
         || !sample_behavior_placement_terrain(world, pending.root, site.transform.translation.xz())
             .is_some_and(|(_, water)| !water)
     {
@@ -720,7 +726,9 @@ fn site_is_still_valid(
         geometry.cells(turns),
         &site.transform,
         |position| {
-            if locate_habitat_at_world_position(habitats, position, *grid) != expected_habitat {
+            if locate_habitat_at_world_position(habitats, &world.cell_owners, position, *grid)
+                != expected_habitat
+            {
                 return None;
             }
             let entity = terrain_chunk_at(terrain_index, position)?;
@@ -942,7 +950,7 @@ pub(super) fn authored_build_terms(
 
 pub(super) fn authored_build_charge(
     terms: &[&EconomyTransactionDefinition],
-    definition_price: i64,
+    definition_price: Money,
     mut random: impl FnMut() -> Option<u32>,
 ) -> Option<Money> {
     terms.iter().try_fold(Money::ZERO, |sum, transaction| {

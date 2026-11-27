@@ -1,6 +1,6 @@
 use bevy::{ecs::relationship::RelationshipTarget, platform::collections::HashMap, prelude::*};
 use openzt2_game_data::{
-    AssetId, world_definitions::facilities_and_maintenance::FacilityPaymentTrigger,
+    world_definitions::facilities_and_maintenance::FacilityPaymentTrigger, AssetId,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -9,6 +9,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::{
     facility_economy_types::{Inventory, Price, ServiceFacility, Wallet},
+    money_types::Money,
     service_types::{
         FacilityReservations, PendingServiceRequest, ReservationFacility, ServiceCustomer,
         ServiceReservation,
@@ -33,7 +34,12 @@ pub(super) fn reserve_requested_facility_capacity_and_inventory_for_customers(
         Option<&WorldMember>,
         Option<&ServiceReservation>,
     )>,
-    facilities: Query<(&Price, &ServiceFacility, Option<&FacilityReservations>)>,
+    facilities: Query<(
+        &Price,
+        &ServiceFacility,
+        Option<&FacilityReservations>,
+        Option<&WorldMember>,
+    )>,
     mut inventories: Query<&mut Inventory>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
@@ -54,10 +60,14 @@ pub(super) fn reserve_requested_facility_capacity_and_inventory_for_customers(
             continue;
         };
         let facility = request.facility;
-        let (Some(wallet), Ok((price, service, reservations))) = (wallet, facilities.get(facility))
+        let (Some(wallet), Ok((price, service, reservations, facility_member))) =
+            (wallet, facilities.get(facility))
         else {
             continue;
         };
+        if member.map(|member| member.root) != facility_member.map(|member| member.root) {
+            continue;
+        }
         if definition.payment_trigger != FacilityPaymentTrigger::TimedTicks
             || service.payment_trigger != FacilityPaymentTrigger::TimedTicks
             || service.definition != request.service

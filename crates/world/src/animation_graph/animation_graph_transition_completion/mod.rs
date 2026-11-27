@@ -8,7 +8,9 @@ use openzt2_world_state::animation_playback::animation_playback_controller_types
 use openzt2_zoo_state::topology::gate_operation_types::Gate;
 
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
-use openzt2_world_state::animation_graph::animation_graph_transition_operations::enter_animation_graph_node_playback;
+use openzt2_world_state::animation_graph::animation_graph_transition_operations::{
+    advance_animation_graph_chain, enter_animation_graph_node_playback,
+};
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 
 pub(crate) fn complete_animation_graph_transitions_after_animation_clip_completion<
@@ -24,6 +26,7 @@ pub(crate) fn complete_animation_graph_transitions_after_animation_clip_completi
             &mut AnimationGraphPlaybackState,
             Option<&AnimationPresentationOwner>,
             Has<crate::world_spawn::prefab_renderable_components::PrefabAnimationBinding>,
+            Has<super::animation_graph_node_request_execution::PendingNodeRoute>,
         ),
         With<Lane>,
     >,
@@ -34,6 +37,7 @@ pub(crate) fn complete_animation_graph_transitions_after_animation_clip_completi
             mut animation_graph_playback_state,
             owner,
             authored_prefab,
+            has_pending_node,
         )) = animation_playback_controllers
             .get_mut(completed_animation.animation_playback_controller_entity)
         else {
@@ -69,13 +73,26 @@ pub(crate) fn complete_animation_graph_transitions_after_animation_clip_completi
         else {
             continue;
         };
-        if let Some(active_animation_graph_transition) = animation_graph_playback_state
+        if let Some(mut active_animation_graph_transition) = animation_graph_playback_state
             .active_animation_graph_transition
             .take()
         {
             let route_owner = animation_graph_playback_state.route_owner.filter(|owner| {
                 owner.playback_generation == animation_playback_controller.playback_generation
             });
+            if advance_animation_graph_chain(
+                animation_set_asset,
+                &mut animation_playback_controller,
+                &mut active_animation_graph_transition,
+            ) {
+                animation_graph_playback_state.active_animation_graph_transition =
+                    Some(active_animation_graph_transition);
+                animation_graph_playback_state.route_owner = route_owner.map(|mut owner| {
+                    owner.playback_generation = animation_playback_controller.playback_generation;
+                    owner
+                });
+                continue;
+            }
             let remaining =
                 std::mem::take(&mut animation_graph_playback_state.remaining_transition_steps);
             let _ = enter_animation_graph_node_playback(
@@ -87,14 +104,23 @@ pub(crate) fn complete_animation_graph_transitions_after_animation_clip_completi
                 0,
             );
             animation_graph_playback_state.remaining_transition_steps = remaining;
-            let _ = openzt2_world_state::animation_graph::animation_graph_transition_operations::continue_animation_graph_transition_route(
+            if !super::animation_graph_route_selection::has_kfm_steps(
+                animation_set_asset,
+                &animation_graph_playback_state.remaining_transition_steps,
+            ) {
+                let _ = openzt2_world_state::animation_graph::animation_graph_transition_operations::continue_animation_graph_transition_route(
                 animation_set_asset, |key| clip_sources.get(animation_set_asset, key).is_some(), &mut animation_playback_controller, &mut animation_graph_playback_state,
             );
+            }
             animation_graph_playback_state.route_owner = route_owner.map(|mut owner| {
                 owner.playback_generation = animation_playback_controller.playback_generation;
                 owner
             });
-        } else {
+        } else if !has_pending_node
+            && animation_graph_playback_state
+                .remaining_transition_steps
+                .is_empty()
+        {
             let current_animation_graph_node_index =
                 animation_graph_playback_state.current_animation_graph_node_index;
             let _ = enter_animation_graph_node_playback(

@@ -797,11 +797,6 @@ pub(super) fn validate_represented_facts(
     if matches!(node.state.active, SourceUiActiveState::Unknown(_)) {
         return unsupported("unknown active state");
     }
-    if let Some(region) = &node.region {
-        if !region.unknown_attributes.is_empty() {
-            return unsupported("unknown UIRegion attributes");
-        }
-    }
     if let Some(aspect) = &node.aspect {
         if !aspect.unknown_attributes.is_empty() || !aspect.unknown_elements.is_empty() {
             return unsupported("unknown UIAspect payload");

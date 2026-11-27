@@ -57,6 +57,18 @@ impl Plugin for AquaticPlugin {
             .add_message::<tank_geometry_edit_types::SetTankWallHeights>()
             .add_message::<tank_floor_terrain_excavation::RestoreTankFloorTerrain>()
             .add_message::<tank_geometry_projection::TankFloorTerrainDisturbed>()
+            .add_message::<aquatic_simulation_types::TankWaterCellsChanged>()
+            .add_observer(tank_geometry_projection::retire_tank_water_contact_footprint)
+            .add_observer(tank_geometry_projection::publish_retired_tank_water_cells)
+            .add_systems(
+                FixedFirst,
+                (
+                    tank_geometry_projection::publish_changed_tank_water_cells,
+                    tank_geometry_projection::publish_registered_tank_gates,
+                    tank_geometry_projection::publish_tank_linked_physical_objects
+                        .after(tank_geometry_projection::publish_registered_tank_gates),
+                ),
+            )
             .add_message::<tank_capacity_accounting::TankResidentRequirementsDiscarded>()
             .add_observer(tank_capacity_accounting::invalidate_discarded_tank_resident_requirements)
             .add_observer(tank_capacity_accounting::invalidate_disabled_tank_resident)
@@ -121,6 +133,7 @@ impl Plugin for AquaticPlugin {
                 FixedUpdate,
                 tank_geometry_edit_execution::apply_tank_geometry_construction_edits
                     .in_set(FixedConstructionSet::Apply)
+                    .after(openzt2_zoo_state::construction::ConstructionDomainApplicationDispatchSet)
                     .after(openzt2_zoo_state::construction::ConstructionFailureRollbackDispatchSet),
             )
             .add_systems(

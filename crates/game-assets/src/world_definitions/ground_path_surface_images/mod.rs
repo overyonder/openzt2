@@ -29,11 +29,9 @@ impl AssetLoader for GroundPathSurfaceImageLoader {
         let source = context.path().path().with_extension("");
         let image = context
             .load_builder()
-            .load_untyped_value_from_reader(source, reader)
+            .load_value_from_reader::<Image>(source, reader)
             .await
-            .map_err(std::io::Error::other)?
-            .downcast::<Image>()
-            .map_err(|_| std::io::Error::other("ground-path texture must load as an image"))?;
+            .map_err(std::io::Error::other)?;
         Ok(GroundPathSurfaceImage {
             image: context.add_loaded_labeled_asset("image", image),
         })

@@ -9,9 +9,10 @@ use openzt2_zoo_state::progression::rating_types::ZooRating;
 use super::{
     persistence_failure_types::WorldSnapshotPersistenceFailure,
     progression_snapshot_types::{
-        EarnedProgressionAwardSnapshotRecord, ProgressionAwardDurationSnapshotRecord,
-        ProgressionSnapshotRecords, ResearchAvailabilitySnapshotRecord,
-        ResearchProjectSnapshotRecord, SpeciesAdoptionChanceSnapshotRecord,
+        EarnedProgressionAwardSnapshotRecord, FossilSkeletonRewardSnapshot,
+        ProgressionAwardDurationSnapshotRecord, ProgressionSnapshotRecords,
+        ResearchAvailabilitySnapshotRecord, ResearchProjectSnapshotRecord,
+        SpeciesAdoptionChanceSnapshotRecord,
     },
     progression_snapshot_validation::validate_progression_snapshot_record_invariants,
 };
@@ -234,7 +235,7 @@ pub(super) fn append_encoded_progression_snapshot_section(
     let globals = &progression_snapshot_records.award_globals;
     let presentation = &progression_snapshot_records.award_presentation;
     if !globals.is_empty() || !presentation.is_empty() {
-        let bytes = progression_snapshot_section_bytes;
+        let bytes = &mut *progression_snapshot_section_bytes;
         bytes.extend_from_slice(b"AWD1");
         bytes.extend_from_slice(&(globals.len() as u64).to_le_bytes());
         for (id, value) in globals {
@@ -248,6 +249,66 @@ pub(super) fn append_encoded_progression_snapshot_section(
             bytes.push(u8::from(*seen) | (u8::from(name.is_some()) << 1));
             if let Some(name) = name {
                 bytes.extend_from_slice(&name.0);
+            }
+        }
+    }
+    let bytes = &mut *progression_snapshot_section_bytes;
+    let projects = &progression_snapshot_records.research_projects;
+    let availability = &progression_snapshot_records.research_project_availability;
+    if projects.iter().any(|row| row.timer_ns.is_some())
+        || availability.iter().any(|row| row.unlock_timer_ns.is_some())
+    {
+        bytes.extend_from_slice(b"RNS1");
+        for row in projects {
+            let (duration, elapsed) = row.timer_ns.unwrap_or_default();
+            bytes.extend_from_slice(&duration.to_le_bytes());
+            bytes.extend_from_slice(&elapsed.to_le_bytes());
+        }
+        for row in availability {
+            let (duration, elapsed) = row.unlock_timer_ns.unwrap_or_default();
+            bytes.extend_from_slice(&duration.to_le_bytes());
+            bytes.extend_from_slice(&elapsed.to_le_bytes());
+        }
+    }
+    if let Some(history) = &progression_snapshot_records.award_history {
+        bytes.extend_from_slice(b"AWH1");
+        for count in [
+            history.dinosaur_tranquilizations,
+            history.perfect_training_sessions,
+            history.cured_diseases,
+            history.super_clones,
+        ] {
+            bytes.extend_from_slice(&count.to_le_bytes());
+        }
+        bytes.extend_from_slice(&(history.released_species.len() as u64).to_le_bytes());
+        for (id, name) in &history.released_species {
+            bytes.extend_from_slice(&id.0);
+            bytes.push(u8::from(history.extinct_released_species.contains(id)));
+            bytes.extend_from_slice(&(name.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(name.as_bytes());
+        }
+    }
+    if !progression_snapshot_records.fossil_education.is_empty() {
+        bytes.extend_from_slice(b"FED1");
+        bytes.extend_from_slice(
+            &(progression_snapshot_records.fossil_education.len() as u64).to_le_bytes(),
+        );
+        for (id, bone_level) in &progression_snapshot_records.fossil_education {
+            bytes.extend_from_slice(&id.to_le_bytes());
+            bytes.extend_from_slice(&bone_level.to_le_bytes());
+        }
+    }
+    let rewards = &progression_snapshot_records.fossil_skeleton_rewards;
+    if !rewards.is_empty() {
+        bytes.extend_from_slice(b"FSR1");
+        bytes.extend_from_slice(&(rewards.len() as u64).to_le_bytes());
+        for (id, reward) in rewards {
+            bytes.extend_from_slice(&id.to_le_bytes());
+            bytes.extend_from_slice(&reward.remaining_ns.to_le_bytes());
+            bytes.extend_from_slice(&reward.reward.0);
+            bytes.push(u8::from(reward.message.is_some()));
+            if let Some(message) = reward.message {
+                bytes.extend_from_slice(&message.0);
             }
         }
     }
@@ -376,15 +437,11 @@ pub(super) fn decode_and_validate_progression_snapshot_section(
             )
         })
         .ok_or(WorldSnapshotPersistenceFailure::CapacityExceeded)?;
-    if ![
-        calculated_progression_snapshot_section_byte_count,
-        calculated_progression_snapshot_section_byte_count.saturating_add(8),
-    ]
-    .contains(&progression_snapshot_section_bytes.len())
+    if progression_snapshot_section_bytes.len() < calculated_progression_snapshot_section_byte_count
     {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
-    let research_projects = (0..research_project_record_count)
+    let mut research_projects = (0..research_project_record_count)
         .map(|_| {
             Ok(ResearchProjectSnapshotRecord {
                 persistent_identifier: PersistentId(
@@ -393,6 +450,7 @@ pub(super) fn decode_and_validate_progression_snapshot_section(
                 definition_identifier: progression_snapshot_section_reader
                     .read_asset_identifier()?,
                 elapsed_simulation_ticks: progression_snapshot_section_reader.read_u64()?,
+                timer_ns: None,
                 required_simulation_ticks: progression_snapshot_section_reader.read_u64()?,
                 paused: progression_snapshot_section_reader.read_boolean()?,
             })
@@ -423,7 +481,7 @@ pub(super) fn decode_and_validate_progression_snapshot_section(
             })
         })
         .collect::<Result<Vec<_>, WorldSnapshotPersistenceFailure>>()?;
-    let research_project_availability = (0..research_availability_record_count)
+    let mut research_project_availability = (0..research_availability_record_count)
         .map(|_| {
             let persistent_identifier =
                 PersistentId(progression_snapshot_section_reader.read_u64()?);
@@ -442,6 +500,7 @@ pub(super) fn decode_and_validate_progression_snapshot_section(
                 catalogue_item_identifier,
                 available: research_project_available,
                 remaining_unlock_ticks: has_unlock_countdown.then_some(remaining_unlock_ticks),
+                unlock_timer_ns: None,
             })
         })
         .collect::<Result<Vec<_>, WorldSnapshotPersistenceFailure>>()?;
@@ -460,11 +519,83 @@ pub(super) fn decode_and_validate_progression_snapshot_section(
         .collect::<Result<Vec<_>, WorldSnapshotPersistenceFailure>>()?;
     let mut award_globals = std::collections::BTreeMap::new();
     let mut award_presentation = std::collections::BTreeMap::new();
+    let mut precise_research = false;
+    let mut award_history = None;
+    let mut fossil_education = std::collections::BTreeMap::new();
+    let mut fossil_skeleton_rewards = std::collections::BTreeMap::new();
     let reader = &mut progression_snapshot_section_reader;
     while reader.remaining_byte_count() != 0 {
         match &reader.read_fixed_byte_array::<4>()? {
             b"FAM1" if fame.current_percent.is_none() => {
                 fame.current_percent = Some(f32::from_le_bytes(reader.read_fixed_byte_array()?));
+            }
+            b"RNS1" if !precise_research => {
+                precise_research = true;
+                for row in &mut research_projects {
+                    let (duration, elapsed) = (reader.read_u64()?, reader.read_u64()?);
+                    if duration != 0 {
+                        row.timer_ns = Some((duration, elapsed));
+                    } else if elapsed != 0 {
+                        return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+                    }
+                }
+                for row in &mut research_project_availability {
+                    let (duration, elapsed) = (reader.read_u64()?, reader.read_u64()?);
+                    if duration != 0 {
+                        row.unlock_timer_ns = Some((duration, elapsed));
+                    } else if elapsed != 0 {
+                        return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+                    }
+                }
+            }
+            b"AWH1" if award_history.is_none() => {
+                let mut history = openzt2_progression::progression::AwardDomainHistory {
+                    dinosaur_tranquilizations: reader.read_u32()?,
+                    perfect_training_sessions: reader.read_u32()?,
+                    cured_diseases: reader.read_u32()?,
+                    super_clones: reader.read_u32()?,
+                    ..Default::default()
+                };
+                for _ in 0..reader.read_u64()? {
+                    let id = reader.read_asset_identifier()?;
+                    let extinct = reader.read_boolean()?;
+                    if history
+                        .released_species
+                        .insert(id, reader.read_string()?)
+                        .is_some()
+                    {
+                        return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+                    }
+                    if extinct {
+                        history.extinct_released_species.insert(id);
+                    }
+                }
+                award_history = Some(history);
+            }
+            b"FED1" if fossil_education.is_empty() => {
+                for _ in 0..reader.read_u64()? {
+                    let id = reader.read_u64()?;
+                    let level = f32::from_le_bytes(reader.read_fixed_byte_array()?);
+                    if fossil_education.insert(id, level).is_some() {
+                        return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+                    }
+                }
+            }
+            b"FSR1" if fossil_skeleton_rewards.is_empty() => {
+                for _ in 0..reader.read_u64()? {
+                    let id = reader.read_u64()?;
+                    let saved = FossilSkeletonRewardSnapshot {
+                        remaining_ns: reader.read_u64()?,
+                        reward: reader.read_asset_identifier()?,
+                        message: reader
+                            .read_boolean()?
+                            .then(|| reader.read_asset_identifier())
+                            .transpose()?,
+                    };
+                    if fossil_skeleton_rewards.insert(id, saved).is_some() {
+                        return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+                    }
+                }
             }
             b"AWD1" if award_globals.is_empty() && award_presentation.is_empty() => {
                 for _ in 0..reader.read_u64()? {
@@ -502,6 +633,9 @@ pub(super) fn decode_and_validate_progression_snapshot_section(
         scenario_award_points,
         award_globals,
         award_presentation,
+        award_history,
+        fossil_education,
+        fossil_skeleton_rewards,
         endangered_animal_birth_count,
         animal_adoption_availability_policy,
         fame_history_samples,

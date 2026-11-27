@@ -87,10 +87,6 @@ impl AssetLoader for FossilEffectsLoader {
         }
         Ok(FossilFindEffects(effects))
     }
-
-    fn extensions(&self) -> &[&str] {
-        &["xml"]
-    }
 }
 
 pub(super) fn register(app: &mut App) {

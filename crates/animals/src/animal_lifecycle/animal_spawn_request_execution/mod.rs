@@ -3,7 +3,7 @@ use openzt2_zoo_state::placement::placement_surface_site::PlacementSiteQueries;
 use openzt2_zoo_state::{
     habitat::{
         habitat_membership_and_containment::locate_habitat_at_world_position,
-        habitat_types::HabitatIndex,
+        habitat_types::{HabitatCellOf, HabitatIndex},
     },
     topology::topology_graph_types::TopologyGrid,
 };
@@ -37,6 +37,7 @@ pub(super) fn spawn_animals_requested_by_gameplay_operations(
         &TopologyGrid,
     )>,
     placement_sites: PlacementSiteQueries,
+    cell_owners: Query<&HabitatCellOf>,
     mut spawned_animals: MessageWriter<AnimalSpawned>,
     mut rejected_spawns: MessageWriter<AnimalSpawnRejected>,
 ) {
@@ -57,6 +58,7 @@ pub(super) fn spawn_animals_requested_by_gameplay_operations(
         };
         let habitat = locate_habitat_at_world_position(
             habitats,
+            &cell_owners,
             request.transform.translation.xz(),
             *topology,
         );

@@ -47,7 +47,9 @@ use openzt2_zoo_state::{
         donation_payment_types::{DonationCategoryTotals, DonationTotal},
     },
     economy::{
-        account_transaction_types::{Account, TransactionKind, TransactionRequest},
+        account_transaction_types::{
+            Account, TransactionDomain, TransactionKind, TransactionRequest,
+        },
         facility_economy_types::{FacilityProfit, OperatingSinceDay, Wallet},
         money_types::Money,
         zoo_cash_types::ZooCash,
@@ -65,6 +67,7 @@ fn document() -> WorldDefinitionDocument {
     let id = AssetId::from_key("donationbox-test");
     WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
+            collision_scores: None,
             authored_runtime: Default::default(),
             audio_cue_prefixes: Vec::new(),
             audio_stage_volumes: Vec::new(),
@@ -110,6 +113,7 @@ fn document() -> WorldDefinitionDocument {
             virtual_nodes: Vec::new(),
         }],
         placeables: vec![PlaceableDefinition {
+            minimum_object_detail: None,
             surface_policy: Default::default(),
             id,
             weight: 1.0,
@@ -186,6 +190,7 @@ fn fixture() -> (App, Entity, Handle<ScenePrefabAsset>) {
         ))
         .id();
     let entity = |attachment, translation, children| PrefabEntity {
+        terrain_decal: None,
         stable_id: AssetId::from_key(attachment),
         attachment_id: AssetId::from_key(attachment),
         model_joint_binding: None,
@@ -283,6 +288,7 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
     let (mut source, root, prefab) = fixture();
     let purchase = source.world_mut().spawn(WorldMember { root }).id();
     source.world_mut().write_message(TransactionRequest {
+        domain: TransactionDomain::Player,
         operation: purchase,
         debit: Account::Zoo,
         credit: Account::External,

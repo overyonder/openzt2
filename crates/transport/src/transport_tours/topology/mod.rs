@@ -1,4 +1,4 @@
-use super::ground_track_policy::{GroundTrackPolicyAsset, TrackTerrain};
+use super::ground_track_policy::TrackTerrain;
 use bevy::{
     ecs::entity::{EntityHashMap, EntityHashSet},
     platform::collections::HashSet,
@@ -215,7 +215,7 @@ pub(super) fn connect_tracks(
     active_definitions: Res<WorldDefinitions>,
     mut circuits: Query<&mut TransportCircuit>,
     circuit_members: Query<&CircuitMembers>,
-    (worlds, terrain, ground_policy): (Query<&WorldMember>, TrackTerrain, GroundTrackPolicyAsset),
+    (worlds, terrain): (Query<&WorldMember>, TrackTerrain),
     tracks: Query<(Option<&CircuitMember>, Has<TrackSegment>, &TrackProfile)>,
     stations: Query<(&TransportStation, Option<&CircuitMember>)>,
     junctions: Query<(Option<&CircuitMember>, &GlobalTransform), With<TransportTrackJunction>>,
@@ -425,7 +425,7 @@ pub(super) fn connect_tracks(
             || !authored_transport_track_piece_chain_is_valid(authored_track, &request.path_points)
             || (profile.kind == openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind::Ground
                 && matches!(request.application, EditApplication::InitialCommit | EditApplication::Redo)
-                && !ground_policy.get().is_some_and(|policy| world.is_some_and(|root| {
+                && authored_track.ground_track_physics.as_ref().is_some_and(|policy| !world.is_some_and(|root| {
                     terrain.across_grade_allowed(
                         root, &request.path_points, [from_station.is_some(), to_station.is_some()], policy,
                     )

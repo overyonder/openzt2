@@ -112,15 +112,3 @@ pub(super) fn apply_completed_profile_filesystem_tasks_to_canonical_profile_stat
         }
     }
 }
-
-pub(super) fn project_photo_album_profile_options(
-    active: Res<ProfileOptions>,
-    mut album: ResMut<openzt2_photos::PhotoAlbumProfileOptions>,
-) {
-    album
-        .reborrow()
-        .map_unchanged(|album| &mut album.default_spreads)
-        .set_if_neq(
-            super::profile_persistence_types::photo_album_profile_options(&active).default_spreads,
-        );
-}

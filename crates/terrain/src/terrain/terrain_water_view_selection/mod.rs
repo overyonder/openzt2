@@ -199,21 +199,23 @@ pub(super) fn update_terrain_water_view_selection(
         With<ZooCamera>,
     >,
     indexes: Query<Ref<TerrainWaterMembershipIndex>>,
-    mut regions: Query<(
-        Entity,
-        &TerrainWaterRegionVisibility,
-        &mut TerrainWaterRegionFade,
-    )>,
     region_sources: TerrainWaterRegionQuery,
     assets: Res<Assets<TerrainAsset>>,
-    changed_regions: Query<
-        (),
-        Or<(
-            Changed<TerrainWaterRegionVisibility>,
-            Added<TerrainWaterRegionFade>,
-            ChangedWaterRegion,
+    mut regions: ParamSet<(
+        Query<
+            (),
+            Or<(
+                Changed<TerrainWaterRegionVisibility>,
+                Added<TerrainWaterRegionFade>,
+                ChangedWaterRegion,
+            )>,
+        >,
+        Query<(
+            Entity,
+            &TerrainWaterRegionVisibility,
+            &mut TerrainWaterRegionFade,
         )>,
-    >,
+    )>,
     mut removed_capture: RemovedComponents<TerrainWaterCaptureRegion>,
     mut removed_visibility: RemovedComponents<TerrainWaterRegionVisibility>,
     mut fade_transitions: MessageReader<
@@ -236,7 +238,7 @@ pub(super) fn update_terrain_water_view_selection(
         && !region.as_ref().is_some_and(DetectChanges::is_changed)
         && !index.as_ref().is_some_and(DetectChanges::is_changed)
         && !assets.is_changed()
-        && changed_regions.is_empty()
+        && regions.p0().is_empty()
         && !capture_removed
         && !visibility_removed
         && !fade_changed
@@ -268,6 +270,7 @@ pub(super) fn update_terrain_water_view_selection(
         config.maximum_distance,
     );
     let mut selected = candidate;
+    let mut regions = regions.p1();
     if let Some(previous) = previous {
         if let Ok((_, visibility, mut fade)) = regions.get_mut(previous) {
             let mut next = *fade;

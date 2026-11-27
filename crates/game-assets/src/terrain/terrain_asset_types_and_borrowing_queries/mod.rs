@@ -1,21 +1,38 @@
 //! Loaded canonical terrain data and its typed Bevy dependency handles.
 
-use std::{io, path::PathBuf};
+use std::{io, path::PathBuf, time::Duration};
 
-use bevy::{audio::AudioSource, platform::collections::HashMap, prelude::*};
+use bevy::{
+    asset::VisitAssetDependencies, audio::AudioSource, platform::collections::HashMap, prelude::*,
+};
 use openzt2_game_data::terrain::{TerrainBiome, TerrainGrid, TerrainShorelineRippleTiming};
 
 use crate::effect::ParticleEffectDocumentAsset;
+use crate::graphics_settings_types::{
+    GraphicsEffectQuality, GraphicsSettings, ThreeLevelGraphicsDetail,
+};
 use crate::material::material_asset_types::MaterialAsset;
 use crate::scene_prefab::ScenePrefabAsset;
+
+#[derive(Debug, VisitAssetDependencies)]
+pub(super) struct TankWaterMaterials {
+    pub(super) presentation: openzt2_game_data::terrain::TerrainBiomeWaterPresentation,
+    #[dependency]
+    pub(super) low: Handle<MaterialAsset>,
+    #[dependency]
+    pub(super) medium: Handle<MaterialAsset>,
+    #[dependency]
+    pub(super) high: Handle<MaterialAsset>,
+}
 
 #[derive(Asset, TypePath, Debug)]
 pub struct TerrainAsset {
     pub(in crate::terrain) canonical_terrain_grid: TerrainGrid,
     /// Immutable source-membership index, not settled live water-side ownership.
     pub(in crate::terrain) authored_water_region_membership: Box<[u32]>,
-    pub(in crate::terrain) water_biomes_by_material:
-        std::collections::BTreeMap<openzt2_game_data::AssetId, usize>,
+    #[dependency]
+    pub(in crate::terrain) tank_water_materials:
+        HashMap<openzt2_game_data::AssetId, TankWaterMaterials>,
     #[dependency]
     pub(in crate::terrain) chunk_meshes: Vec<Handle<Mesh>>,
     #[dependency]
@@ -37,8 +54,7 @@ pub struct TerrainAsset {
     #[dependency]
     pub(in crate::terrain) waterfall_audio: Option<Handle<AudioSource>>,
     #[dependency]
-    pub(in crate::terrain) water_scene_prefabs_by_normalized_system:
-        HashMap<String, Handle<ScenePrefabAsset>>,
+    pub(in crate::terrain) shoreline_ripples: HashMap<String, Vec<ShorelineRippleCondition>>,
     #[dependency]
     pub(in crate::terrain) water_materials_by_normalized_source_path:
         HashMap<String, Handle<MaterialAsset>>,
@@ -47,6 +63,21 @@ pub struct TerrainAsset {
         HashMap<String, Handle<ParticleEffectDocumentAsset>>,
     pub(in crate::terrain) named_water_particle_sources:
         HashMap<openzt2_game_data::AssetId, PathBuf>,
+}
+
+#[derive(Debug, VisitAssetDependencies)]
+pub(super) struct ShorelineRippleCondition {
+    pub(super) graphics: Option<ThreeLevelGraphicsDetail>,
+    pub(super) biome: Option<String>,
+    #[dependency]
+    pub(super) instance: Option<ShorelineRippleScene>,
+}
+
+#[derive(Debug, VisitAssetDependencies)]
+pub(super) struct ShorelineRippleScene {
+    #[dependency]
+    pub(super) scene: Handle<ScenePrefabAsset>,
+    pub(super) lifetime: Duration,
 }
 
 impl TerrainAsset {
@@ -94,35 +125,60 @@ impl TerrainAsset {
         &Handle<MaterialAsset>,
         &Handle<MaterialAsset>,
     )> {
-        let index = *self.water_biomes_by_material.get(&id)?;
+        let materials = self.tank_water_materials.get(&id)?;
         Some((
-            self.canonical_terrain_grid
-                .biomes
-                .get(index)?
-                .water_presentation
-                .as_ref()?,
-            self.water_low_detail_materials.get(index)?.as_ref()?,
-            self.water_medium_detail_materials.get(index)?.as_ref()?,
-            &self.water_surface_effect_material,
+            &materials.presentation,
+            &materials.low,
+            &materials.medium,
+            &materials.high,
         ))
     }
 
-    pub fn water_scene_prefab(&self, system: &str) -> Option<&Handle<ScenePrefabAsset>> {
-        self.water_scene_prefabs_by_normalized_system
-            .get(&system.to_ascii_lowercase())
+    pub fn shoreline_ripple_instance(
+        &self,
+        system: &str,
+        biome: &str,
+        graphics: &GraphicsSettings,
+    ) -> Option<(&Handle<ScenePrefabAsset>, Duration)> {
+        let tier = graphics
+            .particle_budget_tier
+            .unwrap_or(match graphics.effects {
+                GraphicsEffectQuality::Low => ThreeLevelGraphicsDetail::Low,
+                GraphicsEffectQuality::High => ThreeLevelGraphicsDetail::High,
+            });
+        let selected = self
+            .shoreline_ripples
+            .get(&system.to_ascii_lowercase())?
+            .iter()
+            .filter(|row| {
+                row.graphics.is_none_or(|graphics| graphics == tier)
+                    && row
+                        .biome
+                        .as_ref()
+                        .is_none_or(|name| name.eq_ignore_ascii_case(biome))
+            })
+            .max_by_key(|row| u8::from(row.graphics.is_some()) + u8::from(row.biome.is_some()))?;
+        let instance = selected.instance.as_ref()?;
+        Some((&instance.scene, instance.lifetime))
     }
 
     pub fn shoreline_ripple_for_region(
         &self,
         region_index: usize,
-    ) -> Option<(&Handle<ScenePrefabAsset>, TerrainShorelineRippleTiming)> {
-        let shoreline = &self
-            .water_biome_for_region(region_index)?
-            .water_presentation
-            .as_ref()?
-            .shoreline;
-        let prefab = self.water_scene_prefab(shoreline.ripple_system.as_deref()?)?;
-        Some((prefab, shoreline.ripple_timing()))
+        graphics: &GraphicsSettings,
+    ) -> Option<(
+        &Handle<ScenePrefabAsset>,
+        Duration,
+        TerrainShorelineRippleTiming,
+    )> {
+        let biome = self.water_biome_for_region(region_index)?;
+        let shoreline = &biome.water_presentation.as_ref()?.shoreline;
+        let (scene, lifetime) = self.shoreline_ripple_instance(
+            shoreline.ripple_system.as_deref()?,
+            &biome.name,
+            graphics,
+        )?;
+        Some((scene, lifetime, shoreline.ripple_timing()))
     }
 
     pub fn water_material(&self, source_path: &str) -> Option<&Handle<MaterialAsset>> {

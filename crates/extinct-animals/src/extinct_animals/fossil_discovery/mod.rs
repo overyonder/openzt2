@@ -41,7 +41,9 @@ use openzt2_zoo_state::{
 
 use super::behavior_artifact_execution::DigAuthoredArtifact;
 use super::fossil_definition_index::{FossilDefinitionIndex, FossilRewardCandidate};
-use crate::fossil_site_types::{DigPit, FossilSiteKind, RequestedFossilPuzzle};
+use openzt2_zoo_state::extinct_animals::fossil_recovery_types::{
+    DigPit, FossilSiteKind, RequestedFossilPuzzle,
+};
 
 #[derive(QueryData)]
 #[query_data(mutable)]
@@ -342,7 +344,7 @@ fn settle_fossil_dig(
                 operation,
                 debit: Account::External,
                 credit: Account::Zoo,
-                amount: Money(dollars * 100),
+                amount: Money::from_cents(dollars * 100),
                 kind: TransactionKind::Reward,
                 subject: None,
             });

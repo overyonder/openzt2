@@ -28,7 +28,7 @@ impl Plugin for ModManagerPlugin {
                 (
                     mod_manager_ui_presentation::apply_mod_manager_visibility_controls,
                     mod_manager_ui_presentation::synchronize_mod_manager_visibility_and_reload_input_blocking,
-                    mod_manager_ui_presentation::toggle_selected_asset_archive_enabled_state,
+                    mod_manager_ui_presentation::apply_selected_asset_archive_change,
                     mod_manager_ui_presentation::synchronize_mod_manager_archive_checkbox_labels,
                     mod_manager_ui_presentation::present_asset_archive_checkbox_interaction_state,
                 )

@@ -56,8 +56,18 @@ fn valid_reference(reference: &BehaviorSnapshotEntityReference) -> bool {
             recipient,
             available_at,
             expires_at,
+            context,
+            payload,
             ..
-        } => !matches!(*recipient, 0 | u64::MAX) && available_at <= expires_at,
+        } => {
+            !matches!(*recipient, 0 | u64::MAX)
+                && available_at <= expires_at
+                && context.as_ref().is_none_or(|context| context.is_valid())
+                && payload.as_deref().is_none_or(|payload| {
+                    !matches!(payload, BehaviorSnapshotEntityReference::SelfToken { .. })
+                        && valid_reference(payload)
+                })
+        }
         BehaviorSnapshotEntityReference::TankCleaningSite { position, .. } => position
             .iter()
             .all(|value| f32::from_bits(*value).is_finite()),
@@ -167,7 +177,24 @@ pub(super) fn validate_behavior_actor_snapshots(
         }
         if let Some(job) = &record.staff_job {
             if job.execution_id != task.execution_id
-                || !valid_reference(&job.target)
+                || job
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| !valid_reference(target))
+                || job
+                    .persistent_identifier
+                    .is_some_and(|id| matches!(id, 0 | u64::MAX))
+                || job
+                    .point
+                    .is_some_and(|point| point.iter().any(|axis| !axis.is_finite()))
+                || job.priority.is_some_and(|priority| !priority.is_finite())
+                || job.rejected_staff.windows(2).any(|pair| pair[0] >= pair[1])
+                || job.rejected_staff.iter().any(|staff| {
+                    !matches!(staff, BehaviorSnapshotEntityReference::Persistent(_))
+                        || !valid_reference(staff)
+                })
+                || !job.issued_at_seconds.is_finite()
+                || !job.remaining_wait_seconds.is_finite()
                 || !valid_asset_path(&job.document)
                 || !std::iter::once(&task.current)
                     .chain(&task.stack)

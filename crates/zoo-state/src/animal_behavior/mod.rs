@@ -5,6 +5,7 @@ pub mod behavior_natural_water_target_types;
 pub mod behavior_pursuit_types;
 pub mod behavior_random_stream_state;
 pub mod behavior_set_start_request_types;
+pub mod behavior_spatial_candidates;
 pub mod behavior_synchronized_set_types;
 pub mod behavior_target_placement_types;
 pub mod behavior_target_retry_delays;
@@ -17,4 +18,3 @@ pub mod animal_lineage;
 pub mod behavior_world_release_types;
 
 pub mod disease_exposure_state;
-pub mod egg_incubation;

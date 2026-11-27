@@ -62,7 +62,7 @@ fn initialize_world() -> (World, Entity, AssetId, [AssetId; 2]) {
 #[test]
 fn scenario_group_status_survives_the_snapshot_extension() {
     let group = AssetId::from_key("saved-group");
-    let saved = ScenarioSnapshot {
+    let mut saved = ScenarioSnapshot {
         timing: ScenarioScriptTiming::from_elapsed_seconds(2.5, 0.25),
         challenge: None,
         groups: ScenarioGroupSnapshots {
@@ -77,6 +77,13 @@ fn scenario_group_status_survives_the_snapshot_extension() {
         lua: None,
         ui: Default::default(),
     };
+    saved.ui.catalogue = Some(vec![
+        crate::scenario::scenario_lua_ui::SavedCatalogueRestriction {
+            list: Some(AssetId::from_key("fences")),
+            definition: AssetId::from_key("allowed-fence"),
+            enabled: true,
+        },
+    ]);
     let bytes = encode(Some(&saved)).unwrap();
     let records = record_count(Some(&saved));
     let decode_bytes = |bytes: &[u8]| {
@@ -93,7 +100,9 @@ fn scenario_group_status_survives_the_snapshot_extension() {
     };
     assert_eq!(decode_bytes(&bytes), saved);
     let previous = postcard::to_allocvec(&saved).unwrap();
-    assert!(decode_bytes(&previous).groups.session.is_empty());
+    let previous = decode_bytes(&previous);
+    assert!(previous.groups.session.is_empty());
+    assert!(previous.ui.catalogue.is_none());
 }
 
 #[test]
@@ -419,6 +428,23 @@ fn challenge_only_save_restores_offer_expiry_and_selection_stream() {
             }),
         }),
     };
+    let mut pending = saved.clone();
+    let challenge = pending.challenge.as_mut().unwrap();
+    challenge.offer = None;
+    challenge.pending_validation = Some(definition);
+    let bytes = encode(Some(&pending)).unwrap();
+    assert_eq!(
+        decode(
+            &bytes,
+            WorldSnapshotSectionDirectoryEntry {
+                encoded_record_count: record_count(Some(&pending)),
+                payload_start_byte_offset: 0,
+                payload_byte_count: bytes.len() as u64,
+            },
+        )
+        .unwrap(),
+        Some(pending)
+    );
     let bytes = encode(Some(&saved)).unwrap();
     let decoded = decode(
         &bytes,

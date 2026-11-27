@@ -11,6 +11,7 @@ use openzt2_game_data::ui_document::document::UiDocumentRole;
 use super::{
     ui_document_asset_dependency_loading::create_ui_document_asset_and_load_typed_dependencies,
     ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
+    ui_document_role_asset_path_selection::UI_DOCUMENT_ASSET_EXTENSION,
     ui_template_declaration_path_index_cache::UiTemplateDeclarationPathIndexCache,
 };
 
@@ -44,11 +45,17 @@ impl AssetLoader for UiDocumentAssetLoader {
     ) -> Result<Self::Asset, Self::Error> {
         let mut primary_source_bytes = Vec::new();
         reader.read_to_end(&mut primary_source_bytes).await?;
-        let primary_source_path = load_context
-            .path()
-            .path()
-            .to_string_lossy()
-            .replace('\\', "/");
+        let asset_path = load_context.path().path();
+        let primary_source_path = if asset_path
+            .extension()
+            .is_some_and(|extension| extension == UI_DOCUMENT_ASSET_EXTENSION)
+        {
+            asset_path.with_extension("")
+        } else {
+            asset_path.to_path_buf()
+        }
+        .to_string_lossy()
+        .replace('\\', "/");
         let template_declaration_paths = self
             .template_declaration_path_index_cache
             .template_declaration_paths(&self.asset_archives);
@@ -124,6 +131,6 @@ impl AssetLoader for UiDocumentAssetLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["xml", "zt2", "old"]
+        &[UI_DOCUMENT_ASSET_EXTENSION]
     }
 }

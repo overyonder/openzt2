@@ -351,20 +351,22 @@ pub(super) fn collect_authored_world_definition_source_document_dependency_refer
                 .map(str::trim)
                 .filter(|ruin| !ruin.is_empty())
             {
-                let fragments = source_node
-                    .attribute_named_any(&["rubbleBinderName"])
-                    .map(str::trim)
-                    .filter(|fragments| !fragments.is_empty())
-                    .map(str::to_owned);
-                for reference in [ruin.to_owned(), format!("{ruin}_1"), format!("{ruin}_2")]
-                    .into_iter()
-                    .chain(fragments)
-                {
+                for reference in [ruin.to_owned(), format!("{ruin}_1"), format!("{ruin}_2")] {
                     source_document_references.insert((
                         source_document_path.to_owned(),
                         AuthoredWorldDefinitionSourceReference::OptionalDocument(reference),
                     ));
                 }
+            }
+            if let Some(fragments) = source_node
+                .attribute_named_any(&["rubbleBinderName"])
+                .map(str::trim)
+                .filter(|fragments| !fragments.is_empty())
+            {
+                source_document_references.insert((
+                    source_document_path.to_owned(),
+                    AuthoredWorldDefinitionSourceReference::OptionalDocument(fragments.to_owned()),
+                ));
             }
         }
         if ["fog", "skylayers"]

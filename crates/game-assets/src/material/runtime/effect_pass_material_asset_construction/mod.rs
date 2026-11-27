@@ -678,6 +678,7 @@ fn create_effect_pass_material_asset(
         dirty_transform_inputs: false,
         dynamic_parameter_register_bindings,
         dynamic_texture_semantics,
+        texture_parameter_names: state.textures.clone(),
         vertex_uniform_upload_order,
         pixel_uniform_upload_order,
     };

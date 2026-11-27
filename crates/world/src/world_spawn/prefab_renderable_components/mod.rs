@@ -84,7 +84,7 @@ pub(super) fn attach_prefab_renderable_animations(
     use openzt2_world_state::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;
 
     let animations = prefab
-        .loaded_animation_set_asset_handles()
+        .loaded_animation_set_asset_handles_for_renderable(row, renderable)
         .cloned()
         .collect::<Box<[_]>>();
     if animations.is_empty() {
@@ -99,6 +99,7 @@ pub(super) fn attach_prefab_renderable_animations(
             requested_initial_animation_clip_asset_key: start
                 .as_ref()
                 .map(|start| start.clip_key.clone()),
+            requested_initial_repetition_policy: None,
         },
         PrefabAnimationBinding { clock, start },
     ));

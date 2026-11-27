@@ -23,6 +23,9 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdError;
 )]
 pub struct Guest;
 
+#[derive(Component)]
+pub struct GuestEntranceApproach;
+
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuestArchetype(pub AssetId);
 
@@ -34,6 +37,30 @@ pub struct GuestFavouriteAnimal(pub Option<AssetId>);
 
 #[derive(Component, Debug, Clone, Copy)]
 pub struct GuestRng(pub DeterministicRng);
+
+/// Restored needs and thinker progress installed as their live components.
+#[derive(Bundle)]
+pub struct GuestNeedContinuation {
+    pub hunger: GuestHunger,
+    pub thirst: GuestThirst,
+    pub dessert: GuestDessert,
+    pub gift: GuestGift,
+    pub energy: GuestEnergy,
+    pub restroom: GuestRestroom,
+    pub social: GuestSocial,
+    pub amusement: GuestAmusement,
+    pub satisfaction: GuestSatisfaction,
+    pub timer: GuestNeedAdjustmentTimer,
+    pub random: GuestRng,
+}
+
+/// The visit's phase, elapsed time and remaining spending balance.
+#[derive(Bundle)]
+pub struct GuestVisitContinuation {
+    pub phase: GuestPhase,
+    pub visit: VisitTime,
+    pub wallet: crate::economy::facility_economy_types::Wallet,
+}
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum GuestPhase {
@@ -205,7 +232,7 @@ pub struct GuestMemoryEntry {
     pub subject: Entity,
     pub kind: GuestMemoryKind,
     pub value_permille: i16,
-    pub age_ticks: u64,
+    pub created_tick: u64,
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]

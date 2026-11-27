@@ -3,7 +3,7 @@
 use std::{io, path::Path};
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
 use openzt2_game_data::AssetId;
@@ -17,12 +17,7 @@ use super::{
 };
 
 use crate::{
-    asset_source::{
-        AssetArchives,
-        archive_entry_asset_path::{
-            ARCHIVE_ENTRY_ASSET_EXTENSION, archive_entry_asset_source_path,
-        },
-    },
+    asset_source::{archive_entry_asset_path::archive_entry_asset_source_path, AssetArchives},
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
     },
@@ -170,9 +165,10 @@ impl AssetLoader for WorldScenarioDocumentLoader {
                 .iter()
                 .any(|start| start.entities.iter().any(|entity| entity.prefab == id))
         });
-        let textures = demand_handles(&references, SourceReferenceKind::Texture, context, |id| {
-            document.maps.iter().any(|record| record.thumbnail == id)
-        });
+        let textures =
+            demand_handles::<Image>(&references, SourceReferenceKind::Texture, context, |id| {
+                document.maps.iter().any(|record| record.thumbnail == id)
+            });
         let scripts =
             super::world_scenario_script_dependency_loading::load_scenario_script_dependencies(
                 &document,
@@ -208,10 +204,6 @@ impl AssetLoader for WorldScenarioDocumentLoader {
             photo_scripts,
         })
     }
-
-    fn extensions(&self) -> &[&str] {
-        &["xml", "zt2", ARCHIVE_ENTRY_ASSET_EXTENSION]
-    }
 }
 
 fn demand_handles<T: Asset>(
@@ -226,7 +218,11 @@ fn demand_handles<T: Asset>(
         .filter(|reference| used(reference.id))
         .map(|reference| DemandLoadedAssetHandle {
             id: reference.id,
-            handle: context.load(reference.path.clone()),
+            handle: context.load::<T>(if kind == SourceReferenceKind::Texture {
+                crate::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(&reference.path)
+            } else {
+                reference.path.clone()
+            }),
         })
         .collect::<Vec<_>>();
     handles.sort_unstable_by_key(|handle| handle.id);

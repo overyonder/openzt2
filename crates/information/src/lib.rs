@@ -1,7 +1,6 @@
 //! Object information, catalogue and Zoopedia screens.
 
 pub mod catalogue;
-pub use catalogue::catalogue_type_list_policy_operations::CatalogueTypeListMemoryPolicy;
 mod information_entity_list_operations;
 mod information_graph_operations;
 mod information_list_types;
@@ -151,7 +150,6 @@ impl Plugin for InformationPlugin {
                         catalogue::catalogue_preview_scene_projection::hydrate_catalogue_preview_scene_prefab_render_trees
                             .after(catalogue::catalogue_preview_scene_projection::project_selected_catalogue_entry_into_preview_scene),
                         catalogue::catalogue_preview_scene_projection::attach_loaded_species_animation_to_catalogue_preview_renderables,
-                        catalogue::catalogue_preview_scene_projection::apply_authored_catalogue_preview_initial_animation_repetition_policy_after_attachment,
                     ).chain(),
                     catalogue::catalogue_page_projection::project_catalogue_page,
                     projection::selected_entity_identity_projection::project_selected_entity_identity_to_authored_panel_members.after(projection::panel_binding_families::bind_information_panel_fields),
@@ -203,6 +201,7 @@ impl Plugin for InformationPlugin {
                     projection::guest_status_projection::project_live_guest_status_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
                     projection::staff_status_projection::project_maintenance_worker_duties_to_information_panel_controls.after(projection::panel_binding_families::bind_information_panel_fields),
                     projection::staff_status_projection::project_live_staff_status_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
+                    projection::staff_status_projection::project_authored_trainer_trick_toggles,
                     projection::zoo_status_projection::project_live_zoo_status_to_authored_information_bindings,
                     projection::animal_alert_button_projection::project_animal_alerts_to_find_animal_buttons,
                     (

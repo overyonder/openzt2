@@ -53,7 +53,8 @@ pub struct FacilityProfit {
 impl FacilityProfit {
     pub fn average(self) -> Money {
         (self.transactions != 0)
-            .then(|| Money(self.total.0 / i64::from(self.transactions)))
+            .then(|| self.total.checked_scale((self.transactions as f32).recip()))
+            .flatten()
             .unwrap_or(Money::ZERO)
     }
 }
@@ -103,9 +104,3 @@ impl Inventory {
             .min(u32::from(available_limit)) as u16;
     }
 }
-
-#[derive(Component)]
-pub struct ObjectEconomyFactsResolved;
-
-#[derive(Component)]
-pub struct ServiceFacilityFactsResolved;

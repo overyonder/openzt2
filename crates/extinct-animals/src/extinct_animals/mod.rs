@@ -1,6 +1,12 @@
 //! Fossil recovery and assembly as focused ECS facts and operations.
 
 mod behavior_artifact_execution;
+mod cloning_completion;
+pub use cloning_completion::{
+    CloningCenterOccupantOf, CloningCenterOccupants, CompleteCloningPlacement,
+};
+mod fossil_education;
+pub use fossil_education::FossilSkeletonRewardTimer;
 mod extinct_animal_world_hydration;
 mod fossil_assembly;
 pub use fossil_assembly::{FossilAssemblyPiecePose, UpdateFossilAssemblyPiecePose};
@@ -30,6 +36,8 @@ impl Plugin for ExtinctAnimalsPlugin {
     fn build(&self, app: &mut App) {
         fossil_sonar::register_fossil_sonar_projection(app);
         fossil_find_effect::register(app);
+        cloning_completion::register(app);
+        fossil_education::register(app);
         behavior_artifact_execution::register(app);
         app.add_observer(fossil_discovery::discover_authored_fossil);
         app.init_resource::<fossil_definition_index::FossilDefinitionIndex>()
@@ -38,7 +46,7 @@ impl Plugin for ExtinctAnimalsPlugin {
             .add_message::<UpdateFossilAssemblyPiecePose>()
             .add_message::<ActivateFossilSiteMarkersRequest>()
             .add_message::<CompletedFossilSetAssembly>()
-            .add_message::<crate::fossil_site_types::SetFossilPuzzleToFind>()
+            .add_message::<openzt2_zoo_state::extinct_animals::fossil_recovery_types::SetFossilPuzzleToFind>()
             .add_observer(fossil_assembly::clear_assembly_when_table_marker_is_removed)
             .add_observer(fossil_discovery::present_fossil_find_feedback)
             .add_systems(
@@ -60,7 +68,7 @@ impl Plugin for ExtinctAnimalsPlugin {
                         .after(fossil_definition_index::index_winning_fossil_definitions)
                         .after(fossil_world_objects::reset_requested_fossil_search),
                     fossil_world_objects::reset_requested_fossil_search
-                        .run_if(on_message::<crate::fossil_site_types::SetFossilPuzzleToFind>),
+                        .run_if(on_message::<openzt2_zoo_state::extinct_animals::fossil_recovery_types::SetFossilPuzzleToFind>),
                     fossil_assembly::place_requested_fossil_pieces
                         .after(fossil_assembly::update_fossil_assembly_piece_poses)
                         .after(fossil_definition_index::index_winning_fossil_definitions)

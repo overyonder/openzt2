@@ -46,6 +46,55 @@ pub struct NavigationPathSurfaceChanges {
     pub ground_nodes: BTreeSet<u32>,
     pub elevated_nodes: BTreeSet<u32>,
     pub affected_cells: BTreeSet<[u32; 2]>,
+    pub affected_edges: BTreeMap<[u32; 2], NavigationEdgeChange>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct NavigationTerrainCellEdit {
+    pub cell: UVec2,
+    pub height_centimetres: i32,
+    pub minimum_triangle_normal_y: f32,
+    pub contains_water: bool,
+    pub water_depth_centimetres: u16,
+}
+
+pub type NavigationDirectedEdges = BTreeMap<[u32; 2], TerrainDerivedNavigationGraphEdge>;
+
+#[derive(Default)]
+pub struct NavigationTerrainChanges {
+    pub affected_nodes: BTreeMap<u32, [TerrainDerivedNavigationGraphNode; 2]>,
+    pub affected_edges: BTreeMap<[u32; 2], NavigationEdgeChange>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NavigationEdgeChange {
+    pub before: Option<TerrainDerivedNavigationGraphEdge>,
+    pub after: Option<TerrainDerivedNavigationGraphEdge>,
+}
+
+impl NavigationEdgeChange {
+    /// Cost direction before applying an actor's traversal policy.
+    pub fn cost_direction(self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+
+        match (self.before, self.after) {
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            _ => (),
+        }
+        let cost = |edge: Option<TerrainDerivedNavigationGraphEdge>| {
+            edge.map_or((true, u32::MAX, true), |edge| {
+                (
+                    edge.edge_flags.0
+                        & TerrainDerivedNavigationGraphEdgeFlags::DISABLED_BY_DEFAULT.0
+                        != 0,
+                    edge.traversal_cost_millimetres,
+                    edge.edge_flags.0 & TerrainDerivedNavigationGraphEdgeFlags::PREFERRED.0 == 0,
+                )
+            })
+        };
+        cost(self.after).cmp(&cost(self.before))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

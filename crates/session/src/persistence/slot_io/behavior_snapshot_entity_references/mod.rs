@@ -73,7 +73,7 @@ pub(super) fn planned_behavior_topology_references(
 
 use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure,
-    behavior_snapshot_types::BehaviorSnapshotEntityReference,
+    behavior_snapshot_types::{BehaviorSnapshotEntityReference, SavedBehaviorTokenContext},
 };
 
 /// Reads only the components needed by behavior persistence, allowing loading
@@ -85,6 +85,8 @@ pub(in crate::persistence) struct BehaviorSnapshotEntityData {
     pub(super) animal_terrain_water_contact: Option<&'static openzt2_zoo_state::locomotion::locomotion_types::AnimalTerrainWaterContact>,
     pub(super) behavior_random_stream: Option<&'static openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream>,
     pub(super) behavior_self_token: Option<&'static openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken>,
+    pub(super) behavior_token_context: Option<&'static openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorTokenContext>,
+    pub(super) behavior_token_xml: Option<&'static openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorTokenXmlPayload>,
     pub(super) behavior_task_effective_score: Option<&'static openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore>,
     pub(super) behavior_task_execution_state: Option<&'static openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState>,
     pub(super) child_of: Option<&'static ChildOf>,
@@ -120,6 +122,9 @@ pub(in crate::persistence) struct BehaviorSnapshotEntityData {
     pub(super) route: Option<&'static openzt2_zoo_state::locomotion::locomotion_types::Route>,
     pub(super) selected_natural_water_target: Option<&'static openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>,
     pub(super) staff_job: Option<&'static openzt2_zoo_state::staff::staff_job_types::StaffJob>,
+    pub(super) rejected_staff: Option<&'static openzt2_zoo_state::staff::staff_job_types::UnsuccessfulStaffJobCandidates>,
+    pub(super) staff_job_target: Option<&'static openzt2_zoo_state::staff::staff_job_types::StaffJobTarget>,
+    pub(super) is_staff: Has<openzt2_zoo_state::staff::staff_employment_types::Staff>,
     pub(super) staff_job_behavior_task: Option<&'static openzt2_zoo_state::staff::staff_job_types::StaffJobBehaviorTask>,
     pub(super) swim_layer: Option<&'static openzt2_zoo_state::locomotion::locomotion_types::SwimLayer>,
     pub(super) synchronized_behavior_owner: Option<&'static openzt2_zoo_state::animal_behavior::behavior_synchronized_set_types::SynchronizedBehaviorOwner>,
@@ -203,6 +208,25 @@ pub(super) fn capture_behavior_entity_reference(
             available_at: token.available_at,
             expires_at: token.expires_at,
             retain_on_failure: token.retain_on_failure,
+            payload: token
+                .payload
+                .filter(|&payload| entities.get(payload).is_ok())
+                .map(|payload| {
+                    if entities
+                        .get(payload)
+                        .is_ok_and(|entity| entity.behavior_self_token.is_some())
+                    {
+                        return Err(
+                            WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference,
+                        );
+                    }
+                    capture_behavior_entity_reference(payload, entities).map(Box::new)
+                })
+                .transpose()?,
+            context: SavedBehaviorTokenContext::capture(
+                entity.behavior_token_context,
+                entity.behavior_token_xml,
+            ),
         });
     }
     if let Some(id) = entity.persistent_id {

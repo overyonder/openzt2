@@ -10,8 +10,10 @@ pub struct AdmissionPrice {
 
 impl AdmissionPrice {
     /// A changed admission band sets the child fee to half the adult fee.
-    pub const fn from_adult(adult: Money) -> Self {
-        let child = Money(adult.0 / 2 + adult.0 % 2);
+    pub fn from_adult(adult: Money) -> Self {
+        let child = adult
+            .checked_scale(0.5)
+            .expect("halving a finite price is finite");
         Self { adult, child }
     }
 }

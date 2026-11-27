@@ -8,19 +8,18 @@ use openzt2_zoo_state::animal_health::types::CaptureAnimalRequest;
 use openzt2_zoo_state::animal_health::types::Disease;
 use openzt2_zoo_state::animal_health::types::Escaped;
 use openzt2_zoo_state::animal_health::types::Tranquilized;
-use openzt2_zoo_state::animal_health::types::Treatment;
-use openzt2_zoo_state::animal_health::types::TreatmentRequest;
+use openzt2_zoo_state::animal_health::types::{
+    TreatmentCorrelation, AnimalTreatmentSettled, TreatmentOutcome, TreatmentRequest,
+};
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 
 use super::{
     staff_job_types::{JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask},
-    staff_lifecycle_messages::StaffJobCompleted,
+    staff_lifecycle_messages::{CancelStaffJobRequest, StaffJobCompleted},
 };
 
 #[derive(Component)]
-pub(super) struct AwaitingAnimalHealthEffect {
-    observed_active_treatment: bool,
-}
+pub(super) struct AwaitingAnimalHealthEffect;
 
 pub(crate) fn request_animal_health_effects_after_authored_staff_behavior_finishes(
     mut commands: Commands,
@@ -50,7 +49,15 @@ pub(crate) fn request_animal_health_effects_after_authored_staff_behavior_finish
         {
             continue;
         }
-        let Ok((disease, escaped, tranquilized)) = animals.get(job.target) else {
+        let Some(target) = job.target else { continue };
+        let Ok((disease, escaped, tranquilized)) = animals.get(target) else {
+            continue;
+        };
+        let Some(execution_id) = behavior_tasks
+            .get(job_entity)
+            .ok()
+            .and_then(|behavior| behavior.execution_id)
+        else {
             continue;
         };
         let effect_requested = match kind {
@@ -65,22 +72,19 @@ pub(crate) fn request_animal_health_effects_after_authored_staff_behavior_finish
                 })
                 .is_some_and(|treatment| {
                     treatment_requests.write(TreatmentRequest {
-                        animal: job.target,
+                        animal: target,
                         treatment: AssetId(treatment.0),
                         provider: claim.staff,
+                        correlation: Some(TreatmentCorrelation {
+                            job: job_entity,
+                            execution_id,
+                        }),
                     });
                     true
                 }),
             StaffJobKind::Capture if escaped.is_some() && tranquilized.is_some() => {
-                let Some(execution_id) = behavior_tasks
-                    .get(job_entity)
-                    .ok()
-                    .and_then(|behavior| behavior.execution_id)
-                else {
-                    continue;
-                };
                 capture_requests.write(CaptureAnimalRequest {
-                    animal: job.target,
+                    animal: target,
                     staff: claim.staff,
                     job: job_entity,
                     execution_id,
@@ -92,29 +96,23 @@ pub(crate) fn request_animal_health_effects_after_authored_staff_behavior_finish
         if effect_requested {
             commands
                 .entity(job_entity)
-                .insert(AwaitingAnimalHealthEffect {
-                    observed_active_treatment: false,
-                });
+                .insert(AwaitingAnimalHealthEffect);
         }
     }
 }
 
 pub(crate) fn complete_staff_jobs_after_animal_health_effects_apply(
     mut captured_animals: MessageReader<AnimalCaptured>,
-    mut jobs: Query<(
-        Entity,
-        &StaffJob,
-        &JobClaim,
-        &mut AwaitingAnimalHealthEffect,
-    )>,
-    animals: Query<(Option<&Treatment>, Option<&Tranquilized>), With<Animal>>,
+    mut treatments: MessageReader<AnimalTreatmentSettled>,
+    jobs: Query<(Entity, &StaffJob, &JobClaim), With<AwaitingAnimalHealthEffect>>,
     behavior_tasks: Query<&StaffJobBehaviorTask>,
     mut completed_jobs: MessageWriter<StaffJobCompleted>,
+    mut cancellations: MessageWriter<CancelStaffJobRequest>,
 ) {
     for captured_animal in captured_animals.read() {
-        if let Ok((job_entity, job, claim, _)) = jobs.get(captured_animal.job) {
+        if let Ok((job_entity, job, claim)) = jobs.get(captured_animal.job) {
             if job.kind == Some(StaffJobKind::Capture)
-                && job.target == captured_animal.animal
+                && job.target == Some(captured_animal.animal)
                 && claim.staff == captured_animal.staff
                 && behavior_tasks.get(job_entity).is_ok_and(|behavior| {
                     behavior.execution_id == Some(captured_animal.execution_id)
@@ -124,37 +122,36 @@ pub(crate) fn complete_staff_jobs_after_animal_health_effects_apply(
                     staff: claim.staff,
                     job: job_entity,
                     kind: StaffJobKind::Capture,
-                    target: job.target,
+                    target: captured_animal.animal,
                 });
             }
         }
     }
-    for (job_entity, job, claim, mut awaiting_effect) in &mut jobs {
-        let Some(kind) = job.kind else {
+    for treatment in treatments.read() {
+        let Ok((job_entity, job, claim)) = jobs.get(treatment.correlation.job) else {
             continue;
         };
-        let Ok((treatment, tranquilized)) = animals.get(job.target) else {
+        if job.kind != Some(StaffJobKind::Treat)
+            || job.target != Some(treatment.animal)
+            || claim.staff != treatment.provider
+            || !behavior_tasks.get(job_entity).is_ok_and(|behavior| {
+                behavior.execution_id == Some(treatment.correlation.execution_id)
+            })
+        {
             continue;
-        };
-        let effect_applied = match kind {
-            StaffJobKind::Treat => {
-                if treatment.is_some_and(|treatment| treatment.provider == claim.staff) {
-                    awaiting_effect.observed_active_treatment = true;
-                    false
-                } else {
-                    awaiting_effect.observed_active_treatment && treatment.is_none()
-                }
+        }
+        match treatment.outcome {
+            TreatmentOutcome::Completed => {
+                completed_jobs.write(StaffJobCompleted {
+                    staff: claim.staff,
+                    job: job_entity,
+                    kind: StaffJobKind::Treat,
+                    target: treatment.animal,
+                });
             }
-            StaffJobKind::Tranquilize => tranquilized.is_some(),
-            _ => false,
-        };
-        if effect_applied {
-            completed_jobs.write(StaffJobCompleted {
-                staff: claim.staff,
-                job: job_entity,
-                kind,
-                target: job.target,
-            });
+            TreatmentOutcome::Rejected | TreatmentOutcome::Cancelled => {
+                cancellations.write(CancelStaffJobRequest { job: job_entity });
+            }
         }
     }
 }

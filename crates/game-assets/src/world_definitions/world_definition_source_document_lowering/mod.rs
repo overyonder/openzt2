@@ -4,7 +4,7 @@ use std::io;
 
 use crate::source_document::{
     blue_fang_actor_manifest_model_and_scene_resolution_index::BlueFangActorManifestModelAndSceneResolutionIndex,
-    document_semantics::{SourceDocumentKind, classify_source_document},
+    document_semantics::{classify_source_document, SourceDocumentKind},
     ordered_source_document_types::{OrderedSourceDocument, OrderedSourceDocumentNode},
 };
 use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
@@ -20,6 +20,7 @@ mod tests;
 pub(super) struct WorldDefinitionSourceMetadata {
     pub(super) runtime: super::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAssetMetadata,
     pub(super) tank_material_paths: std::collections::BTreeSet<String>,
+    pub(super) physical_actors: std::collections::BTreeMap<openzt2_game_data::AssetId, std::collections::BTreeMap<openzt2_game_data::AssetId, lower::named_physical_presentation_source_lowering::AuthoredPhysicalActor>>,
 }
 
 pub(super) fn lower_resolved_world_definition_source_document_closure_to_canonical_document(
@@ -91,6 +92,8 @@ pub(super) fn lower_resolved_world_definition_source_document_closure_to_canonic
                 || (document.path.key() == primary_path
                     && primary_path.starts_with("locations/")
                     && primary_path.ends_with("initiallocs.xml"))
+                || (document.path.key() == primary_path
+                    && document.root.name.eq_ignore_ascii_case("BFGInfluenceMgr"))
                 || matches!(
                     classify_source_document(document),
                     SourceDocumentKind::SpeciesOrEntity
@@ -109,19 +112,16 @@ pub(super) fn lower_resolved_world_definition_source_document_closure_to_canonic
         actor_scene_paths,
         authored_type_registry_source_order,
     )
-    .and_then(|(mut document, runtime, tank_material_paths)| {
-        *metadata = WorldDefinitionSourceMetadata {
-            runtime,
-            tank_material_paths,
-        };
+    .and_then(|(mut document, authored)| {
+        *metadata = authored;
         if let Some(modes) = gameplay_modes.filter(|_| primary_path == "ui/modes/modes.xml") {
             document.transport_highlight = lower_transport_highlight_policy(modes)?;
         }
         // Abstract binders supply inherited data without requiring a standalone definition.
-        Ok(
-            (document != WorldDefinitionDocument::default() || primary_is_abstract_binder)
-                .then_some(document),
-        )
+        Ok((document != WorldDefinitionDocument::default()
+            || primary_is_abstract_binder
+            || metadata.runtime.guest_influence_policy.is_some())
+        .then_some(document))
     })
     .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
 }

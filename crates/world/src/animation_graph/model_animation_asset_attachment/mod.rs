@@ -27,6 +27,7 @@ pub(super) struct InitialAnimationSelection {
     library: Box<[Handle<AnimationSetAsset>]>,
     clip: String,
     source: Handle<AnimationClipSourceAsset>,
+    repetition: AnimationPlaybackRepetitionPolicy,
 }
 
 pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
@@ -40,7 +41,7 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
         With<openzt2_world_state::world_spawn::world_membership_types::WorldMember>,
     >,
     parents: Query<&ChildOf>,
-    pending_animation_subjects: Query<
+    mut pending_animation_subjects: Query<
         (
             Entity,
             Option<&PrefabModel>,
@@ -48,7 +49,7 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
             Option<&ChildOf>,
             Ref<PendingModelAnimationAssets>,
             Option<&PrefabAnimationBinding>,
-            Option<&InitialAnimationSelection>,
+            Option<&mut InitialAnimationSelection>,
             Has<ModelExpanded>,
         ),
         (
@@ -67,7 +68,7 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
         authored_binding,
         initial_source,
         expanded,
-    ) in &pending_animation_subjects
+    ) in &mut pending_animation_subjects
     {
         if prefab_model.is_some() && !expanded {
             continue;
@@ -77,8 +78,10 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
             initial_animation_set_asset_handle,
             loaded_model_animation_set_asset_handles,
             initial_animation_clip_asset_key,
-        ) = if let Some(initial) =
-            initial_source.filter(|_| !pending_model_animation_assets.is_changed())
+            repetition,
+        ) = if let Some(initial) = initial_source
+            .as_deref()
+            .filter(|_| !pending_model_animation_assets.is_changed())
         {
             if clip_sources.failed(&initial.source) {
                 finish_animation_asset_attachment(&mut commands, animation_subject_entity);
@@ -91,6 +94,7 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
                 initial.set.clone(),
                 initial.library.clone(),
                 initial.clip.clone(),
+                initial.repetition,
             )
         } else {
             if handles.iter().any(|handle| {
@@ -127,19 +131,49 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
             let selected = explicit
                 .and_then(|key| {
                     matching.iter().find_map(|&(handle, set)| {
-                        resolve_initial_animation_clip(set, key).map(|clip| (handle, clip))
+                        resolve_initial_animation_clip(set, key).map(|clip| {
+                            let repetition = pending_model_animation_assets
+                                .requested_initial_repetition_policy
+                                .or_else(|| {
+                                    authored_binding
+                                        .and_then(|binding| binding.start.as_ref())
+                                        .map(|start| {
+                                            if start.looping {
+                                                AnimationPlaybackRepetitionPolicy::Loop
+                                            } else {
+                                                AnimationPlaybackRepetitionPolicy::PlayOnce
+                                            }
+                                        })
+                                })
+                                .unwrap_or(
+                                    AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy,
+                                );
+                            (handle, clip, repetition)
+                        })
                     })
                 })
                 .or_else(|| {
                     if authored_binding.is_none() {
                         matching.iter().find_map(|&(handle, set)| {
-                            select_initial_animation_clip_asset_key(set).map(|clip| (handle, clip))
+                            select_initial_animation_clip_asset_key(set).map(|clip| {
+                                (
+                                    handle,
+                                    clip,
+                                    AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy,
+                                )
+                            })
                         })
                     } else {
-                        matching.first().map(|(handle, _)| (*handle, String::new()))
+                        matching.first().map(|(handle, _)| {
+                            (
+                                *handle,
+                                String::new(),
+                                AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy,
+                            )
+                        })
                     }
                 });
-            let Some((set, clip)) = selected else {
+            let Some((set, clip, repetition)) = selected else {
                 finish_animation_asset_attachment(&mut commands, animation_subject_entity);
                 continue;
             };
@@ -147,7 +181,7 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
                 .into_iter()
                 .map(|(handle, _)| handle.clone())
                 .collect::<Box<[_]>>();
-            (set.clone(), library, clip)
+            (set.clone(), library, clip, repetition)
         };
         let Some(initial_animation_set_asset) =
             animation_set_assets.get(&initial_animation_set_asset_handle)
@@ -167,14 +201,18 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
                 &initial_animation_clip_asset_key,
             );
             if let Some(source) = source.filter(|source| !clip_sources.failed(source)) {
-                commands
-                    .entity(animation_subject_entity)
-                    .try_insert(InitialAnimationSelection {
-                        set: initial_animation_set_asset_handle,
-                        library: loaded_model_animation_set_asset_handles,
-                        clip: initial_animation_clip_asset_key,
-                        source,
-                    });
+                let next = InitialAnimationSelection {
+                    set: initial_animation_set_asset_handle,
+                    library: loaded_model_animation_set_asset_handles,
+                    clip: initial_animation_clip_asset_key,
+                    source,
+                    repetition,
+                };
+                if let Some(mut current) = initial_source {
+                    *current = next;
+                } else {
+                    commands.entity(animation_subject_entity).try_insert(next);
+                }
             } else {
                 finish_animation_asset_attachment(&mut commands, animation_subject_entity);
             }
@@ -228,18 +266,7 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
                 preserve_seek_on_restart: false,
                 playback_speed_permille: 1000,
 
-                playback_repetition_policy: authored_binding
-                    .and_then(|binding| binding.start.as_ref())
-                    .map_or(
-                        AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy,
-                        |start| {
-                            if start.looping {
-                                AnimationPlaybackRepetitionPolicy::Loop
-                            } else {
-                                AnimationPlaybackRepetitionPolicy::PlayOnce
-                            }
-                        },
-                    ),
+                playback_repetition_policy: repetition,
                 playback_clock: if in_live_world {
                     AnimationPlaybackClock::Simulation
                 } else {

@@ -34,23 +34,22 @@ pub(super) fn project_selected_world_catalogue_filter_into_authored_location_tog
     filters: Query<Ref<SelectedWorldCatalogueFilter>>,
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<(Ref<UiDocumentRoot>, &ChildOf, Option<&UiDocumentMembers>)>,
-    projected: Query<
-        Entity,
-        (
-            With<UiShellActions>,
-            Or<(
-                Changed<UiShellActions>,
-                Added<UiSelected>,
-                Changed<UiDocumentOwner>,
-            )>,
-        ),
-    >,
-    mut action_nodes: Query<
-        (&UiShellActions, &UiDocumentOwner, &mut UiSelected),
-        Without<WorldChoiceView>,
-    >,
+    mut controls: ParamSet<(
+        Query<
+            Entity,
+            (
+                With<UiShellActions>,
+                Or<(
+                    Changed<UiShellActions>,
+                    Added<UiSelected>,
+                    Changed<UiDocumentOwner>,
+                )>,
+            ),
+        >,
+        Query<(&UiShellActions, &UiDocumentOwner, &mut UiSelected), Without<WorldChoiceView>>,
+    )>,
 ) {
-    let mut affected: EntityHashSet = projected.iter().collect();
+    let mut affected: EntityHashSet = controls.p0().iter().collect();
     for (root, owner, members) in &roots {
         if let Some(members) = members.filter(|_| {
             documents.is_changed()
@@ -62,6 +61,7 @@ pub(super) fn project_selected_world_catalogue_filter_into_authored_location_tog
             affected.extend(members.iter());
         }
     }
+    let mut action_nodes = controls.p1();
     for entity in affected {
         let Ok((actions, document_owner, mut selected)) = action_nodes.get_mut(entity) else {
             continue;

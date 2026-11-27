@@ -41,12 +41,7 @@ pub(super) fn load_selected_world_economy(
         return;
     }
     for (root, identity, documents) in &roots {
-        let authored_path = documents
-            .mode
-            .as_ref()
-            .and_then(Handle::path)
-            .or_else(|| documents.start.path())
-            .or_else(|| documents.map.path());
+        let authored_path = documents.mode.as_ref().and_then(Handle::path);
         let handle = if let Some(path) = authored_path {
             server.load::<SavedWorldEconomyAsset>(path.without_label().into_owned())
         } else {

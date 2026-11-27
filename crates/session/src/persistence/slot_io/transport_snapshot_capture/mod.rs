@@ -3,8 +3,9 @@ use bevy::ecs::relationship::RelationshipTarget;
 use super::super::persistence_failure_types::WorldSnapshotPersistenceFailure;
 use super::{
     transport_snapshot_types::{
-        TransportCircuitMemberSnapshotRecord, TransportCircuitSnapshotRecord,
-        TransportRouteSnapshot, TransportSnapshotRecords, TransportVehicleSnapshotRecord,
+        StationTourRatingSnapshot, TransportCircuitMemberSnapshotRecord,
+        TransportCircuitSnapshotRecord, TransportRouteSnapshot, TransportSnapshotRecords,
+        TransportVehicleSnapshotRecord,
     },
     world_snapshot_capture_system_parameters::TransportCaptureQueries,
 };
@@ -63,6 +64,21 @@ pub(super) fn capture_sorted_transport_snapshot_records_from_live_world(
                 .graph
                 .poses
                 .push((persistent_identifier.0, *pose));
+        }
+        if let Ok((rating, history)) = world_snapshot_capture_queries
+            .station_tour_ratings
+            .get(entity)
+        {
+            if rating.0 != 0 || !history.0.is_empty() {
+                transport_snapshot_records
+                    .graph
+                    .station_ratings
+                    .push(StationTourRatingSnapshot {
+                        station: persistent_identifier.0,
+                        permille: rating.0,
+                        samples: history.0.iter().copied().collect(),
+                    });
+            }
         }
         transport_snapshot_records.circuit_member_records.push(
             TransportCircuitMemberSnapshotRecord {
@@ -156,6 +172,9 @@ pub(super) fn capture_sorted_transport_snapshot_records_from_live_world(
         });
     }
     graph.fares_dollars.sort_unstable_by_key(|(id, _)| *id);
+    graph
+        .station_ratings
+        .sort_unstable_by_key(|rating| rating.station);
     graph
         .sky_station_crossings
         .sort_unstable_by_key(|crossing| crossing.vehicle);

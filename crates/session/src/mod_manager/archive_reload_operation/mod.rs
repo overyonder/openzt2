@@ -33,12 +33,13 @@ use openzt2_game_assets::{
 use crate::shell::shell_navigation_request_types::ReturnToMainMenu;
 
 use super::mod_manager_ui_presentation::{
+    apply_selected_asset_archive_change,
     synchronize_mod_manager_visibility_and_reload_input_blocking,
-    toggle_selected_asset_archive_enabled_state,
 };
 
 #[derive(Component)]
 pub(super) struct AssetArchiveReloadOperation {
+    generation: Option<u64>,
     pending: BTreeMap<UntypedAssetId, ExpectedAssetReload>,
     stalled: Timer,
     failed: bool,
@@ -52,6 +53,7 @@ struct ExpectedAssetReload {
 #[derive(Message)]
 struct ArchiveReloadAssetNotice {
     operation: Entity,
+    generation: Option<u64>,
     asset: UntypedAssetId,
     ready: bool,
 }
@@ -66,8 +68,9 @@ impl SystemBuffer for ArchiveReloadAssetNotices {
 }
 
 impl AssetArchiveReloadOperation {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(generation: Option<u64>) -> Self {
         Self {
+            generation,
             pending: BTreeMap::new(),
             stalled: Timer::from_seconds(30.0, TimerMode::Once),
             failed: false,
@@ -90,7 +93,7 @@ pub(super) fn register_archive_reload_tracking(app: &mut App) {
         finish_archive_reload
             .after(openzt2_interface_state::ui::UiSet::Interaction)
             .before(synchronize_mod_manager_visibility_and_reload_input_blocking)
-            .before(toggle_selected_asset_archive_enabled_state),
+            .before(apply_selected_asset_archive_change),
     );
     macro_rules! track {
         ($($asset:ty),* $(,)?) => {
@@ -128,6 +131,7 @@ pub(super) fn register_archive_reload_tracking(app: &mut App) {
 fn observe_reloaded_assets<A: Asset>(
     events: Option<MessageReader<AssetEvent<A>>>,
     operations: Query<(Entity, &AssetArchiveReloadOperation)>,
+    server: Res<AssetServer>,
     mut notices: Deferred<ArchiveReloadAssetNotices>,
 ) {
     let Some(mut events) = events else {
@@ -143,11 +147,22 @@ fn observe_reloaded_assets<A: Asset>(
             AssetEvent::LoadedWithDependencies { id } => (id.untyped(), true),
             _ => return None,
         };
+        if server
+            .get_path(asset)
+            .as_ref()
+            .and_then(|path| {
+                openzt2_game_assets::asset_source::archive_reload_generation_for_path(path.path())
+            })
+            .is_some_and(|generation| Some(generation) != reload.generation)
+        {
+            return None;
+        }
         reload
             .pending
             .contains_key(&asset)
             .then_some(ArchiveReloadAssetNotice {
                 operation,
+                generation: reload.generation,
                 asset,
                 ready,
             })
@@ -159,6 +174,7 @@ fn finish_archive_reload(
     mut operations: Query<(Entity, &mut AssetArchiveReloadOperation)>,
     mut notices: MessageReader<ArchiveReloadAssetNotice>,
     mut failures: MessageReader<UntypedAssetLoadFailedEvent>,
+    catalogue: Option<MessageReader<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionSourcesPublished>>,
     time: Res<Time<Real>>,
     server: Res<AssetServer>,
     mut menu: MessageWriter<ReturnToMainMenu>,
@@ -168,7 +184,20 @@ fn finish_archive_reload(
         failures.clear();
         return;
     };
-    for notice in notices.read().filter(|notice| notice.operation == entity) {
+    let generation = operation.generation;
+    if let Some(mut catalogue) = catalogue {
+        for publication in catalogue.read() {
+            if publication.overlay_generation.is_some()
+                && publication.overlay_generation == generation
+            {
+                operation.failed |= !publication.failed_sources.is_empty();
+            }
+        }
+    }
+    for notice in notices
+        .read()
+        .filter(|notice| notice.operation == entity && notice.generation == generation)
+    {
         let Some(asset) = operation.pending.get_mut(&notice.asset) else {
             continue;
         };
@@ -177,13 +206,20 @@ fn finish_archive_reload(
             continue;
         }
         let state = server.recursive_dependency_load_state(notice.asset);
-        if state.is_loaded() || state.is_failed() {
+        if notice.ready || state.is_loaded() || state.is_failed() {
             operation.failed |= state.is_failed();
             operation.pending.remove(&notice.asset);
         }
     }
     let mut dependency_failed = false;
     for failure in failures.read() {
+        if openzt2_game_assets::asset_source::archive_reload_generation_for_path(
+            failure.path.path(),
+        )
+        .is_some_and(|failed_generation| Some(failed_generation) != generation)
+        {
+            continue;
+        }
         dependency_failed = true;
         if operation.pending.remove(&failure.id).is_some() {
             operation.failed = true;

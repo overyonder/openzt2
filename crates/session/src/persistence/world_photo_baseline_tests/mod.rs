@@ -41,6 +41,7 @@ use openzt2_game_assets::{
 use openzt2_world::world_spawn::world_hydration_completion::complete_or_fail_finished_world_hydration;
 use openzt2_world::world_spawn::world_persistent_id_reservation::reserve_all_imported_world_persistent_ids;
 use openzt2_world_state::game_session_types::WorldSessionMode;
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooDayCadence;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
@@ -57,9 +58,10 @@ use openzt2_world_state::world_spawn::{
 #[test]
 fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_localization() {
     for delay_localization in [false, true] {
-        let (mut app, root) = loading_app();
-        app.add_plugins(EnvironmentPlugin)
-            .add_message::<openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioCue>()
+        let (mut app, root) = loading_app(|app| {
+            app.add_plugins(EnvironmentPlugin);
+        });
+        app.add_message::<openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioCue>()
             .add_message::<openzt2_game_assets::effect::SpawnParticleEffectEmitter>()
             .add_message::<openzt2_game_assets::effect::StopParticleEffectsAttachedToEntity>()
             .add_systems(
@@ -148,6 +150,7 @@ fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_loca
             SelectedWorldDocumentHandles {
                 map: start.clone(),
                 start,
+                mode: None,
             },
         ));
         let simulation_timing = app
@@ -157,6 +160,11 @@ fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_loca
             .unwrap()
             .timing()
             .clone();
+        app.world_mut()
+            .entity_mut(root)
+            .insert(ZooDayCadence::from_ticks_per_day(
+                std::num::NonZeroU32::new(simulation_timing.ticks_per_day).unwrap(),
+            ));
         let definitions = WorldDefinitionDocument {
             simulation_timing: Some(simulation_timing),
             environments: vec![EnvironmentDefinition {

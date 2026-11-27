@@ -102,7 +102,7 @@ pub(super) fn prepare_placed_object_removal_edit(
             openzt2_zoo_state::economy::object_sale_refund::calculate_authored_object_sale_refund(
                 object,
             )
-            .and_then(|refund| refund.0.checked_neg())
+            .map(std::ops::Neg::neg)
         else {
             reject_object_placement_edit_preparation(
                 &mut rejected,
@@ -129,7 +129,7 @@ pub(super) fn prepare_placed_object_removal_edit(
             });
         prepared.write(ObjectPlacementEditPrepared {
             transaction: request.transaction,
-            cost: openzt2_zoo_state::economy::money_types::Money(refund),
+            cost: refund,
         });
     }
 }

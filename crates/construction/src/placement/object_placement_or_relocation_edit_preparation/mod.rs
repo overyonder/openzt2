@@ -328,7 +328,7 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
                     previous_cells,
                     PreparedObjectPlacementEditMutationKind::Relocate,
                     Some(source.0),
-                    Money(0),
+                    Money::ZERO,
                 )
             } else {
                 let Some(id) = allocators

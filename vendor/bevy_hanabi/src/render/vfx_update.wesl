@@ -102,7 +102,7 @@ fn transform_normal_simulation_to_world(sim_normal: vec3<f32>) -> vec3<f32> {
 @group(1) @binding(0) var<storage, read_write> particle_buffer : ParticleBuffer;
 @group(1) @binding(1) var<storage, read_write> indirect_buffer : IndirectBuffer;
 @if(READ_PARENT_PARTICLE)
-@group(1) @binding(2) var<storage, read> parent_particle_buffer : ParentParticleBuffer;
+@group(1) @binding(2) var<storage, read_write> parent_particle_buffer : ParentParticleBuffer;
 
 // "spawner" group @2
 @group(2) @binding(0) var<storage, read> spawners : array<Spawner>;

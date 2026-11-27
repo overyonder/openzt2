@@ -7,8 +7,9 @@ use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, Worl
 
 use crate::habitat::{
     habitat_cell_ownership_changes::HabitatCellOwnershipChanged,
+    habitat_membership_and_containment::locate_habitat_at_world_position,
     habitat_topology_cell_queries::convert_finite_world_position_to_topology_cell,
-    habitat_types::{Habitat, HabitatIndex},
+    habitat_types::{Habitat, HabitatCellOf, HabitatIndex},
 };
 use crate::topology::topology_graph_types::TopologyGrid;
 
@@ -43,6 +44,7 @@ pub struct ShowStageHabitatQueries<'w, 's> {
     roots: Query<'w, 's, (&'static HabitatIndex, &'static TopologyGrid), With<WorldRoot>>,
     reconfigured: Query<'w, 's, Entity, ReplacedHabitatGrid>,
     habitats: Query<'w, 's, &'static WorldMember, With<Habitat>>,
+    cells: Query<'w, 's, &'static HabitatCellOf>,
     stages: Query<'w, 's, StagePlacement, With<ShowStage>>,
     moved: Query<'w, 's, Entity, ChangedStagePlacement>,
     disabled: Query<'w, 's, Entity, (With<ShowStageInHabitat>, Added<Disabled>, Allow<Disabled>)>,
@@ -120,7 +122,14 @@ pub fn project_show_stage_habitats(
             .roots
             .get(member.root)
             .ok()
-            .and_then(|(index, grid)| index.habitat_for_topology_cell(stage_cell(transform, grid)?))
+            .and_then(|(index, grid)| {
+                locate_habitat_at_world_position(
+                    index,
+                    &queries.cells,
+                    transform.translation.xz(),
+                    *grid,
+                )
+            })
             .filter(|habitat| {
                 queries
                     .habitats

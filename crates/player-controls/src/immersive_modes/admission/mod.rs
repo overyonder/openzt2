@@ -16,7 +16,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::{DirectLocomotion, NavAgent
 
 use super::immersive_control_execution_types::{
     FirstPersonControl, FirstPersonViewAngles, FossilAssemblyControl, FossilSearchControl,
-    GuestViewControl, GuestViewTileCount, ShowEditControl,
+    GuestViewControl, ShowEditControl,
 };
 use super::immersive_mode_control_types::PhotoControl;
 use super::immersive_mode_entry_and_policy_operations::{
@@ -27,8 +27,8 @@ use super::immersive_mode_message_types::{
     EnterImmersiveMode, ImmersiveModeEntered, ImmersiveModeRejected, ModeEntryFailure,
 };
 use super::immersive_mode_state_types::{
-    ActiveImmersiveMode, ControlledEntity, EquippedInteractionTool, ImmersiveCamera, ImmersiveMode,
-    ImmersiveSubject,
+    ActiveImmersiveMode, ControlledEntity, EquippedInteractionTool, FossilAssemblyView,
+    GuestViewTileCount, ImmersiveCamera, ImmersiveMode, ImmersiveSubject,
 };
 pub(super) use validation::{
     validate_assembly, validate_first_person, validate_guest, validate_photo, validate_search,
@@ -57,6 +57,9 @@ struct OwnedImmersiveEntities(Vec<Entity>);
 
 #[derive(Component)]
 pub(super) struct PendingFossilSearchDock(Handle<ScenePrefabAsset>);
+
+#[derive(Component)]
+pub(super) struct PendingFossilAssemblyLab(Handle<ScenePrefabAsset>);
 
 fn fossil_finding_dock_id() -> AssetId {
     AssetId::from_key("dock_fossilfinding")
@@ -87,18 +90,22 @@ impl Admission {
         let policy = find_authored_immersive_mode_policy(definitions, mode)
             .ok_or(ModeEntryFailure::MissingTool)?;
         let definition = AssetId(policy.camera.0);
-        definitions
-            .find_camera(definition)
-            .ok_or(ModeEntryFailure::MissingTool)?;
+        if mode != ImmersiveMode::GuestView {
+            definitions
+                .find_camera(definition)
+                .ok_or(ModeEntryFailure::MissingTool)?;
+        }
         Ok(Self {
             camera,
             definition,
             tool: AssetId(policy.id.0),
-            restore_camera: policy.restore_camera_on_exit,
-            lock_subject: policy.lock_subject,
+            restore_camera: mode != ImmersiveMode::GuestView && policy.restore_camera_on_exit,
+            lock_subject: mode != ImmersiveMode::GuestView && policy.lock_subject,
             initial_angles: matches!(
                 mode,
-                ImmersiveMode::GuestView | ImmersiveMode::FirstPerson | ImmersiveMode::SuperStaff
+                ImmersiveMode::FirstPerson
+                    | ImmersiveMode::SuperStaff
+                    | ImmersiveMode::FossilSearch
             )
             .then(|| calculate_initial_first_person_view_angles(definitions, definition)),
             avatar: None,
@@ -166,7 +173,7 @@ fn commit_admitted_mode<M: Component + Default>(
         subject = Some(
             commands
                 .spawn((
-                    Name::new("super staff avatar"),
+                    Name::new("first-person avatar"),
                     avatar.transform,
                     GlobalTransform::from(avatar.transform),
                     avatar.world,
@@ -177,6 +184,7 @@ fn commit_admitted_mode<M: Component + Default>(
         commands.entity(session).insert(FirstPersonControl);
     }
     let camera_mode = match (mode, subject) {
+        (ImmersiveMode::GuestView, _) => CameraMode::Overhead,
         (ImmersiveMode::Photo, _) => CameraMode::Free,
         (ImmersiveMode::ShowEdit, Some(_)) => CameraMode::Follow,
         (_, Some(_)) => CameraMode::FirstPerson,
@@ -202,7 +210,7 @@ fn commit_admitted_mode<M: Component + Default>(
         },
         ImmersiveCamera(admission.camera),
     ));
-    if let Some(subject) = subject {
+    if let Some(subject) = subject.filter(|_| mode != ImmersiveMode::GuestView) {
         entity.insert(ImmersiveSubject(subject));
     }
     if let Some(angles) = admission.initial_angles {
@@ -210,12 +218,22 @@ fn commit_admitted_mode<M: Component + Default>(
     }
     if matches!(
         mode,
-        ImmersiveMode::FirstPerson | ImmersiveMode::SuperStaff | ImmersiveMode::Photo
+        ImmersiveMode::FirstPerson
+            | ImmersiveMode::SuperStaff
+            | ImmersiveMode::Photo
+            | ImmersiveMode::FossilSearch
     ) {
         entity.insert(super::first_person_motion::FirstPersonMotion::default());
     }
     if mode == ImmersiveMode::GuestView {
         entity.insert(GuestViewTileCount::default());
+    }
+    if mode == ImmersiveMode::SuperStaff {
+        entity.insert(
+            openzt2_zoo_staff::maintenance::first_person_waste_cleaning::FirstPersonStaffAimOffset(
+                1.0,
+            ),
+        );
     }
     if mode == ImmersiveMode::FossilSearch {
         entity.insert(openzt2_zoo_state::extinct_animals::fossil_recovery_types::ActiveFossilSonarArtifactTracking::default());
@@ -226,7 +244,10 @@ fn commit_admitted_mode<M: Component + Default>(
             commands.entity(subject).insert((ControlledEntity {
                 controller: session,
             },));
-            if mode != ImmersiveMode::SuperStaff {
+            if !matches!(
+                mode,
+                ImmersiveMode::SuperStaff | ImmersiveMode::FossilSearch
+            ) {
                 if let Ok(mut current) = locomotion.get_mut(subject) {
                     current.set_if_neq(DirectLocomotion::default());
                 } else {
@@ -249,6 +270,18 @@ fn commit_admitted_mode<M: Component + Default>(
     }
     if let Ok(definitions) = definitions.get() {
         attach_authored_immersive_mode_consumer_policies(definitions, mode, session, &mut commands);
+        if mode == ImmersiveMode::GuestView {
+            if let Some(policy) = find_authored_immersive_mode_policy(definitions, mode) {
+                let scene = |id| definitions.scene(id).map(|handle| (id, handle));
+                commands.entity(session).insert(
+                    super::guest_view_navigation_marker_types::GuestViewProjection {
+                        cursor: scene(policy.guest_ground_cursor),
+                        marker: scene(policy.guest_navigation_marker),
+                        excluded_subject: subject,
+                    },
+                );
+            }
+        }
     }
     if let Some(dock) = admission.fossil_finding_dock {
         commands.entity(session).remove::<PendingFossilSearchDock>();
@@ -262,11 +295,13 @@ fn commit_admitted_mode<M: Component + Default>(
             OwnedImmersiveEntity(session),
         ));
     }
-    camera_requests.write(SetCameraMode {
-        mode: camera_mode,
-        subject: None,
-        definition: admission.definition,
-        transition_seconds: None,
-    });
+    if mode != ImmersiveMode::GuestView {
+        camera_requests.write(SetCameraMode {
+            mode: camera_mode,
+            subject: None,
+            definition: admission.definition,
+            transition_seconds: None,
+        });
+    }
     entered.write(ImmersiveModeEntered { mode, subject });
 }

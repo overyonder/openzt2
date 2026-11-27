@@ -48,9 +48,39 @@ pub(super) fn validate_progression_snapshot_record_invariants(
                     .iter()
                     .any(|award| award.persistent_identifier.0 == *id)
             })
+        || progression_snapshot_records
+            .award_history
+            .as_ref()
+            .is_some_and(|history| {
+                history
+                    .released_species
+                    .keys()
+                    .any(|id| *id == openzt2_game_data::AssetId::default())
+                    || history
+                        .extinct_released_species
+                        .iter()
+                        .any(|id| !history.released_species.contains_key(id))
+            })
+        || progression_snapshot_records
+            .fossil_education
+            .iter()
+            .any(|(&id, &level)| matches!(id, 0 | u64::MAX) || !level.is_finite() || level < 0.0)
+        || progression_snapshot_records
+            .fossil_skeleton_rewards
+            .iter()
+            .any(|(id, reward)| {
+                !progression_snapshot_records
+                    .fossil_education
+                    .contains_key(id)
+                    || reward.reward == openzt2_game_data::AssetId::default()
+                    || reward.message == Some(openzt2_game_data::AssetId::default())
+            })
         || progression_snapshot_records.research_projects.iter().any(
             |research_project_snapshot_record| {
-                research_project_snapshot_record.required_simulation_ticks == 0
+                research_project_snapshot_record
+                    .timer_ns
+                    .is_some_and(|(duration, elapsed)| duration == 0 || elapsed > duration)
+                    || research_project_snapshot_record.required_simulation_ticks == 0
                     || research_project_snapshot_record.elapsed_simulation_ticks
                         > research_project_snapshot_record.required_simulation_ticks
             },
@@ -60,11 +90,21 @@ pub(super) fn validate_progression_snapshot_record_invariants(
             .iter()
             .any(|research_availability_snapshot_record| {
                 research_availability_snapshot_record
-                    .remaining_unlock_ticks
-                    .is_some_and(|remaining_unlock_ticks| {
-                        remaining_unlock_ticks == 0
+                    .unlock_timer_ns
+                    .is_some_and(|(duration, elapsed)| {
+                        elapsed > duration
+                            || duration == 0
                             || research_availability_snapshot_record.available
+                            || research_availability_snapshot_record
+                                .remaining_unlock_ticks
+                                .is_none()
                     })
+                    || research_availability_snapshot_record
+                        .remaining_unlock_ticks
+                        .is_some_and(|remaining_unlock_ticks| {
+                            remaining_unlock_ticks == 0
+                                || research_availability_snapshot_record.available
+                        })
             })
     {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);

@@ -404,8 +404,12 @@ fn restored_waste_rebuilds_one_job_and_authored_cleanup_survives_a_second_save()
     destination.world_mut().write_message(StaffJobRequest {
         kind: Some(StaffJobKind::CleanHabitat),
         routing: Default::default(),
-        target: restored_waste,
-        urgency: 1,
+        root,
+        target: Some(restored_waste),
+        point: None,
+        priority: 1.0,
+        issued_at_seconds: 0.0,
+        remaining_wait_seconds: 0.0,
         token: Some(AssetId::from_key("t_rakepoo")),
     });
     destination.update();
@@ -418,18 +422,17 @@ fn restored_waste_rebuilds_one_job_and_authored_cleanup_survives_a_second_save()
         .collect();
     assert_eq!(jobs.len(), 1);
     let (job, work) = jobs[0];
+    let target = work
+        .target
+        .expect("waste cleanup targets the restored waste");
     assert_eq!(work.kind, Some(StaffJobKind::CleanHabitat));
     assert_eq!(work.token, Some(AssetId::from_key("t_rakepoo")));
     assert_eq!(
-        destination.world().get::<PersistentId>(work.target),
+        destination.world().get::<PersistentId>(target),
         Some(&PersistentId(51))
     );
     assert_eq!(
-        destination
-            .world()
-            .get::<WorldMember>(work.target)
-            .unwrap()
-            .root,
+        destination.world().get::<WorldMember>(target).unwrap().root,
         root
     );
     let staff = destination.world_mut().spawn(Staff).id();
@@ -457,7 +460,7 @@ fn restored_waste_rebuilds_one_job_and_authored_cleanup_survives_a_second_save()
         .insert((BehaviorTaskExecutionState {
             execution_id: 99,
             program: AssetId::from_key("worker:rakepoo"),
-            target: Some(work.target),
+            target: Some(target),
             document,
             declaration: 0,
             phase: BehaviorTaskExecutionPhase::Execution,
@@ -474,7 +477,7 @@ fn restored_waste_rebuilds_one_job_and_authored_cleanup_survives_a_second_save()
     });
     destination.world_mut().flush();
     destination.update();
-    assert!(destination.world().get_entity(work.target).is_err());
+    assert!(destination.world().get_entity(target).is_err());
     // Save after the kill but before the task's terminal event: consumed waste stays gone.
     let cleaned = round_trip(&capture(destination.world_mut()));
     assert!(cleaned.is_empty());
@@ -525,6 +528,7 @@ fn restored_prefab_preserves_saved_root_pose_and_removes_its_children_with_waste
     };
     let (mut app, root) = fixture();
     let entity = |children| PrefabEntity {
+        terrain_decal: None,
         stable_id: AssetId([3; 16]),
         attachment_id: AssetId([4; 16]),
         model_joint_binding: None,

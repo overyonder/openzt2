@@ -1,7 +1,7 @@
 //! One lowered world-definition source document and its demand-loaded dependencies.
 
 use bevy::prelude::*;
-use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
+use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
 use std::collections::BTreeMap;
 
 pub const AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS: [&str; 18] = [
@@ -37,21 +37,22 @@ pub struct AuthoredRenderLodDistances {
     pub minimum_switch_distance_squared: Vec<f32>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AuthoredGuestShowNeed {
-    pub initial_q16: [i32; 2],
-    pub adjustment_q16: i32,
-    pub trigger_q16: Option<i32>,
-    pub cessation_q16: Option<i32>,
-    pub critical_q16: Option<i32>,
-}
-
 #[derive(Debug, Default)]
 pub(super) struct WorldDefinitionAssetMetadata {
     pub(super) timekeeper: Option<super::timing::AuthoredTimekeeperPolicy>,
     pub(super) render_lod_distances: BTreeMap<(AssetId, AssetId), AuthoredRenderLodDistances>,
-    pub(super) guest_show_needs: BTreeMap<AssetId, AuthoredGuestShowNeed>,
     pub(super) environment_map_nodes: BTreeMap<AssetId, AssetId>,
+    pub(super) ambient_locomotion: BTreeMap<
+        AssetId,
+        Vec<openzt2_game_data::world_definitions::staff_management::StaffLocomotionTable>,
+    >,
+    pub(super) staff_interactions:
+        BTreeMap<AssetId, Vec<super::interaction_policies::StaffInteraction>>,
+    pub(super) object_influences:
+        BTreeMap<AssetId, Vec<super::interaction_policies::InfluenceSource>>,
+    pub(super) guest_influence_watches:
+        BTreeMap<AssetId, Vec<super::interaction_policies::GuestInfluenceWatch>>,
+    pub(super) guest_influence_policy: Option<super::interaction_policies::GuestInfluencePolicy>,
 }
 
 #[derive(Asset, TypePath, Debug)]
@@ -67,6 +68,8 @@ pub struct WorldDefinitionAsset {
     pub(super) tank_water_material_sources: Box<[DemandLoadedDependencyPath]>,
     pub(super) effects: Box<[DemandLoadedDependencyPath]>,
     pub(super) scenes: Box<[DemandLoadedDependencyPath]>,
+    #[dependency]
+    pub(super) bound_scenes: BTreeMap<AssetId, Handle<crate::scene_prefab::ScenePrefabAsset>>,
     pub(super) animation_sets: Box<[DemandLoadedDependencyPath]>,
 }
 
@@ -90,6 +93,7 @@ impl WorldDefinitionAsset {
             tank_water_material_sources: Box::new([]),
             effects: Box::new([]),
             scenes: Box::new([]),
+            bound_scenes: BTreeMap::new(),
             animation_sets: Box::new([]),
         }
     }
@@ -151,8 +155,15 @@ impl WorldDefinitionAsset {
         Self::load(server, &self.effects, id)
     }
 
-    pub(super) fn scene<T: Asset>(&self, server: &AssetServer, id: AssetId) -> Option<Handle<T>> {
-        Self::load(server, &self.scenes, id)
+    pub(super) fn scene(
+        &self,
+        server: &AssetServer,
+        id: AssetId,
+    ) -> Option<Handle<crate::scene_prefab::ScenePrefabAsset>> {
+        self.bound_scenes
+            .get(&id)
+            .cloned()
+            .or_else(|| Self::load(server, &self.scenes, id))
     }
 
     pub(super) fn animation_set<T: Asset>(

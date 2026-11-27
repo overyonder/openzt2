@@ -127,6 +127,10 @@ pub struct StaffStateVariable {
     pub name: AssetId,
     pub value: f32,
     pub trigger_threshold: f32,
+    #[serde(default)]
+    pub initial_range: Option<[f32; 2]>,
+    #[serde(default)]
+    pub adjustment: Option<f32>,
 }
 
 /// One named point in the employee's local space.
@@ -293,6 +297,8 @@ pub struct StaffRequestControllerDefinition {
     /// `hunger`, or `b_Escaped`. Controllers without an attribute key only use
     /// the creation and destruction trigger flags.
     pub attribute_key: Option<AssetId>,
+    #[serde(default)]
+    pub property_binding: Option<StaffRequestProperty>,
     pub threshold: StaffRequestThresholdValue,
     /// Constructed default `ReachesOrAbove` (testType 4).
     pub threshold_comparison: StaffRequestThresholdComparison,
@@ -306,7 +312,7 @@ pub struct StaffRequestControllerDefinition {
     pub request: StaffRequestData,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
 pub enum StaffRequestProperty {
     Boolean(AssetId),
     Number(AssetId),
@@ -315,6 +321,9 @@ pub enum StaffRequestProperty {
 impl StaffRequestControllerDefinition {
     #[must_use]
     pub const fn tracked_property(&self) -> Option<StaffRequestProperty> {
+        if self.property_binding.is_some() {
+            return self.property_binding;
+        }
         let Some(key) = self.attribute_key else {
             return None;
         };
@@ -325,7 +334,7 @@ impl StaffRequestControllerDefinition {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, Default, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct StaffTokenDispatchRule {
     /// `StaffTokens` child element name, for example `t_FillFoodContainer`.
     pub token: AssetId,
@@ -336,6 +345,35 @@ pub struct StaffTokenDispatchRule {
     pub give_to: Option<AssetId>,
     pub payload: Option<AssetId>,
     pub force: Option<bool>,
+    #[serde(default)]
+    pub routing: StaffTokenRoutingDefinition,
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct StaffTokenRoutingDefinition {
+    pub list: Option<AssetId>,
+    pub chance_percent: Option<f32>,
+    pub radius_m: Option<f32>,
+    pub chance_in_radius_percent: Option<f32>,
+    pub time_in_seconds: Option<f32>,
+    pub timeout_seconds: Option<f32>,
+    pub time_left_seconds: Option<f32>,
+    pub time_to_activation_seconds: Option<f32>,
+    pub point_m: Option<[f32; 3]>,
+    pub xml_payload: Option<StaffTokenXmlElement>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub struct StaffTokenXmlElement {
+    pub name: String,
+    pub attributes: Vec<(String, String)>,
+    pub children: Vec<StaffTokenXmlContent>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub enum StaffTokenXmlContent {
+    Text(String),
+    Element(StaffTokenXmlElement),
 }
 
 #[allow(

@@ -3,7 +3,7 @@ use bevy::prelude::Entity;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::economy::monthly_finance_types::FinanceMetric;
-use openzt2_zoo_state::economy::monthly_finance_types::FinancePeriod;
+use openzt2_zoo_state::economy::monthly_finance_types::{FinancePeriod, FinanceValue};
 
 use super::{
     economy_snapshot_types::{

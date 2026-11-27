@@ -1,18 +1,35 @@
-use bevy::ecs::entity::EntityHashSet;
+use avian3d::collision::contact_types::ContactGraph;
+use bevy::ecs::entity::EntityHashMap;
+use bevy::ecs::{entity::EntityHashSet, entity_disabling::Disabled, query::Allow};
 use bevy::prelude::*;
+use openzt2_game_data::AssetId;
+use openzt2_navigation::locomotion::authored_tank_gate_exit::{
+    RegisteredTankGate, TankLinkedPhysicalObject,
+};
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::{
+    persistent_id_types::PersistentId, world_membership_types::DefinitionId,
+};
 use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
+use openzt2_zoo_state::{
+    habitat::habitat_membership_and_containment::locate_habitat_at_world_position,
+    locomotion::locomotion_types::NavAgent,
+    topology::gate_operation_types::{AuthoredGateVariant, Gate},
+};
 
 use openzt2_zoo_state::aquatic::tank_wall_ground_sampling::TankWallGroundSampling;
+use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_topology_cell;
 use openzt2_zoo_state::habitat::habitat_types::HabitatChanged;
-use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
+use openzt2_zoo_state::habitat::habitat_types::{HabitatCellOf, HabitatIndex};
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged;
 use openzt2_zoo_state::topology::topology_graph_types::{FenceSegment, TopologyGrid, TopologyNode};
 
-use super::aquatic_simulation_types::{Tank, TankEnvironment, TankGeometry, TankWallTopHeight};
+use super::aquatic_simulation_types::{
+    Tank, TankEnvironment, TankGeometry, TankWallTopHeight, TankWaterCellsChanged,
+};
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
@@ -31,6 +48,285 @@ pub(super) struct TankFloorTerrainDisturbed(pub(super) Entity);
 
 #[derive(Component, PartialEq)]
 pub(super) struct TankFloorLevelCm(pub(super) i16);
+
+#[derive(Component, PartialEq)]
+pub(super) struct TankWaterContactFootprint {
+    root: Entity,
+    cells: Box<[IVec2]>,
+}
+
+pub(super) fn publish_changed_tank_water_cells(
+    mut commands: Commands,
+    mut changes: MessageWriter<TankWaterCellsChanged>,
+    mut tanks: Query<
+        (
+            Entity,
+            Ref<WorldMember>,
+            Ref<TankGeometry>,
+            Ref<HabitatRegion>,
+            Option<&mut TankWaterContactFootprint>,
+        ),
+        With<Tank>,
+    >,
+) {
+    for (tank, member, geometry, region, previous) in &mut tanks {
+        if previous.is_some()
+            && !member.is_changed()
+            && !geometry.is_changed()
+            && !region.is_changed()
+        {
+            continue;
+        }
+        let cells: Box<[_]> = if geometry.is_valid() && geometry.depth() > 0.0 {
+            region.topology_cells.clone()
+        } else {
+            Box::new([])
+        };
+        let mut affected = cells.to_vec();
+        if let Some(previous) = previous.as_ref() {
+            if previous.root == member.root {
+                affected.extend_from_slice(&previous.cells);
+            } else if !previous.cells.is_empty() {
+                changes.write(TankWaterCellsChanged {
+                    root: previous.root,
+                    tank,
+                    cells: previous.cells.clone(),
+                });
+            }
+        }
+        if !affected.is_empty() {
+            affected.sort_unstable_by_key(|cell| (cell.y, cell.x));
+            affected.dedup();
+            changes.write(TankWaterCellsChanged {
+                root: member.root,
+                tank,
+                cells: affected.into_boxed_slice(),
+            });
+        }
+        let next = TankWaterContactFootprint {
+            root: member.root,
+            cells,
+        };
+        if let Some(mut previous) = previous {
+            previous.set_if_neq(next);
+        } else {
+            commands.entity(tank).insert(next);
+        }
+    }
+}
+
+pub(super) fn retire_tank_water_contact_footprint(
+    removed: On<Remove<Tank>>,
+    mut commands: Commands,
+) {
+    commands
+        .entity(removed.entity)
+        .try_remove::<TankWaterContactFootprint>();
+}
+
+pub(super) fn publish_retired_tank_water_cells(
+    removed: On<Discard<TankWaterContactFootprint>>,
+    footprints: Query<&TankWaterContactFootprint, Allow<Disabled>>,
+    mut changes: MessageWriter<TankWaterCellsChanged>,
+) {
+    let Ok(footprint) = footprints.get(removed.entity) else {
+        return;
+    };
+    if !footprint.cells.is_empty() {
+        changes.write(TankWaterCellsChanged {
+            root: footprint.root,
+            tank: removed.entity,
+            cells: footprint.cells.clone(),
+        });
+    }
+}
+
+pub(super) fn publish_registered_tank_gates(
+    mut commands: Commands,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    mut gates: Query<
+        (
+            Entity,
+            &WorldMember,
+            Option<FenceSegment>,
+            Option<&PersistentId>,
+            Option<&AuthoredGateVariant>,
+            Option<&mut RegisteredTankGate>,
+            Has<Gate>,
+        ),
+        Or<(With<Gate>, With<RegisteredTankGate>)>,
+    >,
+    roots: Query<(&TopologyGrid, &HabitatIndex)>,
+    cell_owners: Query<&HabitatCellOf>,
+    nodes: Query<&TopologyNode>,
+    tanks: Query<&WorldMember, With<Tank>>,
+    boundaries: HabitatBoundaryQueries,
+    children: Query<&Children>,
+    platforms: Query<(&DefinitionId, &GlobalTransform)>,
+) {
+    let Some(catalogue) = active_definitions.get(&definitions) else {
+        return;
+    };
+    let gate_class = AssetId::from_key("tankgate");
+    let platform_class = AssetId::from_key("tankplatform");
+    for (gate, world, segment, persistent, variant, current, is_gate) in &mut gates {
+        let next = (|| {
+            let segment = segment.filter(|_| is_gate)?;
+            let order = persistent?.0;
+            let gate_definition = variant
+                .and_then(|variant| catalogue.find_fence(variant.0))
+                .or_else(|| catalogue.find_gate_fence(segment.definition));
+            if !gate_definition
+                .into_iter()
+                .chain(catalogue.find_fence(segment.definition))
+                .filter_map(|definition| catalogue.find_object(definition.object))
+                .any(|object| object.behavior_type_identifiers.contains(&gate_class))
+            {
+                return None;
+            }
+            let (grid, habitats) = roots.get(world.root).ok()?;
+            let a = grid
+                .cell_translation(nodes.get(segment.a()).ok()?.cell)
+                .xz();
+            let b = grid
+                .cell_translation(nodes.get(segment.b()).ok()?.cell)
+                .xz();
+            let direction = (b - a).try_normalize()?;
+            let normal = Vec2::new(-direction.y, direction.x);
+            let midpoint = (a + b) * 0.5;
+            let owns_gate = |tank| {
+                tanks
+                    .get(tank)
+                    .is_ok_and(|tank_world| tank_world.root == world.root)
+                    && boundaries.habitats(gate).any(|habitat| habitat == tank)
+            };
+            let tank = [normal, -normal]
+                .into_iter()
+                .filter_map(|side| {
+                    locate_habitat_at_world_position(
+                        habitats,
+                        &cell_owners,
+                        midpoint + side * grid.spacing_m * 0.5,
+                        *grid,
+                    )
+                })
+                .find(|&tank| owns_gate(tank))?;
+            let mut directed_platforms: [Option<(Entity, f32)>; 2] = [None, None];
+            for platform in children.iter_descendants_depth_first::<Children>(gate) {
+                let Ok((definition, pose)) = platforms.get(platform) else {
+                    continue;
+                };
+                if !catalogue.find_object(definition.0).is_some_and(|object| {
+                    object.behavior_type_identifiers.contains(&platform_class)
+                }) {
+                    continue;
+                }
+                let offset = pose.translation().xz() - midpoint;
+                let signed_distance = offset.dot(normal);
+                if !signed_distance.is_finite() || signed_distance == 0.0 {
+                    continue;
+                }
+                let side = usize::from(signed_distance < 0.0);
+                let distance = offset.length_squared();
+                if directed_platforms[side].is_none_or(|(_, prior)| distance < prior) {
+                    directed_platforms[side] = Some((platform, distance));
+                }
+            }
+            let platforms = directed_platforms.map(|platform| platform.map(|(entity, _)| entity));
+            Some(RegisteredTankGate {
+                registration_order: order,
+                tank,
+                physical_sides: platforms,
+                platforms,
+                door: Some(gate),
+            })
+        })();
+        match (current, next) {
+            (Some(mut current), Some(next))
+                if current.registration_order != next.registration_order
+                    || current.tank != next.tank
+                    || current.physical_sides != next.physical_sides
+                    || current.platforms != next.platforms
+                    || current.door != next.door =>
+            {
+                *current = next;
+            }
+            (None, Some(next)) => {
+                commands.entity(gate).insert(next);
+            }
+            (Some(_), None) => {
+                commands.entity(gate).remove::<RegisteredTankGate>();
+            }
+            _ => {}
+        }
+    }
+}
+
+pub(super) fn publish_tank_linked_physical_objects(
+    mut commands: Commands,
+    contacts: Option<Res<ContactGraph>>,
+    gates: Query<(&RegisteredTankGate, &WorldMember)>,
+    platforms: Query<Entity>,
+    children: Query<&Children>,
+    parents: Query<&ChildOf>,
+    actors: Query<&WorldMember, With<NavAgent>>,
+    mut current_links: Query<(Entity, &mut TankLinkedPhysicalObject)>,
+) {
+    let mut linked = EntityHashMap::<(u64, Entity)>::default();
+    if let Some(contacts) = contacts {
+        for (gate, world) in &gates {
+            for platform in gate.physical_sides.iter().flatten().copied() {
+                if !platforms.contains(platform) {
+                    continue;
+                }
+                for collider in std::iter::once(platform)
+                    .chain(children.iter_descendants_depth_first::<Children>(platform))
+                {
+                    for pair in contacts
+                        .contact_pairs_with(collider)
+                        .filter(|pair| pair.is_touching())
+                    {
+                        let other = if pair.collider1 == collider {
+                            pair.body2.unwrap_or(pair.collider2)
+                        } else {
+                            pair.body1.unwrap_or(pair.collider1)
+                        };
+                        let Some(actor) = std::iter::once(other)
+                            .chain(parents.iter_ancestors::<ChildOf>(other))
+                            .find(|&entity| {
+                                actors
+                                    .get(entity)
+                                    .is_ok_and(|member| member.root == world.root)
+                            })
+                        else {
+                            continue;
+                        };
+                        let candidate = (gate.registration_order, platform);
+                        let selected = linked.entry(actor).or_insert(candidate);
+                        if candidate.0 < selected.0 {
+                            *selected = candidate;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (actor, mut current) in &mut current_links {
+        if let Some((_, platform)) = linked.remove(&actor) {
+            if current.0 != platform {
+                current.0 = platform;
+            }
+        } else {
+            commands.entity(actor).remove::<TankLinkedPhysicalObject>();
+        }
+    }
+    for (actor, (_, platform)) in linked {
+        commands
+            .entity(actor)
+            .insert(TankLinkedPhysicalObject(platform));
+    }
+}
 
 pub(super) fn sample_changed_tank_floor_levels(
     mut commands: Commands,
@@ -58,7 +354,7 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
     changed_tanks: Query<Entity, (With<Tank>, Or<(Added<Tank>, Changed<HabitatRegion>)>)>,
     grids: Query<&TopologyGrid>,
     changed_grids: Query<(), Changed<TopologyGrid>>,
-    habitats: Query<&HabitatIndex>,
+    (habitats, cell_owners): (Query<&HabitatIndex>, Query<&HabitatCellOf>),
     terrain_assets: Res<Assets<TerrainAsset>>,
     mut disturbed_floors: MessageWriter<TankFloorTerrainDisturbed>,
     mut tanks: Query<
@@ -114,7 +410,9 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
             .as_ivec2();
         for y in min.y..=max.y {
             for x in min.x..=max.x {
-                if let Some(tank) = habitats.habitat_for_topology_cell(IVec2::new(x, y)) {
+                if let Some(tank) =
+                    locate_habitat_at_topology_cell(habitats, &cell_owners, IVec2::new(x, y))
+                {
                     terrain_affected.insert(tank);
                     if change.ground_height_changed {
                         ground_affected.insert(tank);

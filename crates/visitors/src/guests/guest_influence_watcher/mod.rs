@@ -15,7 +15,7 @@ use openzt2_zoo_state::{
 #[derive(Component, Default)]
 pub struct GuestInfluenceCells(pub HashMap<u32, Vec<GuestInfluenceEntry>>);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct GuestInfluenceEntry {
     pub category: AssetId,
     pub key: AssetId,
@@ -54,6 +54,34 @@ pub struct GuestInfluenceRange {
 pub struct GuestInfluenceFeedback {
     pub guest: Entity,
     pub entries: Vec<BehaviorFeedbackEntry>,
+}
+
+pub(super) fn present_guest_influence_emoticons(
+    mut feedback: MessageReader<GuestInfluenceFeedback>,
+    guests: Query<(), With<Guest>>,
+    mut commands: Commands,
+) {
+    for event in feedback.read().filter(|event| guests.contains(event.guest)) {
+        for entry in &event.entries {
+            let BehaviorFeedbackEntry::Emoticon {
+                emoticon_name,
+                emoticon_scale,
+                ..
+            } = entry
+            else {
+                continue;
+            };
+            commands.trigger(
+                openzt2_game_assets::effect::PlayAuthoredParticleDictionaryEffect {
+                    effect: AssetId::from_key(&emoticon_name.to_ascii_lowercase()),
+                    subject: event.guest,
+                    attach: true,
+                    inherit_parent_rotation: false,
+                    transform: Transform::from_scale(Vec3::splat(emoticon_scale.unwrap_or(1.0))),
+                },
+            );
+        }
+    }
 }
 
 impl GuestInfluenceWatchRow {
@@ -106,6 +134,7 @@ pub(super) fn apply_due_guest_influence(
         &ZooClock,
         Option<&SimulationPaused>,
         Option<&GuestInfluenceCells>,
+        Option<&super::guest_influence_grid::GuestTerrainInfluence>,
     )>,
     time: Res<Time<Fixed>>,
     mut random: ResMut<NativeVisualRandomStream>,
@@ -116,7 +145,7 @@ pub(super) fn apply_due_guest_influence(
         if *phase != GuestPhase::Visiting {
             continue;
         }
-        let Ok((grid, clock, pause, influence)) = roots.get(member.root) else {
+        let Ok((grid, clock, pause, influence, terrain)) = roots.get(member.root) else {
             continue;
         };
         if pause.is_some_and(|pause| pause.0) {
@@ -131,7 +160,9 @@ pub(super) fn apply_due_guest_influence(
         let now = clock.tick as f64 * time.timestep().as_secs_f64();
         let values = influence
             .and_then(|influence| influence.0.get(&cell))
-            .map_or(&[][..], Vec::as_slice);
+            .map(Vec::as_slice)
+            .or_else(|| terrain.map(super::guest_influence_grid::GuestTerrainInfluence::entries))
+            .unwrap_or_default();
         for row in &mut rows.0 {
             let Some((range, present)) = row.sample(now, values, || random.next_u15()) else {
                 continue;

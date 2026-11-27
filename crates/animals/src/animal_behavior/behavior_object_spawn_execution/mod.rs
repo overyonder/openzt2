@@ -70,6 +70,8 @@ fn resume_prefab_spawn(event: On<ResumePrefabSpawn>) -> Option<Entity> {
 #[allow(clippy::too_many_arguments)]
 fn wake_prefab_spawn_actions(
     assets: Res<WorldDefinitions>,
+    prefab_assets: Res<Assets<ScenePrefabAsset>>,
+    server: Res<AssetServer>,
     mut definition_events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
     mut loaded: MessageReader<AssetEvent<ScenePrefabAsset>>,
     mut failed: MessageReader<AssetLoadFailedEvent<ScenePrefabAsset>>,
@@ -111,21 +113,21 @@ fn wake_prefab_spawn_actions(
             commands.trigger(ResumePrefabSpawn { actor });
         }
     }
-    if settled.is_empty() {
-        return;
-    }
+    let is_settled = |handle: &Handle<ScenePrefabAsset>| {
+        settled.contains(&handle.id())
+            || prefab_assets.contains(handle.id())
+            || matches!(
+                server.get_load_state(handle.id()),
+                Some(LoadState::Failed(_))
+            )
+    };
     for (actor, pending) in &at_actor {
-        if settled.contains(&pending.prefab.id()) {
+        if is_settled(&pending.prefab) {
             commands.trigger(ResumePrefabSpawn { actor });
         }
     }
     for (actor, pending) in &animated {
-        if pending.request.is_none()
-            && pending
-                .prefab
-                .as_ref()
-                .is_some_and(|handle| settled.contains(&handle.id()))
-        {
+        if pending.request.is_none() && pending.prefab.as_ref().is_some_and(is_settled) {
             commands.trigger(ResumePrefabSpawn { actor });
         }
     }

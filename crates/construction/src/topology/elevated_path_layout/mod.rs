@@ -10,7 +10,6 @@ use openzt2_game_assets::source_document::{
     ordered_source_document_types::OrderedSourceDocumentNode, path::AssetPath,
 };
 use openzt2_game_data::world_definitions::paths_and_tile_surfaces::GuestPathDefinition;
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::{
     construction::construction_tool_and_placement_policy_types::{
         ConstructionPlacementPolicy, ElevatedPathGrade,
@@ -67,10 +66,6 @@ impl AssetLoader for ElevatedPathModeLoader {
             clearance_cm: (clearance * 100.0).round() as i32,
         })
     }
-
-    fn extensions(&self) -> &[&str] {
-        &["xml"]
-    }
 }
 
 #[derive(Resource)]
@@ -125,9 +120,6 @@ impl ElevatedPathProfile {
         self.reference_cm as f32 * 0.01
     }
 }
-
-#[derive(Component, Default)]
-pub(super) struct ElevatedPathSurfaceEdits(pub Vec<(PersistentId, TileSurface)>);
 
 pub(super) fn elevated_path_tiles(
     preview: &PathPreview,

@@ -23,6 +23,7 @@ fn document() -> SpeciesDocument {
     let id = AssetId::from_key("test_species");
     SpeciesDocument {
         species: vec![Species {
+            caffeine_factors: Default::default(),
             placement_surface_policy: Default::default(),
             donation: None,
             id,

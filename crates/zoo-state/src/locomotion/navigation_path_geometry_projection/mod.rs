@@ -143,7 +143,7 @@ fn project_path(
             previous.set_if_neq(geometry);
         }
         (None, Some(geometry)) => {
-            commands.entity(entity).insert(geometry);
+            commands.entity(entity).insert_if_new(geometry);
         }
         (Some(_), None) => {
             commands.entity(entity).remove::<NavigationPathGeometry>();

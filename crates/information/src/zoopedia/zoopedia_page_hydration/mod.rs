@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::{
     action::{
-        UiActionRecord, UiTrigger,
         information::{UiInformationAction, UiInformationActionRecord},
+        UiActionRecord, UiTrigger,
     },
     document::UiDocumentRole,
 };

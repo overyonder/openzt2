@@ -2,7 +2,7 @@
 
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    AuthoredRadiusViewEvent, AuthoredViewThought, RunBehaviorViewAnimals, RunBehaviorViewEvent,
+    AuthoredViewThought, RunBehaviorViewAnimals, RunBehaviorViewEvent,
     RunningBehaviorInstruction,
 };
 use openzt2_shows::shows::ShowAudienceFeedback;
@@ -37,7 +37,13 @@ use openzt2_zoo_state::{
         },
         guest_survey_types::GuestSurveyExperience,
     },
-    locomotion::locomotion_types::{Destination, SpatialGrid, SpatialGridMembership},
+    locomotion::locomotion_types::Destination,
+};
+
+use openzt2_world_state::world_spawn::world_entity_crating::UncratedWorldEntity;
+use openzt2_zoo_state::{
+    animal_behavior::behavior_spatial_candidates::BehaviorSpatialCandidates,
+    authored_float_attributes::AuthoredFloatAttributes, staff::staff_employment_types::StaffRole,
 };
 
 use super::{
@@ -126,12 +132,15 @@ pub(super) fn emit_authored_view_events(
     activation: On<WhenBehaviorAction<RunBehaviorViewEvent>>,
     world_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
-    clock: Single<&ZooClock>,
+    clocks: Query<&ZooClock>,
     tasks: Query<
         (
             Entity,
             Option<&DefinitionId>,
-            Option<(&WorldMember, &GlobalTransform)>,
+            Option<&StaffRole>,
+            Option<&AuthoredFloatAttributes>,
+            &WorldMember,
+            Option<&GlobalTransform>,
             (
                 &BehaviorTaskExecutionState,
                 &RunningBehaviorInstruction,
@@ -140,14 +149,16 @@ pub(super) fn emit_authored_view_events(
         ),
         Without<PendingBehaviorTaskFailure>,
     >,
-    grids: Query<&SpatialGrid>,
-    spatial: SpatialGridMembership,
-    recipients: Query<(
-        &WorldMember,
-        &GlobalTransform,
-        Option<&DefinitionId>,
-        Option<&GuestArchetype>,
-    )>,
+    spatial: BehaviorSpatialCandidates,
+    recipients: Query<
+        (
+            &WorldMember,
+            &GlobalTransform,
+            Option<&DefinitionId>,
+            Option<&GuestArchetype>,
+        ),
+        UncratedWorldEntity,
+    >,
     mut guests: Query<
         (
             &mut GuestEducation,
@@ -170,9 +181,19 @@ pub(super) fn emit_authored_view_events(
     let Some(definitions) = world_definitions.get(&world_assets) else {
         return;
     };
-    for (source, definition, position, (task, instruction, running_action)) in
-        std::iter::once(tasks.get(activation.entity)).flatten()
+    for (
+        source,
+        definition,
+        staff,
+        attributes,
+        member,
+        pose,
+        (task, instruction, running_action),
+    ) in std::iter::once(tasks.get(activation.entity)).flatten()
     {
+        let Ok(clock) = clocks.get(member.root) else {
+            continue;
+        };
         if task.next_action_tick > clock.tick {
             continue;
         }
@@ -180,115 +201,90 @@ pub(super) fn emit_authored_view_events(
             continue;
         }
         let event = &running_action.0;
-        let Some(definition) = definition.and_then(|id| definitions.find_object(id.0)) else {
+        let source_definitions = [
+            definition.and_then(|id| definitions.find_object(id.0)),
+            staff.and_then(|role| definitions.find_object(role.0)),
+        ];
+        let definition = source_definitions.into_iter().flatten().find(|object| {
+            object
+                .view_data
+                .iter()
+                .any(|row| row.name == event.view_key)
+        });
+        let Some(definition) = definition else {
             mark_behavior_task_for_failure_and_stop_navigation(source, &mut commands);
             continue;
         };
-        if !definition
-            .view_data
-            .iter()
-            .any(|row| row.name == event.view_key)
-        {
-            mark_behavior_task_for_failure_and_stop_navigation(source, &mut commands);
-            continue;
-        }
         let property = |key: Option<AssetId>| {
             key.and_then(|key| {
-                let properties = &definition.authored_runtime.numeric_behavior_properties;
-                let index = properties
-                    .binary_search_by_key(&key, |&(property, _)| property)
-                    .ok()?;
-                Some(properties[index].1)
+                attributes.and_then(|values| values.get(key)).or_else(|| {
+                    source_definitions.into_iter().flatten().find_map(|object| {
+                        let properties = &object.authored_runtime.numeric_behavior_properties;
+                        let index = properties
+                            .binary_search_by_key(&key, |&(property, _)| property)
+                            .ok()?;
+                        Some(properties[index].1)
+                    })
+                })
             })
             .unwrap_or_default()
         };
         let education = property(event.education_value_property);
         let education_donation = property(event.education_donation_property);
         if let Some(radius) = event.radius {
-            if let Some((member, pose)) = position {
-                if let Ok(grid) = grids.get(member.root) {
-                    let centre = pose.translation();
-                    let minimum = (((centre.xz() - grid.origin) - Vec2::splat(radius.metres))
-                        / grid.cell_size_m)
-                        .floor()
-                        .as_ivec2()
-                        .max(IVec2::ZERO);
-                    let maximum = (((centre.xz() - grid.origin) + Vec2::splat(radius.metres))
-                        / grid.cell_size_m)
-                        .floor()
-                        .as_ivec2()
-                        .min(IVec2::new(grid.width as i32 - 1, grid.height as i32 - 1));
-                    for row in minimum.y..=maximum.y {
-                        for column in minimum.x..=maximum.x {
-                            let cell = row as u32 * grid.width + column as u32;
-                            for recipient in spatial.members(member.root, cell) {
-                                let Ok((recipient_world, pose, definition, archetype)) =
-                                    recipients.get(recipient)
-                                else {
-                                    continue;
-                                };
-                                if recipient_world.root != member.root
-                                    || (pose.translation() - centre).abs().max_element()
-                                        > radius.metres
-                                    || radius.target_type.is_some_and(|target| {
-                                        let guest = archetype
-                                            .and_then(|archetype| {
-                                                definitions.find_guest(archetype.0)
-                                            })
-                                            .is_some_and(|guest| {
-                                                guest
-                                                    .behavior_subject_type_identifiers
-                                                    .contains(&target)
-                                            });
-                                        let object = definition
-                                            .and_then(|definition| {
-                                                definitions.find_object(definition.0)
-                                            })
-                                            .is_some_and(|object| {
-                                                object.id == target
-                                                    || object
-                                                        .behavior_type_identifiers
-                                                        .contains(&target)
-                                            });
-                                        !(guest || object)
-                                    })
-                                {
-                                    continue;
-                                }
-                                if let Ok((mut value, mut experience, mut donations)) =
-                                    guests.get_mut(recipient)
-                                {
-                                    apply_authored_education(
-                                        education,
-                                        education_donation,
-                                        &mut value,
-                                        &mut experience,
-                                        donations.as_deref_mut(),
-                                    );
-                                    deliver_view_thoughts(
-                                        &mut commands,
-                                        recipient,
-                                        source,
-                                        task.target,
-                                        task.object,
-                                        event
-                                            .feedback
-                                            .iter()
-                                            .flat_map(|feedback| &feedback.entries),
-                                    );
-                                }
-                                commands.trigger(AuthoredRadiusViewEvent {
-                                    recipient,
-                                    source,
-                                    view_key: event.view_key,
-                                    education,
-                                    donation: education_donation,
-                                    feedback: event.feedback.clone(),
-                                    source_target: task.target,
-                                    source_object: task.object,
+            if let Some(pose) = pose {
+                let centre = pose.translation();
+                let extent = Vec2::splat(radius.metres);
+                let mut nearby = Vec::new();
+                spatial.in_bounds(
+                    member.root,
+                    centre.xz() - extent,
+                    centre.xz() + extent,
+                    &mut nearby,
+                );
+                for recipient in nearby {
+                    let Ok((recipient_world, pose, definition, archetype)) =
+                        recipients.get(recipient)
+                    else {
+                        continue;
+                    };
+                    if recipient_world.root != member.root
+                        || (pose.translation() - centre).abs().max_element() > radius.metres
+                        || radius.target_type.is_some_and(|target| {
+                            let guest = archetype
+                                .and_then(|archetype| definitions.find_guest(archetype.0))
+                                .is_some_and(|guest| {
+                                    guest.behavior_subject_type_identifiers.contains(&target)
                                 });
-                            }
-                        }
+                            let object = definition
+                                .and_then(|definition| definitions.find_object(definition.0))
+                                .is_some_and(|object| {
+                                    object.id == target
+                                        || object.behavior_type_identifiers.contains(&target)
+                                });
+                            !(guest || object)
+                        })
+                    {
+                        continue;
+                    }
+                    if let Ok((mut value, mut experience, mut donations)) =
+                        guests.get_mut(recipient)
+                    {
+                        apply_authored_education(
+                            education,
+                            education_donation,
+                            &mut value,
+                            &mut experience,
+                            donations.as_deref_mut(),
+                        );
+                        deliver_view_thoughts(
+                            &mut commands,
+                            recipient,
+                            source,
+                            task.target,
+                            task.object,
+                            event.feedback.iter().flat_map(|feedback| &feedback.entries),
+                        );
                     }
                 }
             }
@@ -305,15 +301,12 @@ pub(super) fn emit_authored_view_events(
             });
         }
         if let Some(data) = &event.feedback {
-            if let Some((mut messages, localization)) = position
-                .and_then(|(member, _)| zoo_messages.get_mut(member.root).ok())
-                .zip(
-                    localization
-                        .as_ref()
-                        .zip(feedback_assets.as_ref())
-                        .and_then(|(index, assets)| index.borrow_loaded_localization_view(assets)),
-                )
-            {
+            if let Some((mut messages, localization)) = zoo_messages.get_mut(member.root).ok().zip(
+                localization
+                    .as_ref()
+                    .zip(feedback_assets.as_ref())
+                    .and_then(|(index, assets)| index.borrow_loaded_localization_view(assets)),
+            ) {
                 deliver_view_messages(
                     &data.entries,
                     source,
@@ -409,7 +402,6 @@ fn apply_authored_education(
 pub(crate) struct AppliedAnimalView {
     pub(crate) guest: Entity,
     pub(crate) subject: Entity,
-    pub(crate) viewing: Viewing,
     pub(crate) view_score: f32,
     pub(crate) entertainment_score: f32,
     pub(crate) donation_score: f32,
@@ -599,7 +591,6 @@ pub(crate) fn apply_guest_reactions(
                 applied_views.write(AppliedAnimalView {
                     guest,
                     subject: event.source,
-                    viewing: *viewing,
                     view_score: row.view_score,
                     entertainment_score: row.entertainment_score,
                     donation_score: row.donation_score,

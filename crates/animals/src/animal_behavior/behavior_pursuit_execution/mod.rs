@@ -488,7 +488,7 @@ fn finish_pursuit(
 
 /// A finished or replaced task leaves no pursuit steering its actor.
 fn discard_pursuit_on_task_removal(
-    removal: On<Remove, BehaviorTaskExecutionState>,
+    removal: On<Remove<BehaviorTaskExecutionState>>,
     mut commands: Commands,
     pursuers: Query<(&PendingBehaviorPursuit, Option<&Destination>)>,
 ) {

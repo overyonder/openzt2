@@ -577,5 +577,9 @@ fn apply_requested_sort_direction_to_ordering(
     value: std::cmp::Ordering,
     descending: bool,
 ) -> std::cmp::Ordering {
-    if descending { value.reverse() } else { value }
+    if descending {
+        value.reverse()
+    } else {
+        value
+    }
 }

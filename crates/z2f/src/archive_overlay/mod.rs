@@ -10,9 +10,10 @@ use zip::ZipArchive;
 
 use crate::{
     paths::normalize_asset_path_for_case_insensitive_archive_lookup,
-    positional_archive_reader::PositionalArchiveReader, ArchiveSet, EnabledArchiveOverlayState,
-    ResolvedArchiveEntry, ResolvedAssetChange, ResolvedAssetChangeKind,
-    WinningArchiveEntryLocation, Z2fArchiveEnabledStatus, REQUIRED_ARCHIVES,
+    positional_archive_reader::PositionalArchiveReader, ArchiveEntryContentRevision, ArchiveSet,
+    EnabledArchiveOverlayState, IndexedArchive, ResolvedArchiveEntry, ResolvedAssetChange,
+    ResolvedAssetChangeKind, WinningArchiveEntryLocation, Z2fArchiveEnabledStatus,
+    REQUIRED_ARCHIVES,
 };
 
 impl ArchiveSet {
@@ -24,8 +25,7 @@ impl ArchiveSet {
     /// opened or indexed.
     pub fn open(paths: impl IntoIterator<Item = PathBuf>) -> io::Result<Self> {
         let mut archive_names = Vec::new();
-        let mut open_zip_archives = Vec::new();
-        let mut archive_entries_by_normalized_path = Vec::new();
+        let mut archives = Vec::new();
         for path in paths {
             let name = PathBuf::from(
                 path.file_name()
@@ -33,52 +33,18 @@ impl ArchiveSet {
                     .to_string_lossy()
                     .to_ascii_lowercase(),
             );
-            let file = File::open(&path).map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!("Cannot open {}: {error}", path.display()),
-                )
-            })?;
-            let mut archive =
-                ZipArchive::new(PositionalArchiveReader::new(file)?).map_err(|error| {
-                    io::Error::other(format!("Cannot read {}: {error}", path.display()))
-                })?;
-            let archive_priority_index = open_zip_archives.len();
-            let mut archive_entries = BTreeMap::new();
-            for entry_index in 0..archive.len() {
-                let entry = archive.by_index(entry_index).map_err(io::Error::other)?;
-                if entry.is_dir() {
-                    continue;
-                }
-                let Some(source) = entry.enclosed_name() else {
-                    continue;
-                };
-                archive_entries.insert(
-                    normalize_asset_path_for_case_insensitive_archive_lookup(&source),
-                    WinningArchiveEntryLocation {
-                        archive_priority_index,
-                        zip_entry_index: entry_index,
-                        original_archive_path: source,
-                    },
-                );
-            }
+            archives.push(index_archive(&path, archives.len())?);
             archive_names.push(name);
-            open_zip_archives.push(archive);
-            archive_entries_by_normalized_path.push(archive_entries);
         }
-        let archive_enabled_states = vec![true; open_zip_archives.len()];
+        let archive_enabled_states = vec![true; archives.len()];
         let (winning_entries_by_normalized_path, resolved_directories) =
-            select_winning_entries_and_resolved_directories(
-                &archive_entries_by_normalized_path,
-                &archive_enabled_states,
-            );
+            select_winning_entries_and_resolved_directories(&archives, &archive_enabled_states);
         let unique_basename_aliases =
             collect_unique_basename_aliases(&winning_entries_by_normalized_path);
         Ok(Self {
             archive_names,
-            open_zip_archives,
-            archive_entries_by_normalized_path,
             overlay_state: RwLock::new(EnabledArchiveOverlayState {
+                archives,
                 archive_enabled_states,
                 winning_entries_by_normalized_path,
                 unique_basename_aliases,
@@ -102,6 +68,20 @@ impl ArchiveSet {
                 is_enabled,
             })
             .collect()
+    }
+
+    pub fn archive_source_path(&self, archive_priority_index: usize) -> Option<PathBuf> {
+        let state = self
+            .overlay_state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Some(
+            state
+                .archives
+                .get(archive_priority_index)?
+                .source_path
+                .clone(),
+        )
     }
 
     /// Changes one archive's enabled state and returns paths whose winner changed.
@@ -137,56 +117,58 @@ impl ArchiveSet {
             return Ok(Vec::new());
         }
         *current = is_enabled;
-        let old_winners = std::mem::take(&mut state.winning_entries_by_normalized_path);
-        let (winners, directories) = select_winning_entries_and_resolved_directories(
-            &self.archive_entries_by_normalized_path,
-            &state.archive_enabled_states,
-        );
-        let old_aliases = std::mem::take(&mut state.unique_basename_aliases);
-        let aliases = collect_unique_basename_aliases(&winners);
-        let introduction_order_changes = self.archive_entries_by_normalized_path
-            [archive_priority_index]
+        let introduction_order_changes = state.archives[archive_priority_index]
+            .entries
             .keys()
-            .filter(|path| {
-                !self.archive_entries_by_normalized_path[..archive_priority_index]
-                    .iter()
-                    .zip(&state.archive_enabled_states)
-                    .any(|(entries, enabled)| *enabled && entries.contains_key(*path))
-            });
-        let changed_paths = old_winners
-            .keys()
-            .chain(winners.keys())
-            .filter(|path| old_winners.get(*path) != winners.get(*path))
-            .chain(
-                old_aliases
-                    .keys()
-                    .chain(aliases.keys())
-                    .filter(|path| old_aliases.get(*path) != aliases.get(*path)),
-            )
-            .chain(introduction_order_changes)
+            .filter(|path| !earlier_archive_contains(&state, archive_priority_index, path))
             .cloned()
-            .collect::<BTreeSet<_>>();
-        let changed = changed_paths
-            .into_iter()
-            .map(|path| {
-                let old = old_winners.get(&path).or_else(|| old_aliases.get(&path));
-                let new = winners.get(&path).or_else(|| aliases.get(&path));
-                ResolvedAssetChange {
-                    normalized_asset_path: path,
-                    change_kind: match (old, new) {
-                        (None, Some(_)) => ResolvedAssetChangeKind::Added,
-                        (Some(_), None) => ResolvedAssetChangeKind::Removed,
-                        (Some(_), Some(_)) => ResolvedAssetChangeKind::Modified,
-                        (None, None) => unreachable!("changed path must have an old or new winner"),
-                    },
-                }
-            })
             .collect();
-        state.winning_entries_by_normalized_path = winners;
-        state.unique_basename_aliases = aliases;
-        state.resolved_directories = directories;
-        drop(state);
-        Ok(changed)
+        Ok(rebuild_overlay(&mut state, introduction_order_changes))
+    }
+
+    /// Reopens the contents of an archive at the same priority position.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the archive position is unknown or the new ZIP
+    /// cannot be opened or indexed. In either case the overlay stays intact.
+    pub fn replace_archive(
+        &self,
+        archive_priority_index: usize,
+        path: &Path,
+    ) -> io::Result<Vec<ResolvedAssetChange>> {
+        if archive_priority_index >= self.archive_names.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unknown Z2F archive",
+            ));
+        }
+        let archive = index_archive(path, archive_priority_index)?;
+        let mut state = self
+            .overlay_state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = std::mem::replace(&mut state.archives[archive_priority_index], archive);
+        if !state.archive_enabled_states[archive_priority_index] {
+            return Ok(Vec::new());
+        }
+        let replacement = &state.archives[archive_priority_index].entries;
+        let introduction_order_changes = previous
+            .entries
+            .keys()
+            .chain(replacement.keys())
+            .filter(|path| {
+                let previous_ordinal = previous
+                    .entries
+                    .get(*path)
+                    .map(|entry| entry.zip_entry_index);
+                let replacement_ordinal = replacement.get(*path).map(|entry| entry.zip_entry_index);
+                previous_ordinal != replacement_ordinal
+                    && !earlier_archive_contains(&state, archive_priority_index, path)
+            })
+            .cloned()
+            .collect();
+        Ok(rebuild_overlay(&mut state, introduction_order_changes))
     }
 
     /// Returns the winning source entries in archive and ZIP order.
@@ -203,6 +185,7 @@ impl ArchiveSet {
                 original_archive_path: winner.original_archive_path.clone(),
                 archive_priority_index: winner.archive_priority_index,
                 zip_entry_ordinal: winner.zip_entry_index,
+                content_revision: winner.content_revision,
             })
             .collect::<Vec<_>>();
         drop(state);
@@ -228,6 +211,7 @@ impl ArchiveSet {
             original_archive_path: winner.original_archive_path,
             archive_priority_index: winner.archive_priority_index,
             zip_entry_ordinal: winner.zip_entry_index,
+            content_revision: winner.content_revision,
         })
     }
 
@@ -244,17 +228,110 @@ impl ArchiveSet {
             .overlay_state
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.archive_entries_by_normalized_path
+        state
+            .archives
             .iter()
             .zip(&state.archive_enabled_states)
             .enumerate()
             .filter(|(_, (_, enabled))| **enabled)
-            .find_map(|(archive_priority_index, (entries, _))| {
-                entries
+            .find_map(|(archive_priority_index, (archive, _))| {
+                archive
+                    .entries
                     .get(&normalized_path)
                     .map(|entry| (archive_priority_index, entry.zip_entry_index))
             })
     }
+}
+
+fn index_archive(path: &Path, archive_priority_index: usize) -> io::Result<IndexedArchive> {
+    let file = File::open(path).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("Cannot open {}: {error}", path.display()),
+        )
+    })?;
+    let mut zip = ZipArchive::new(PositionalArchiveReader::new(file)?)
+        .map_err(|error| io::Error::other(format!("Cannot read {}: {error}", path.display())))?;
+    let mut entries = BTreeMap::new();
+    for zip_entry_index in 0..zip.len() {
+        let entry = zip.by_index(zip_entry_index).map_err(io::Error::other)?;
+        if entry.is_dir() {
+            continue;
+        }
+        let Some(source) = entry.enclosed_name() else {
+            continue;
+        };
+        entries.insert(
+            normalize_asset_path_for_case_insensitive_archive_lookup(&source),
+            WinningArchiveEntryLocation {
+                archive_priority_index,
+                zip_entry_index,
+                original_archive_path: source,
+                content_revision: ArchiveEntryContentRevision {
+                    uncompressed_size: entry.size(),
+                    crc32: entry.crc32(),
+                },
+            },
+        );
+    }
+    Ok(IndexedArchive {
+        source_path: path.to_owned(),
+        zip,
+        entries,
+    })
+}
+
+fn earlier_archive_contains(
+    state: &EnabledArchiveOverlayState,
+    archive_priority_index: usize,
+    path: &Path,
+) -> bool {
+    state.archives[..archive_priority_index]
+        .iter()
+        .zip(&state.archive_enabled_states)
+        .any(|(archive, enabled)| *enabled && archive.entries.contains_key(path))
+}
+
+fn rebuild_overlay(
+    state: &mut EnabledArchiveOverlayState,
+    mut changed_paths: BTreeSet<PathBuf>,
+) -> Vec<ResolvedAssetChange> {
+    let (winners, directories) = select_winning_entries_and_resolved_directories(
+        &state.archives,
+        &state.archive_enabled_states,
+    );
+    let aliases = collect_unique_basename_aliases(&winners);
+    let old_winners = std::mem::replace(&mut state.winning_entries_by_normalized_path, winners);
+    let old_aliases = std::mem::replace(&mut state.unique_basename_aliases, aliases);
+    state.resolved_directories = directories;
+    for (old, new) in [
+        (&old_winners, &state.winning_entries_by_normalized_path),
+        (&old_aliases, &state.unique_basename_aliases),
+    ] {
+        changed_paths.extend(
+            old.keys()
+                .chain(new.keys())
+                .filter(|path| old.get(*path) != new.get(*path))
+                .cloned(),
+        );
+    }
+    changed_paths
+        .into_iter()
+        .filter_map(|path| {
+            let old = old_winners.get(&path).or_else(|| old_aliases.get(&path));
+            let new = winning_archive_entry_for_path(state, &path);
+            let change_kind = match (old, new) {
+                (None, Some(_)) => ResolvedAssetChangeKind::Added,
+                (Some(_), None) => ResolvedAssetChangeKind::Removed,
+                (Some(_), Some(_)) => ResolvedAssetChangeKind::Modified,
+                (None, None) => return None,
+            };
+            Some(ResolvedAssetChange {
+                normalized_asset_path: path,
+                change_kind,
+            })
+        })
+        .collect()
 }
 
 fn is_required_archive(path: &Path) -> bool {
@@ -264,17 +341,17 @@ fn is_required_archive(path: &Path) -> bool {
 }
 
 fn select_winning_entries_and_resolved_directories(
-    entries: &[BTreeMap<PathBuf, WinningArchiveEntryLocation>],
+    archives: &[IndexedArchive],
     enabled: &[bool],
 ) -> (
     BTreeMap<PathBuf, WinningArchiveEntryLocation>,
     BTreeSet<PathBuf>,
 ) {
-    let winners = entries
+    let winners = archives
         .iter()
         .zip(enabled)
         .filter(|(_, enabled)| **enabled)
-        .flat_map(|(entries, _)| entries.iter())
+        .flat_map(|(archive, _)| archive.entries.iter())
         .map(|(path, winner)| (path.clone(), winner.clone()))
         .collect::<BTreeMap<_, _>>();
     let directories = winners

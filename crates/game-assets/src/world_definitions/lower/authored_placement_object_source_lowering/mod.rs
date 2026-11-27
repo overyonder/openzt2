@@ -31,11 +31,11 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::world_objects::{
     WaterFilterPolicy, WorldObjectAffordanceFlags, WorldObjectDefinition, WorldObjectPropertyFlags,
     WorldObjectRealPhysicsWaterImpactDefinition,
 };
+use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
 /// Uses the mainObj scene for spawning. Purchase controls also add a catalogue entry.
@@ -312,6 +312,21 @@ pub(super) fn bind_authored_placement_object(
             entity_scene_paths,
         )?
     };
+    if model.is_some() {
+        if let Some(lab) =
+            super::named_physical_presentation_source_lowering::lower_fossil_lab_presentation(
+                record,
+                entity_scene_paths,
+            )?
+        {
+            if !named_physical_presentations
+                .iter()
+                .any(|presentation| presentation.name == lab.name)
+            {
+                named_physical_presentations.push(lab);
+            }
+        }
+    }
     super::named_physical_presentation_source_lowering::lower_fade_controller_states(
         record,
         entity_scene_paths,
@@ -491,6 +506,7 @@ pub(super) fn bind_authored_placement_object(
         record.key.to_string(),
     ));
     output.document.objects.push(WorldObjectDefinition {
+        collision_scores: super::interaction_policy_lowering::collision_scores(record)?,
         authored_runtime: super::object_and_placeable_source_lowering::lower_authored_world_object_runtime(record)?,
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
         audio_stage_volumes: lower_authored_audio_stage_volumes(record)?,

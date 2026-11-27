@@ -7,7 +7,7 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::{AssetId, behavior::action::watch_show::ShowEventScoring};
+use openzt2_game_data::{behavior::action::watch_show::ShowEventScoring, AssetId};
 use openzt2_world_state::{
     simulation_time::simulation_clock_types::ZooClock,
     world_spawn::world_membership_types::WorldMember,
@@ -19,8 +19,8 @@ use openzt2_zoo_state::{
     },
     animal_lifecycle::types::{Animal, SpeciesHandle},
     behavior_task_execution_types::{
-        BehaviorTaskExecutionPhase, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
         running_actions::{RunBehaviorWatchShow, RunningBehaviorInstruction, SelectedBehaviorSet},
+        BehaviorTaskExecutionPhase, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     guests::{
         guest_simulation_types::{GuestArchetype, GuestFavouriteAnimal, GuestRng},

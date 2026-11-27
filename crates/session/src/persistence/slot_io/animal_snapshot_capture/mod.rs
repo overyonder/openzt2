@@ -16,7 +16,8 @@ use openzt2_zoo_state::animal_behavior::animal_lineage::{
     AnimalFather, AnimalMate, AnimalMother, PregnancyFather,
 };
 use openzt2_zoo_state::animal_behavior::behavior_token_types::{
-    BehaviorSelfToken, ClaimedBehaviorSelfToken,
+    BehaviorSelfToken, BehaviorTokenContext, BehaviorTokenXmlPayload, ClaimedBehaviorSelfToken,
+    PendingBehaviorTokenReconsideration,
 };
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_health::types::{
@@ -36,7 +37,13 @@ pub(in crate::persistence) type AnimalSnapshotEntities<'w, 's> =
 pub(in crate::persistence) type PendingTokenSnapshotEntities<'w, 's> = Query<
     'w,
     's,
-    (&'static BehaviorSelfToken, &'static ChildOf),
+    (
+        &'static BehaviorSelfToken,
+        &'static ChildOf,
+        Option<&'static BehaviorTokenContext>,
+        Option<&'static BehaviorTokenXmlPayload>,
+        Has<PendingBehaviorTokenReconsideration>,
+    ),
     Without<ClaimedBehaviorSelfToken>,
 >;
 
@@ -167,7 +174,7 @@ pub(super) fn capture_animal_snapshot_records(
                 .transpose()?,
             pending_tokens: {
                 let mut pending = Vec::new();
-                for (token, holder) in tokens {
+                for (token, holder, context, xml, reconsider) in tokens {
                     if holder.parent() != animal.id() {
                         continue;
                     }
@@ -178,8 +185,12 @@ pub(super) fn capture_animal_snapshot_records(
                         // A payload that left the zoo no longer names anyone.
                         payload: token
                             .payload
-                            .and_then(|payload| persistent_reference(payload).ok()),
+                            .and_then(|payload| identities.get(payload).ok().map(|id| id.0)),
                         retain_on_failure: token.retain_on_failure,
+                        context: super::behavior_snapshot_types::SavedBehaviorTokenContext::capture(
+                            context, xml,
+                        ),
+                        reconsider,
                     });
                 }
                 pending.sort_unstable_by_key(|token| (token.available_at, token.name.0));

@@ -65,14 +65,6 @@ pub struct ObjectPlacementPreviewRenderable;
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct ObjectPlacementPreviewDecal;
 
-/// The entrance arrow in front of a building being placed, which slides
-/// back and forth along `direction` from `rest`.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct ObjectPlacementEntranceArrow {
-    pub rest: Vec3,
-    pub direction: Vec3,
-}
-
 #[derive(Component, Debug, Clone)]
 pub struct ObjectPlacementPreviewMaterials {
     pub footprint_valid: Handle<StandardMaterial>,
@@ -85,21 +77,6 @@ pub struct ObjectPlacementPreviewMaterials {
     pub entrance_arrow: Handle<StandardMaterial>,
     pub model_valid: Color,
     pub model_invalid: Color,
-}
-
-#[derive(Component, Debug, Clone, PartialEq)]
-pub struct ObjectPlacementPreviewVisualState {
-    pub eighth_turns: u8,
-    pub valid: bool,
-    pub footprint_translations: Vec<Vec3>,
-    pub decal_rotation: Quat,
-    pub footprint_material: Handle<StandardMaterial>,
-    pub grid_material: Handle<StandardMaterial>,
-    pub grid_radius: f32,
-    /// Where the preview stood, as its decals follow the terrain there.
-    pub world_translation: Vec3,
-    /// The entrance arrow waits for the model to load.
-    pub arrow_pending: bool,
 }
 
 #[derive(Component, Debug, Clone)]

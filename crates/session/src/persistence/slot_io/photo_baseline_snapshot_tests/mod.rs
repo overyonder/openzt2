@@ -106,7 +106,7 @@ pub(crate) const SCENARIO: AssetId = AssetId([3; 16]);
 pub(crate) const FIRST: AssetId = AssetId([1; 16]);
 pub(crate) const SECOND: AssetId = AssetId([2; 16]);
 
-pub(crate) fn loading_app() -> (App, Entity) {
+pub(crate) fn loading_app(configure: impl FnOnce(&mut App)) -> (App, Entity) {
     let mut app = App::new();
     app.add_plugins((
         MinimalPlugins,
@@ -139,10 +139,8 @@ pub(crate) fn loading_app() -> (App, Entity) {
     .init_resource::<Assets<Image>>()
     .insert_resource(ProfileOptions {
         profile_identifier: PROFILE,
+        photo_album: Some(openzt2_interface_state::persistence::profile_types::PhotoAlbumProfileOptions { default_spreads: Some(5) }),
         ..default()
-    })
-    .insert_resource(openzt2_photos::PhotoAlbumProfileOptions {
-        default_spreads: Some(5),
     })
     .add_message::<AssetEvent<LuaScriptAsset>>()
     .add_message::<BeginWorldLoad>()
@@ -161,6 +159,7 @@ pub(crate) fn loading_app() -> (App, Entity) {
         restore_pending_snapshots()
             .after(GameSet::Intent),
     );
+    configure(&mut app);
     let root = app
         .world_mut()
         .spawn((
@@ -329,6 +328,7 @@ pub(crate) fn saved_photo_container_for_scenario(world: &mut World, scenario: As
                         map_definition_identifier: SCENARIO,
                         starting_point_definition_identifier: AssetId([4; 16]),
                         session_mode: WorldSessionMode::Freeform,
+                        mode_document_path: None,
                         last_saved_unix_timestamp_milliseconds: 0,
                         display_name: "restored".into(),
                         source_document: None,
@@ -420,7 +420,7 @@ pub(crate) fn prepare_unvalidated_snapshot_application(
 fn prevalidation_rejection_preserves_the_active_world_and_simulation() {
     use openzt2_world::world_spawn::world_unloading::despawn_all_world_roots_and_members_when_leaving_ingame;
 
-    let (mut app, root) = loading_app();
+    let (mut app, root) = loading_app(|_| {});
     app.insert_state(GamePhase::InGame).add_systems(
         OnExit(GamePhase::InGame),
         despawn_all_world_roots_and_members_when_leaving_ingame,
@@ -495,7 +495,7 @@ fn prevalidation_rejection_preserves_the_active_world_and_simulation() {
 fn snapshot_replacement_is_requested_after_ingame_teardown_removes_world_resources() {
     use openzt2_world::world_spawn::world_unloading::despawn_all_world_roots_and_members_when_leaving_ingame;
 
-    let (mut app, old_root) = loading_app();
+    let (mut app, old_root) = loading_app(|_| {});
     app.insert_state(GamePhase::InGame).add_systems(
         OnExit(GamePhase::InGame),
         despawn_all_world_roots_and_members_when_leaving_ingame,
@@ -584,7 +584,7 @@ pub(crate) fn photo_fixture_catalogue() -> WorldScenarioDocument {
 
 #[test]
 fn loading_initializes_photo_receivers_before_snapshot_reference_validation_and_mutation() {
-    let (mut app, root) = loading_app();
+    let (mut app, root) = loading_app(|_| {});
     let catalogue = photo_fixture_catalogue();
     // A retained catalogue handle whose asset has not arrived yet.
     let pending_catalogue = app

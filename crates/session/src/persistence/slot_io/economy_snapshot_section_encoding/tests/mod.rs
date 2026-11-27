@@ -58,11 +58,11 @@ fn mutable_account_capacity_and_inventory_survive_economy_round_trip() {
     let restored = decode(&bytes, 2).unwrap();
     assert_eq!(restored.unlimited_cash, Some(true));
     let record = restored.entity_economy_records[0];
-    assert_eq!(record.profit, Some((1250, 2)));
+    assert_eq!(record.profit, Some((Money::from_cents(1250), 2)));
     assert_eq!(record.price_index, Some(4));
     assert_eq!(record.maintenance_schedule_index, Some(2));
-    assert_eq!(record.wallet, Some(2000));
-    assert_eq!(record.price, Some(500));
+    assert_eq!(record.wallet, Some(Money::from_cents(2000)));
+    assert_eq!(record.price, Some(Money::from_cents(500)));
     assert_eq!(record.service.unwrap().occupied, 2);
     assert_eq!(record.inventory, Some([6, 4, 10]));
     assert_eq!(record.usage, Some([2, 7]));
@@ -72,7 +72,7 @@ fn mutable_account_capacity_and_inventory_survive_economy_round_trip() {
         decode(&trailing, 2),
         Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)
     ));
-    bytes[18..20].copy_from_slice(&2_u16.to_le_bytes());
+    bytes[18..20].copy_from_slice(&3_u16.to_le_bytes());
     assert!(matches!(
         decode(&bytes, 2),
         Err(WorldSnapshotPersistenceFailure::UnsupportedSnapshotFormatVersion)
@@ -84,15 +84,22 @@ fn revision_zero_facility_records_keep_their_profit_and_age() {
     let mut bytes = Vec::new();
     append_encoded_economy_snapshot_section(&mut bytes, &economy());
     bytes.truncate(60);
+    bytes[0..8].copy_from_slice(&12345_i64.to_le_bytes());
+    bytes[8..16].copy_from_slice(&250_i64.to_le_bytes());
     bytes[18..20].copy_from_slice(&0_u16.to_le_bytes());
     bytes.extend_from_slice(&42_u64.to_le_bytes());
     bytes.extend_from_slice(&3_u32.to_le_bytes());
     bytes.extend_from_slice(&1250_i64.to_le_bytes());
     bytes.extend_from_slice(&2_u32.to_le_bytes());
     let restored = decode(&bytes, 2).unwrap();
+    assert_eq!(restored.zoo_cash, Money::from_cents(12345));
+    assert_eq!(restored.admission_price, Money::from_cents(250));
     assert_eq!(restored.unlimited_cash, None);
     assert_eq!(restored.entity_economy_records[0].opening_zoo_day, Some(3));
-    assert_eq!(restored.entity_economy_records[0].profit, Some((1250, 2)));
+    assert_eq!(
+        restored.entity_economy_records[0].profit,
+        Some((Money::from_cents(1250), 2))
+    );
     assert!(restored.entity_economy_records[0].inventory.is_none());
     let mut reencoded = Vec::new();
     append_encoded_economy_snapshot_section(&mut reencoded, &restored);
@@ -141,8 +148,6 @@ fn complete_absence_clears_retained_state_and_legacy_absence_preserves_it() {
             WorldMember { root },
             Wallet(Money::from_cents(900)),
             FacilityPriceIndex(4),
-            ObjectEconomyFactsResolved,
-            ServiceFacilityFactsResolved,
         ))
         .id();
     let mut state = SystemState::<(
@@ -183,14 +188,6 @@ fn complete_absence_clears_retained_state_and_legacy_absence_preserves_it() {
         state.apply(world);
         assert_eq!(world.get::<Wallet>(entity).is_none(), complete);
         assert_eq!(world.get::<FacilityPriceIndex>(entity).is_none(), complete);
-        assert_eq!(
-            world.get::<ObjectEconomyFactsResolved>(entity).is_none(),
-            complete
-        );
-        assert_eq!(
-            world.get::<ServiceFacilityFactsResolved>(entity).is_none(),
-            complete
-        );
         assert!(world.get::<UnlimitedZooCash>(root).unwrap().0);
         assert!(world.get::<EconomyUsage>(entity).is_none());
     }

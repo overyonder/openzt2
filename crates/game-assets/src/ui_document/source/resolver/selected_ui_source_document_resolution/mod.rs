@@ -2,8 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::source_document::ordered_source_document_types::{
-    OrderedSourceDocument, OrderedSourceDocumentSpan,
+use crate::source_document::{
+    document_semantics::{classify_source_document, SourceDocumentKind},
+    ordered_source_document_types::{OrderedSourceDocument, OrderedSourceDocumentSpan},
 };
 
 use super::super::authored_hotkey_file_references::{
@@ -184,7 +185,8 @@ pub(in crate::ui_document::source) fn resolve_selected_ui_source_documents_to_ro
                 icons.push((expansion_index, icon));
             }
         }
-        if path != "ztapp4.xml" && !path.starts_with("ui/") && !hotkey_documents.contains_key(&path)
+        if classify_source_document(document) != SourceDocumentKind::Ui
+            && !hotkey_documents.contains_key(&path)
         {
             continue;
         }

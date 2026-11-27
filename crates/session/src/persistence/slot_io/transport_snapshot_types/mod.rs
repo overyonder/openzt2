@@ -38,12 +38,18 @@ pub(super) struct TransportSnapshotRecords {
 pub(super) struct TransportGraphSnapshot {
     pub poses: Vec<(u64, bevy::prelude::Transform)>,
     pub fares: Vec<(u64, i64)>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fares_dollars: Vec<(u64, f32)>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sky_station_crossings: Vec<SkyStationCrossingSnapshot>,
     pub junctions: Vec<(u64, Option<f32>)>,
     pub routes: Vec<TransportRouteSnapshot>,
+    pub station_ratings: Vec<StationTourRatingSnapshot>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub(super) struct StationTourRatingSnapshot {
+    pub station: u64,
+    pub permille: u16,
+    pub samples: Vec<f32>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

@@ -5,26 +5,28 @@ use bevy::prelude::*;
 pub(super) struct PrefabAttachmentIndependentRotation;
 
 pub(super) fn preserve_independent_attachment_orientation(
-    changed_branches: Query<
-        Entity,
-        (
-            Or<(With<Children>, With<PrefabAttachmentIndependentRotation>)>,
-            Or<(
-                Changed<Transform>,
-                Changed<ChildOf>,
-                Added<PrefabAttachmentIndependentRotation>,
-            )>,
-        ),
-    >,
     mut detached: RemovedComponents<ChildOf>,
     children: Query<&Children>,
     attachments: Query<&ChildOf, With<PrefabAttachmentIndependentRotation>>,
     mut poses: ParamSet<(
-        Query<(
-            &Transform,
-            Option<&ChildOf>,
-            Has<PrefabAttachmentIndependentRotation>,
-        )>,
+        (
+            Query<
+                Entity,
+                (
+                    Or<(With<Children>, With<PrefabAttachmentIndependentRotation>)>,
+                    Or<(
+                        Changed<Transform>,
+                        Changed<ChildOf>,
+                        Added<PrefabAttachmentIndependentRotation>,
+                    )>,
+                ),
+            >,
+            Query<(
+                &Transform,
+                Option<&ChildOf>,
+                Has<PrefabAttachmentIndependentRotation>,
+            )>,
+        ),
         Query<&mut Transform, With<PrefabAttachmentIndependentRotation>>,
     )>,
     mut visited: Local<EntityHashSet>,
@@ -36,7 +38,7 @@ pub(super) fn preserve_independent_attachment_orientation(
     }
     visited.clear();
     parent_poses.clear();
-    let local_poses = poses.p0();
+    let (changed_branches, local_poses) = poses.p0();
     let mut corrected = Vec::new();
     for root in changed_branches.iter().chain(detached.read()) {
         let mut branch = vec![root];

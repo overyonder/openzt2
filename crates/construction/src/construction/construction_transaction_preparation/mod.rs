@@ -117,7 +117,7 @@ pub fn begin_construction_transaction_from_valid_preview(
             EditTransaction {
                 sequence: transaction_sequence,
                 state: TransactionState::Applied,
-                cost: Money(0),
+                cost: Money::ZERO,
             },
             Preparing,
             SubmittedConstruction {

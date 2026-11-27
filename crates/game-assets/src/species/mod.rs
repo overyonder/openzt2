@@ -14,9 +14,9 @@ use crate::world_asset_preparation::WorldAssetPreparation;
 use self::{
     species_asset_loading::SpeciesAssetLoader,
     species_asset_set_refresh_and_indexing::{
-        SpeciesCatalogueLoad, discover_species_catalogue_sources,
+        discover_species_catalogue_sources,
         index_loaded_species_assets_by_species_and_variant_identifier,
-        registered_animal_binder_sources_changed,
+        registered_animal_binder_sources_changed, SpeciesCatalogueLoad,
     },
     species_asset_types::{SpeciesAsset, SpeciesAssets},
 };
@@ -35,8 +35,12 @@ impl Plugin for SpeciesAssetPlugin {
                 (
                     discover_species_catalogue_sources.run_if(
                         condition_changed_to(true, species_catalogue_requested).or_eager(
-                            registered_animal_binder_sources_changed
-                                .and_then(species_catalogue_requested),
+                            registered_animal_binder_sources_changed.and_then(
+                                |index: Res<SpeciesAssets>| {
+                                    index.pending_catalogue.is_some()
+                                        || index.source_handles.is_some()
+                                },
+                            ),
                         ),
                     ),
                     index_loaded_species_assets_by_species_and_variant_identifier.run_if(

@@ -1,7 +1,11 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
+use openzt2_extinct_animals::extinct_animals::FossilSkeletonRewardTimer;
+use openzt2_progression::progression::AwardDomainHistory;
 use openzt2_progression::progression::{
     AuthoredAwardName, AuthoredAwardPoints, AwardGlobalVariables,
 };
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::extinct_animals::extinct_animal_observable_fact_types::FossilEducationProgress;
 use openzt2_zoo_state::progression::award_and_progression_fact_types::ProgressionAwardPresentationAcknowledged;
 
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
@@ -24,15 +28,26 @@ use openzt2_zoo_state::progression::unlock_types::UnlockedCatalogueDefinitionSet
 use super::{
     persistence_failure_types::WorldSnapshotPersistenceFailure,
     progression_snapshot_types::{
-        EarnedProgressionAwardSnapshotRecord, ProgressionSnapshotRecords,
-        ResearchAvailabilitySnapshotRecord, ResearchProjectSnapshotRecord,
-        SpeciesAdoptionChanceSnapshotRecord,
+        EarnedProgressionAwardSnapshotRecord, FossilSkeletonRewardSnapshot,
+        ProgressionSnapshotRecords, ResearchAvailabilitySnapshotRecord,
+        ResearchProjectSnapshotRecord, SpeciesAdoptionChanceSnapshotRecord,
     },
     progression_snapshot_validation::validate_progression_snapshot_record_invariants,
 };
 
 #[derive(SystemParam)]
 pub(super) struct ProgressionSnapshotCaptureQueries<'w, 's> {
+    award_history: Query<'w, 's, &'static AwardDomainHistory, With<WorldRoot>>,
+    fossil_education: Query<
+        'w,
+        's,
+        (
+            &'static PersistentId,
+            &'static WorldMember,
+            &'static FossilEducationProgress,
+            Option<&'static FossilSkeletonRewardTimer>,
+        ),
+    >,
     fixed_time: Res<'w, Time<Fixed>>,
     world_progression: Query<
         'w,
@@ -132,24 +147,31 @@ pub(super) fn capture_progression_snapshot_records_from_live_world(
     let animal_adoption_availability_policy = adoption_policy.copied().unwrap_or_default();
 
     let step = progression_snapshot_capture_queries.fixed_time.timestep();
-    let ticks = |duration: std::time::Duration| {
-        u64::try_from(duration.as_nanos().div_ceil(step.as_nanos())).unwrap_or(u64::MAX)
+    let nanos = |duration: std::time::Duration| {
+        u64::try_from(duration.as_nanos())
+            .map_err(|_| WorldSnapshotPersistenceFailure::CapacityExceeded)
     };
     let mut research_project_snapshot_records = progression_snapshot_capture_queries
         .research_projects
         .iter()
         .map(
             |(persistent_identifier, research_project, optional_paused_marker)| {
-                ResearchProjectSnapshotRecord {
+                let (required_simulation_ticks, elapsed_simulation_ticks) =
+                    research_project.saved_ticks(step);
+                Ok(ResearchProjectSnapshotRecord {
                     persistent_identifier: persistent_identifier.0,
                     definition_identifier: research_project.definition,
-                    elapsed_simulation_ticks: ticks(research_project.timer.elapsed()),
-                    required_simulation_ticks: ticks(research_project.timer.duration()),
+                    elapsed_simulation_ticks,
+                    required_simulation_ticks,
                     paused: optional_paused_marker.is_some(),
-                }
+                    timer_ns: Some((
+                        nanos(research_project.timer.duration())?,
+                        nanos(research_project.timer.elapsed())?,
+                    )),
+                })
             },
         )
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, WorldSnapshotPersistenceFailure>>()?;
     let mut earned_progression_award_snapshot_records = progression_snapshot_capture_queries
         .earned_progression_awards
         .iter()
@@ -166,16 +188,24 @@ pub(super) fn capture_progression_snapshot_records_from_live_world(
         .iter()
         .map(
             |(persistent_identifier, research_project_availability, optional_unlock_countdown)| {
-                ResearchAvailabilitySnapshotRecord {
+                Ok(ResearchAvailabilitySnapshotRecord {
                     persistent_identifier: *persistent_identifier,
                     catalogue_item_identifier: research_project_availability.item,
                     available: research_project_availability.available,
                     remaining_unlock_ticks: optional_unlock_countdown
-                        .map(|unlock_countdown| ticks(unlock_countdown.timer.remaining())),
-                }
+                        .map(|countdown| countdown.remaining_ticks(step)),
+                    unlock_timer_ns: optional_unlock_countdown
+                        .map(|countdown| {
+                            Ok::<_, WorldSnapshotPersistenceFailure>((
+                                nanos(countdown.timer.duration())?,
+                                nanos(countdown.timer.elapsed())?,
+                            ))
+                        })
+                        .transpose()?,
+                })
             },
         )
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, WorldSnapshotPersistenceFailure>>()?;
     let mut species_adoption_chance_snapshot_records = progression_snapshot_capture_queries
         .species_adoption_chances
         .iter()
@@ -202,6 +232,41 @@ pub(super) fn capture_progression_snapshot_records_from_live_world(
         unlocked_catalogue_definition_count: unlocked.definition_count,
         unlocked_catalogue_definition_bit_words: unlocked.words.clone(),
         scenario_award_points: award_points.map_or(0, |points| points.0),
+        award_history: progression_snapshot_capture_queries
+            .award_history
+            .get(root)
+            .ok()
+            .map(|history| AwardDomainHistory {
+                released_species: history.released_species.clone(),
+                extinct_released_species: history.extinct_released_species.clone(),
+                dinosaur_tranquilizations: history.dinosaur_tranquilizations,
+                perfect_training_sessions: history.perfect_training_sessions,
+                cured_diseases: history.cured_diseases,
+                super_clones: history.super_clones,
+            }),
+        fossil_education: progression_snapshot_capture_queries
+            .fossil_education
+            .iter()
+            .filter(|(_, member, _, _)| member.root == root)
+            .map(|(id, _, progress, _)| (id.0, progress.bone_level))
+            .collect(),
+        fossil_skeleton_rewards: progression_snapshot_capture_queries
+            .fossil_education
+            .iter()
+            .filter(|(_, member, _, _)| member.root == root)
+            .filter_map(|(id, _, _, reward)| {
+                let reward = reward?;
+                Some((
+                    id.0,
+                    FossilSkeletonRewardSnapshot {
+                        remaining_ns: u64::try_from(reward.timer.remaining().as_nanos())
+                            .unwrap_or(u64::MAX),
+                        reward: reward.reward,
+                        message: reward.message,
+                    },
+                ))
+            })
+            .collect(),
         award_globals: award_globals.map_or_else(Default::default, |globals| globals.0.clone()),
         award_presentation: progression_snapshot_capture_queries
             .earned_progression_awards

@@ -75,6 +75,7 @@ fn play_ambient_wander_clip(
             Entity,
             &DefinitionId,
             &RunBehaviorWander,
+            Option<&LocomotionMode>,
             &mut BehaviorRandomStream,
             &mut Transform,
         ),
@@ -87,75 +88,106 @@ fn play_ambient_wander_clip(
     presentations: Query<&AnimationPresentations>,
     controllers: Query<(&AnimationPlaybackController, &AnimationGraphPlaybackState)>,
     sets: Res<Assets<AnimationSetAsset>>,
+    sources: AnimationClipSources,
     mut requests: MessageWriter<AnimationClipPlaybackRequest>,
 ) {
-    let (Some(definitions), Some(view)) = (
-        definitions.get(&world_assets),
-        documents.create_declaration_index_view(&assets),
-    ) else {
+    let Some(definitions) = definitions.get(&world_assets) else {
         return;
     };
-    for (actor, definition, wander, mut random, mut pose) in &mut actors {
+    let view = documents.create_declaration_index_view(&assets);
+    for (actor, definition, wander, mode, mut random, mut pose) in &mut actors {
         if wander.0.locomotion_speed == BehaviorGroundLocomotionSpeed::Stop {
             continue;
         }
         let Some(definition) = definitions.find_object(definition.0) else {
             continue;
         };
-        let Some((document, index)) = view.find_behavior_set_location(
-            AssetId::from_key("idle"),
-            std::iter::once(definition.id)
-                .chain(definition.behavior_type_identifiers.iter().copied()),
-        ) else {
-            continue;
+        let animation = AnimationPresentations::for_subject(actor, presentations.get(actor).ok())
+            .find_map(|controller| controllers.get(controller).ok())
+            .and_then(|(controller, graph)| {
+                Some((sets.get(&controller.animation_set_asset)?, graph))
+            });
+        let binder = match mode {
+            Some(LocomotionMode::Swim) => "water",
+            _ => "ground",
         };
-        let Some(set) = assets
-            .get(&document)
-            .and_then(|asset| asset.behavior_set_at_index(index))
-        else {
-            continue;
-        };
-        let current_node =
-            AnimationPresentations::for_subject(actor, presentations.get(actor).ok())
-                .find_map(|controller| controllers.get(controller).ok())
-                .and_then(|(controller, graph)| {
-                    sets.get(&controller.animation_set_asset)?
-                        .animation_graph_nodes
+        let row = definitions
+            .ambient_locomotion_tables(definition.id)
+            .and_then(|tables| {
+                tables
+                    .iter()
+                    .find(|table| table.binder == AssetId::from_key(binder))
+                    .or_else(|| {
+                        tables
+                            .iter()
+                            .find(|table| table.binder == AssetId::from_key("ground"))
+                    })
+                    .or_else(|| tables.first())
+            })
+            .and_then(|table| {
+                let key = wander.0.locomotion_speed.row_key();
+                table.rows.iter().find(|row| row.key == key)
+            });
+        let authored_clip = row.map(|row| {
+            let clip = animation.and_then(|(set, _)| {
+                let node = set.animation_graph_nodes.iter()
+                    .find(|node| node.animation_graph_node_asset_key.eq_ignore_ascii_case(&row.node))?;
+                openzt2_world_state::animation_graph::animation_graph_transition_operations::select_preferred_animation_clip_from_graph_node(
+                    set, |key| sources.get(set, key).is_some(), node,
+                )
+            }).unwrap_or_else(|| row.node.clone());
+            let [minimum, maximum] = row.playback_speed_range;
+            (clip, (maximum - minimum).mul_add(random.0.unit_f32(), minimum))
+        });
+        let selected_clip = authored_clip.or_else(|| {
+            let (document, index) = view.as_ref()?.find_behavior_set_location(
+                AssetId::from_key("idle"),
+                std::iter::once(definition.id)
+                    .chain(definition.behavior_type_identifiers.iter().copied()),
+            )?;
+            let set = assets
+                .get(&document)
+                .and_then(|asset| asset.behavior_set_at_index(index))?;
+            let current_node = animation
+                .and_then(|(set, graph)| {
+                    set.animation_graph_nodes
                         .get(graph.current_animation_graph_node_index as usize)
                 })
                 .map(|node| node.animation_graph_node_asset_key.as_str());
-        let Some(clip) = set
-            .actions
-            .lowered_actions()
-            .iter()
-            .find_map(|action| match action {
-                BehaviorAction::AnimationClip(clip) => Some(clip),
-                BehaviorAction::AnimationSwitch(switch) => switch
-                    .clips_by_node
-                    .iter()
-                    .find(|(node, _)| {
-                        current_node.is_some_and(|current| node.eq_ignore_ascii_case(current))
-                    })
-                    .map(|(_, clip)| clip)
-                    .or(switch.default_clip.as_ref()),
-                _ => None,
-            })
-        else {
+            let clip = set
+                .actions
+                .lowered_actions()
+                .iter()
+                .find_map(|action| match action {
+                    BehaviorAction::AnimationClip(clip) => Some(clip),
+                    BehaviorAction::AnimationSwitch(switch) => switch
+                        .clips_by_node
+                        .iter()
+                        .find(|(node, _)| {
+                            current_node.is_some_and(|current| node.eq_ignore_ascii_case(current))
+                        })
+                        .map(|(_, clip)| clip)
+                        .or(switch.default_clip.as_ref()),
+                    _ => None,
+                })?;
+            let rate = match clip.playback_speed {
+                None => 1.0,
+                Some(BehaviorAnimationPlaybackSpeed::Fixed(rate)) => rate,
+                Some(BehaviorAnimationPlaybackSpeed::Range { minimum, maximum }) => {
+                    (maximum - minimum).mul_add(random.0.unit_f32(), minimum)
+                }
+            };
+            Some((clip.animation_clip_asset_key.clone(), rate))
+        });
+        let Some((clip, rate)) = selected_clip else {
             continue;
-        };
-        let rate = match clip.playback_speed {
-            None => 1.0,
-            Some(BehaviorAnimationPlaybackSpeed::Fixed(rate)) => rate,
-            Some(BehaviorAnimationPlaybackSpeed::Range { minimum, maximum }) => {
-                (maximum - minimum).mul_add(random.0.unit_f32(), minimum)
-            }
         };
         let lateral = random.0.unit_f32().mul_add(2.0, -1.0);
         let yaw = lateral.atan();
         pose.rotation = (pose.rotation * Quat::from_rotation_y(yaw)).normalize();
         requests.write(AnimationClipPlaybackRequest {
             animation_subject_entity: actor,
-            animation_clip_asset_key: clip.animation_clip_asset_key.clone(),
+            animation_clip_asset_key: clip,
             blend_duration_milliseconds: 0,
             playback_speed_permille: (rate * 1000.0).round().clamp(1.0, f32::from(i16::MAX)) as i16,
             playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,

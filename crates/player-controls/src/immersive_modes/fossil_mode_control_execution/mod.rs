@@ -15,7 +15,10 @@ use super::immersive_mode_state_types::EquippedInteractionTool;
 use crate::immersive_modes::immersive_control_execution_types::FossilAssemblyControl;
 use crate::immersive_modes::immersive_control_execution_types::FossilSearchControl;
 
-pub(super) fn discover_fossil_or_cancel_active_fossil_search_mode(
+mod assembly_piece_interaction;
+pub(super) use assembly_piece_interaction::interact_with_active_fossil_assembly;
+
+pub(super) fn discover_fossil_in_active_search_mode(
     mut action_requests: MessageReader<ActionRequest>,
     modal_input: Res<
         openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture,
@@ -33,7 +36,6 @@ pub(super) fn discover_fossil_or_cancel_active_fossil_search_mode(
         ),
     >,
     mut fossil_discovery_requests: MessageWriter<DiscoverFossilAtSiteRequest>,
-    mut exit_requests: MessageWriter<ExitImmersiveMode>,
 ) {
     if modal_input.0.is_some() {
         action_requests.clear();
@@ -50,16 +52,13 @@ pub(super) fn discover_fossil_or_cancel_active_fossil_search_mode(
             continue;
         }
         match action_request.action {
-            GameAction::Confirm => {
+            GameAction::Confirm | GameAction::UseObject => {
                 if let Some(fossil_site_entity) = tracking.selected_artifact {
                     fossil_discovery_requests.write(DiscoverFossilAtSiteRequest {
                         fossil_site: fossil_site_entity,
                         interaction_tool: controller_entity,
                     });
                 }
-            }
-            GameAction::Cancel => {
-                request_cancelled_immersive_mode_exit(controller_entity, &mut exit_requests);
             }
             _ => {}
         }

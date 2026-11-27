@@ -86,3 +86,14 @@ pub enum ProfileFailure {
 pub struct PhotoAlbumProfileOptions {
     pub default_spreads: Option<u32>,
 }
+
+impl PhotoAlbumProfileOptions {
+    pub const DEFAULT_SPREADS_ATTRIBUTE: &str = "PhotoAlbumDefaultSpreads";
+
+    pub fn parse_default_spreads(value: &str) -> Option<Self> {
+        let spreads = value.parse().ok().filter(|&spreads| spreads > 0)?;
+        Some(Self {
+            default_spreads: Some(spreads),
+        })
+    }
+}

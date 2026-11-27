@@ -15,11 +15,12 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::{
-    GuestDefinition, GuestDestinationWeight, GuestMemoryPolicy, GuestNeedDefinition, GuestNeedKind,
-    GuestRarity, GuestReactionDefinition, GuestSignedNeedDefinition, MemoryReplacement,
+    GuestDefinition, GuestDestinationWeight, GuestLocomotionDefinition, GuestMemoryPolicy,
+    GuestNeedDefinition, GuestNeedKind, GuestRarity, GuestReactionDefinition,
+    GuestShowNeedDefinition, GuestSignedNeedDefinition, MemoryReplacement,
 };
+use openzt2_game_data::AssetId;
 
 pub(super) fn bind_guest(
     record: &RecordView<'_, '_>,
@@ -93,6 +94,12 @@ pub(super) fn bind_guest(
         })
         .collect::<Result<Vec<_>, BindError>>()?;
     output.document.guests.push(GuestDefinition {
+        show_need: lower_guest_show_need(record)?,
+        locomotion: GuestLocomotionDefinition {
+            tables: super::authored_staff_and_animal_catalogue_lowering::lower_authored_staff_locomotion_tables(record)?,
+            directions: super::interaction_policy_lowering::locomotion_directional_clips(record)?,
+            carry_speed_multiplier: None,
+        },
         caffeine_factors: super::staff_role_and_job_source_lowering::lower_person_caffeine_factors(record)?,
         donation: lower_guest_donation_policy(record)?,
         id: id(record.key),
@@ -160,15 +167,16 @@ fn bind_authored_guest_binder(
     record: &RecordView<'_, '_>,
     output: &mut WorldDefinitionLoweringTables,
 ) -> Result<(), BindError> {
-    if record
-        .source_document_element()
-        .attribute_named_any(&["abstract"])
-        .is_some_and(|value| {
-            matches!(
-                canonicalize_source_document_record_key(value).as_str(),
-                "true" | "1"
-            )
-        })
+    if record.key != "guest_adult_m"
+        && record
+            .source_document_element()
+            .attribute_named_any(&["abstract"])
+            .is_some_and(|value| {
+                matches!(
+                    canonicalize_source_document_record_key(value).as_str(),
+                    "true" | "1"
+                )
+            })
     {
         return Ok(());
     }
@@ -288,6 +296,12 @@ fn bind_authored_guest_binder(
     }
 
     output.document.guests.push(GuestDefinition {
+        show_need: lower_guest_show_need(record)?,
+        locomotion: GuestLocomotionDefinition {
+            tables: super::authored_staff_and_animal_catalogue_lowering::lower_authored_staff_locomotion_tables(record)?,
+            directions: super::interaction_policy_lowering::locomotion_directional_clips(record)?,
+            carry_speed_multiplier: None,
+        },
         caffeine_factors: super::staff_role_and_job_source_lowering::lower_person_caffeine_factors(record)?,
         id: id(record.key),
         object: id(record.key),
@@ -347,10 +361,9 @@ fn bind_authored_guest_binder(
     Ok(())
 }
 
-pub(super) fn lower_guest_show_need(
+fn lower_guest_show_need(
     record: &RecordView<'_, '_>,
-) -> Result<Option<super::super::world_definition_document_asset_and_demand_loaded_dependency_paths::AuthoredGuestShowNeed>, BindError>{
-    use super::super::world_definition_document_asset_and_demand_loaded_dependency_paths::AuthoredGuestShowNeed;
+) -> Result<Option<GuestShowNeedDefinition>, BindError> {
     let Some(state) = authored_type_family_elements_named(record, "BFAIStateVar")
         .into_iter()
         .find(|state| {
@@ -395,7 +408,7 @@ pub(super) fn lower_guest_show_need(
         .map(q16)
         .transpose()?
         .unwrap_or_default();
-    Ok(Some(AuthoredGuestShowNeed {
+    Ok(Some(GuestShowNeedDefinition {
         initial_q16,
         adjustment_q16,
         trigger_q16: field("TriggerThreshold")?,

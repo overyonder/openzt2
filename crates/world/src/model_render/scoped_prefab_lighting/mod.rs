@@ -37,7 +37,10 @@ pub(crate) fn spawn_authored_scene_lights(
         }
         for light in &row.lights {
             let source = entities[index];
-            if light.kind == PrefabLightKind::Point && light.affected_rows.is_none() {
+            if light.kind == PrefabLightKind::Point
+                && light.affected_rows.is_none()
+                && light.attenuation.is_none()
+            {
                 lights.push(
                     commands
                         .spawn((
@@ -59,7 +62,11 @@ pub(crate) fn spawn_authored_scene_lights(
                 );
                 continue;
             }
-            let default_target = [index as u32];
+            let default_target = [if light.kind == PrefabLightKind::Point {
+                0
+            } else {
+                index as u32
+            }];
             let targets = light.affected_rows.as_deref().unwrap_or(&default_target);
             for target in targets
                 .iter()

@@ -97,26 +97,24 @@ impl AssetLoader for TourDonationPolicyLoader {
                 row.attribute_named_any(&[name])
                     .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
             };
-            if let Some(effect) = row
+            let effect = row
                 .element_children()
-                .find(|node| node.name.eq_ignore_ascii_case("BFAISubjectData"))
-            {
-                let q16 = |name| {
-                    effect
-                        .attribute_named_any(&[name])
-                        .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
-                        .filter(|value| value.is_finite())
-                        .map_or(0, |value| (value * 65_536.0).round() as i32)
-                };
-                feedback.push(TourFeedbackBand {
-                    score: [
-                        number("Min").unwrap_or(f32::NEG_INFINITY),
-                        number("Max").unwrap_or(f32::INFINITY),
-                    ],
-                    happiness_q16: q16("happiness"),
-                    departure_q16: q16("f_DeparturePoints"),
-                });
-            }
+                .find(|node| node.name.eq_ignore_ascii_case("BFAISubjectData"));
+            let q16 = |name| {
+                effect
+                    .and_then(|effect| effect.attribute_named_any(&[name]))
+                    .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
+                    .filter(|value| value.is_finite())
+                    .map_or(0, |value| (value * 65_536.0).round() as i32)
+            };
+            feedback.push(TourFeedbackBand {
+                score: [
+                    number("Min").unwrap_or(f32::NEG_INFINITY),
+                    number("Max").unwrap_or(f32::INFINITY),
+                ],
+                happiness_q16: q16("happiness"),
+                departure_q16: q16("f_DeparturePoints"),
+            });
         }
         Ok(TourDonationPolicy {
             timeout_seconds: f64::from(read("tourTokenTimeOut")?),
@@ -124,10 +122,6 @@ impl AssetLoader for TourDonationPolicyLoader {
             cap: read("donationCap")?,
             feedback,
         })
-    }
-
-    fn extensions(&self) -> &[&str] {
-        &["xml"]
     }
 }
 

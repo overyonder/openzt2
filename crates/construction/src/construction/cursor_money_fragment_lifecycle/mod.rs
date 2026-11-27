@@ -13,6 +13,7 @@ use crate::construction::cursor_money_types::CursorMoneySpendFragmentOwner;
 use crate::construction::cursor_money_types::PendingCursorMoneySpendAnimation;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 use openzt2_zoo_state::construction::construction_transaction_types::ConstructionCommitted;
+use openzt2_zoo_state::economy::money_types::Money;
 
 const CURSOR_MONEY_FRAGMENT_SOURCE_PATH: &str = "ui/layout/cursormoney.xml";
 
@@ -50,7 +51,7 @@ pub(super) fn reconcile_cursor_money_fragments(
 
     let mut reusable_preview = preview_fragment_owners.single().ok();
     for committed_transaction in committed_construction_transactions.read() {
-        if committed_transaction.cost.0 == 0 {
+        if committed_transaction.cost == Money::ZERO {
             continue;
         }
         let spend = CursorMoneySpendFragmentOwner {

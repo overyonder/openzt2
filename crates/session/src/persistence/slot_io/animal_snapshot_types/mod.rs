@@ -77,6 +77,10 @@ pub(super) struct AnimalPendingTokenSnapshotRecord {
     pub expires_at: u64,
     pub payload: Option<u64>,
     pub retain_on_failure: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<super::behavior_snapshot_types::SavedBehaviorTokenContext>,
+    #[serde(default)]
+    pub reconsider: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

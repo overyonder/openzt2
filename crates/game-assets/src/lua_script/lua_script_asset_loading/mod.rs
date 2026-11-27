@@ -55,7 +55,7 @@ impl AssetLoader for LuaScriptAssetLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["lua", "bin", "luac"]
+        &["lua", "luac"]
     }
 }
 

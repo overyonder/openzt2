@@ -28,10 +28,15 @@ fn claimed_task_waits_for_its_asset_and_does_not_restart_after_terminal_executio
         .spawn((
             StaffJob {
                 kind: Some(StaffJobKind::Feed),
-                target,
-                urgency: 20,
+                target: Some(target),
+                point: None,
+                priority: 20.0,
+                issued_at_seconds: 0.0,
+                remaining_wait_seconds: 0.0,
+                first_attempt: true,
                 token: None,
             },
+            StaffJobTarget(target),
             JobClaim { staff: worker },
             StaffJobBehaviorTask {
                 task: AssetId::from_key("keeper:fill"),
@@ -136,10 +141,15 @@ fn removed_source_task_releases_assignment_without_cancelling_live_request() {
         .spawn((
             StaffJob {
                 kind: Some(StaffJobKind::Feed),
-                target,
-                urgency: 20,
+                target: Some(target),
+                point: None,
+                priority: 20.0,
+                issued_at_seconds: 0.0,
+                remaining_wait_seconds: 0.0,
+                first_attempt: true,
                 token: Some(AssetId::from_key("t_fillfoodcontainer")),
             },
+            StaffJobTarget(target),
             JobClaim { staff: worker },
             StaffJobBehaviorTask {
                 document,
@@ -186,10 +196,16 @@ fn failed_assignment_preserves_request_until_its_owner_cancels_it() {
         .spawn((
             StaffJob {
                 kind: Some(StaffJobKind::Feed),
-                target,
-                urgency: 20,
+                target: Some(target),
+                point: None,
+                priority: 20.0,
+                issued_at_seconds: 0.0,
+                remaining_wait_seconds: 0.0,
+                first_attempt: true,
                 token: Some(AssetId::from_key("t_fillfoodcontainer")),
             },
+            WorldMember { root },
+            StaffJobTarget(target),
             JobClaim { staff: worker },
             StaffJobBehaviorTask {
                 task: AssetId::from_key("keeper:fill"),
@@ -242,10 +258,15 @@ fn replaced_assignment_ignores_previous_execution_success_and_failure() {
         .spawn((
             StaffJob {
                 kind: Some(StaffJobKind::Treat),
-                target: worker,
-                urgency: 1,
+                target: Some(worker),
+                point: None,
+                priority: 1.0,
+                issued_at_seconds: 0.0,
+                remaining_wait_seconds: 0.0,
+                first_attempt: true,
                 token: None,
             },
+            StaffJobTarget(worker),
             JobClaim { staff: worker },
             StaffJobBehaviorTask {
                 task: AssetId::from_key("keeper:fill"),
@@ -299,10 +320,15 @@ fn successful_container_refill_releases_worker_and_preserves_controller_request(
         .spawn((
             StaffJob {
                 kind: Some(StaffJobKind::Feed),
-                target,
-                urgency: 1,
+                target: Some(target),
+                point: None,
+                priority: 1.0,
+                issued_at_seconds: 0.0,
+                remaining_wait_seconds: 0.0,
+                first_attempt: true,
                 token: Some(AssetId::from_key("t_fillfoodcontainer")),
             },
+            StaffJobTarget(target),
             JobClaim { staff: worker },
             StaffJobBehaviorTask {
                 task: AssetId::from_key("keeper:fill"),
@@ -348,10 +374,15 @@ fn completed_water_placement_releases_keeper_without_a_second_service_effect() {
         .spawn((
             StaffJob {
                 kind: Some(StaffJobKind::RefillWater),
-                target,
-                urgency: 6,
+                target: Some(target),
+                point: None,
+                priority: 6.0,
+                issued_at_seconds: 0.0,
+                remaining_wait_seconds: 0.0,
+                first_attempt: true,
                 token: Some(AssetId::from_key("t_wateranimal")),
             },
+            StaffJobTarget(target),
             JobClaim { staff: worker },
             StaffJobBehaviorTask {
                 task: AssetId::from_key("keeper:wateranimal"),

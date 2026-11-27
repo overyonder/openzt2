@@ -243,6 +243,7 @@ pub(super) fn spawn_required_named_physical_presentations<'a>(
             },
             ChildOf(parent),
             PrefabAuthoredAttachmentIdentifier(presentation.name),
+            AnimationPresentationBinder(presentation.name),
             NamedPhysicalPresentation(owner),
         ));
         if let Some(prefab) = prefab {
@@ -265,7 +266,7 @@ pub(super) fn spawn_required_named_physical_presentations<'a>(
     }
     commands
         .entity(owner)
-        .insert(NamedPhysicalPresentationsHydrated);
+        .insert_if_new(NamedPhysicalPresentationsHydrated);
 }
 
 #[derive(Component)]
@@ -289,6 +290,56 @@ type NamedFadeBinder = (
     &'static mut Propagate<NamedPrefabOpacity>,
     Option<&'static mut NamedPresentationOpacityTransition>,
 );
+
+pub(super) fn seed_named_presentation_fade_inputs(
+    mut commands: Commands,
+    catalogue: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    added: Query<&NamedPhysicalPresentation, Added<NamedPresentationFade>>,
+    fades: Query<&NamedPresentationFade>,
+    mut owners: Query<(
+        Entity,
+        &DefinitionId,
+        &NamedPhysicalPresentations,
+        Option<&mut AuthoredFloatAttributes>,
+    )>,
+) {
+    let Some(definitions) = catalogue.get(&assets) else {
+        return;
+    };
+    let owners_with_new_fades = added
+        .iter()
+        .map(|presentation| presentation.0)
+        .collect::<bevy::ecs::entity::EntityHashSet>();
+    let mut pending = owners.iter_many_mut(owners_with_new_fades).matched();
+    while let Some((owner, definition, children, existing)) = pending.fetch_next() {
+        let Some(object) = definitions.find_object(definition.0) else {
+            continue;
+        };
+        let properties = &object.authored_runtime.numeric_behavior_properties;
+        let mut initial = AuthoredFloatAttributes::default();
+        let mut existing = existing;
+        for fade in fades.iter_many(&children.0).matched() {
+            let attribute = fade.range.attribute;
+            let Some((_, value)) = properties
+                .iter()
+                .find(|(key, value)| *key == attribute && value.is_finite())
+            else {
+                continue;
+            };
+            if let Some(values) = existing.as_mut() {
+                if values.get(attribute).is_none() {
+                    values.set(attribute, *value);
+                }
+            } else {
+                initial.set(attribute, *value);
+            }
+        }
+        if initial.iter().len() != 0 {
+            commands.entity(owner).try_insert_if_new(initial);
+        }
+    }
+}
 
 pub(super) fn select_named_presentation_fade_states(
     mut commands: Commands,
@@ -393,8 +444,23 @@ fn change_named_presentation_fade_target(
     state.selected = selected;
     let from = if selected { 0.0 } else { state.range.max_alpha };
     let to = if selected { state.range.max_alpha } else { 0.0 };
-    let seconds = state.range.fade_period_seconds;
-    if from == to || !seconds.is_finite() || seconds <= 0.0 {
+    let duration = Duration::try_from_secs_f32(state.range.fade_period_seconds)
+        .ok()
+        .filter(|duration| !duration.is_zero() && from != to);
+    if let Some(duration) = duration {
+        opacity.set_if_neq(Propagate(NamedPrefabOpacity(from)));
+        visibility.set_if_neq(Visibility::Inherited);
+        let next = NamedPresentationOpacityTransition {
+            timer: Timer::new(duration, TimerMode::Once),
+            from,
+            to,
+        };
+        if let Some(mut transition) = transition {
+            *transition = next;
+        } else {
+            commands.entity(entity).try_insert(next);
+        }
+    } else {
         opacity.set_if_neq(Propagate(NamedPrefabOpacity(to)));
         visibility.set_if_neq(if selected {
             Visibility::Inherited
@@ -405,19 +471,6 @@ fn change_named_presentation_fade_target(
             commands
                 .entity(entity)
                 .try_remove::<NamedPresentationOpacityTransition>();
-        }
-    } else {
-        opacity.set_if_neq(Propagate(NamedPrefabOpacity(from)));
-        visibility.set_if_neq(Visibility::Inherited);
-        let next = NamedPresentationOpacityTransition {
-            timer: Timer::new(Duration::from_secs_f32(seconds), TimerMode::Once),
-            from,
-            to,
-        };
-        if let Some(mut transition) = transition {
-            *transition = next;
-        } else {
-            commands.entity(entity).try_insert(next);
         }
     }
 }

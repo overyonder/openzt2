@@ -10,7 +10,7 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
-use super::container_quantity::{AUTHORED_CONTAINER_CAPACITY_Q16, DrinkContainer, FoodContainer};
+use super::container_quantity::{DrinkContainer, FoodContainer, AUTHORED_CONTAINER_CAPACITY_Q16};
 
 pub(super) fn hydrate_food_and_drink_container_quantities_for_new_world_objects(
     mut commands: Commands,

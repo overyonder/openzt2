@@ -66,10 +66,6 @@ impl AssetLoader for BiomeBrushPolicyLoader {
             weights,
         })
     }
-
-    fn extensions(&self) -> &[&str] {
-        &["xml"]
-    }
 }
 
 #[derive(Resource)]

@@ -23,7 +23,7 @@ use openzt2_zoo_state::{
 use super::authored_fame_script::{AuthoredFameScript, FameEntityFacts, FameScriptEffect};
 
 use super::{
-    award_and_progression_fact_types::{ProgressionFactChanged, ScenarioAwardPointTotal},
+    award_and_progression_fact_types::ProgressionFactChanged,
     fame_calculations::{
         select_fame_level_for_rating_and_guest_count, update_current_and_maximum_fame,
     },
@@ -68,7 +68,7 @@ pub(super) struct FamePresentation<'w, 's> {
     variables: Option<Res<'w, ProfileScenarioVariables>>,
 }
 
-pub(super) fn update_authored_fame(
+pub(super) fn update_authored_fame<const DEPARTURES_ONLY: bool>(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
 
@@ -85,7 +85,6 @@ pub(super) fn update_authored_fame(
             &super::authored_award_programs::AuthoredAwardPoints,
             Option<&super::AwardGlobalVariables>,
             &ZooRating,
-            &ScenarioAwardPointTotal,
             &TotalAnimalsReleasedCount,
             Option<(&mut AuthoredFameScript, &mut FameAuthoredPresentation)>,
         ),
@@ -102,7 +101,7 @@ pub(super) fn update_authored_fame(
     };
     let active_world = active_world.single().ok();
     let mut departing = EntityHashMap::<usize>::default();
-    if let Some(triggers) = subject_triggers.as_mut() {
+    if let Some(triggers) = subject_triggers.as_mut().filter(|_| DEPARTURES_ONLY) {
         let adjust_fame = AssetId::from_key("adjust_zoofame");
         for trigger in triggers
             .read()
@@ -113,6 +112,9 @@ pub(super) fn update_authored_fame(
             }
         }
     }
+    if DEPARTURES_ONLY && departing.is_empty() {
+        return;
+    }
     for (
         world,
         mut world_fame,
@@ -122,13 +124,17 @@ pub(super) fn update_authored_fame(
         awards,
         award_globals,
         rating,
-        scenario_award_points,
         total_animals_released,
         mut script,
     ) in &mut worlds
     {
         let active = active_world == Some(world);
-        for _ in 0..departing.remove(&world).unwrap_or(1) {
+        let evaluations = if DEPARTURES_ONLY {
+            departing.remove(&world).unwrap_or_default()
+        } else {
+            1
+        };
+        for _ in 0..evaluations {
             let mut next_fame = *world_fame;
             if let Some((script, authored_ui)) = script.as_mut() {
                 let result = script.evaluate(
@@ -137,7 +143,6 @@ pub(super) fn update_authored_fame(
                     views,
                     next_fame,
                     awards.0,
-                    scenario_award_points.0,
                     total_animals_released.0,
                     &entities,
                     members,

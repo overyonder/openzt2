@@ -12,7 +12,7 @@ pub(super) struct ShowStageSnapshotRecord {
     pub running: Option<RunningShowSnapshot>,
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub(super) struct RunningShowSnapshot {
     pub row_id: u64,
     pub phase: u8,
@@ -22,10 +22,11 @@ pub(super) struct RunningShowSnapshot {
     pub completed_tricks: u32,
     pub failed_tricks: u32,
     pub remaining_ns: u64,
+    pub continuation: Option<RunningShowContinuation>,
 }
 
 impl RunningShowSnapshot {
-    pub(super) fn phase(self) -> Option<openzt2_zoo_state::shows::running_show_types::ShowPhase> {
+    pub(super) fn phase(&self) -> Option<openzt2_zoo_state::shows::running_show_types::ShowPhase> {
         use openzt2_zoo_state::shows::running_show_types::ShowPhase;
         Some(match self.phase {
             0 => ShowPhase::Preshow,
@@ -35,6 +36,34 @@ impl RunningShowSnapshot {
             _ => return None,
         })
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct RunningShowContinuation {
+    pub columns: Vec<Vec<u32>>,
+    pub wait_ns: u64,
+    pub scores: Option<(Vec<(u32, f32)>, Vec<(u32, f32)>)>,
+    pub tricks: Vec<ActiveShowTrickSnapshot>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct ActiveShowTrickSnapshot {
+    pub slot: u32,
+    pub performer: u64,
+    pub definition: AssetId,
+    pub scored: bool,
+    pub pending_token_duration: Option<u32>,
+    pub tokens: Vec<ShowTrickTokenSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub(super) struct ShowTrickTokenSnapshot {
+    pub name: AssetId,
+    pub available_at: u64,
+    pub expires_at: u64,
+    pub execution: Option<u64>,
+    pub destination: Option<[f32; 3]>,
+    pub payload: Option<u64>,
 }
 
 #[derive(Debug, Clone)]

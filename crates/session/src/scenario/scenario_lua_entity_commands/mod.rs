@@ -2,7 +2,7 @@
 mod placement;
 use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_animals::animal_lifecycle::scripted_animal_spawning::{
-    resolve_scripted_animal_spawn, ScriptedAnimalSpawnRequest,
+    apply_scripted_animal_spawn, resolve_scripted_animal_spawn, ScriptedAnimalSpawnRequest,
 };
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
@@ -273,19 +273,25 @@ pub(super) fn register(app: &mut App) {
 fn apply_entity_commands(
     mut commands: Commands,
     mut operations: MessageReader<ScenarioEntityCommand>,
-    mut spawns: MessageWriter<ScriptedAnimalSpawnRequest>,
     mut needs: MessageWriter<SetAnimalNeed>,
     mut removals: MessageWriter<
         openzt2_zoo_state::construction::construction_interaction_types::DeleteEntity,
     >,
-    animals: Query<Has<ScriptedCrating>, (With<Animal>, With<WorldMember>)>,
 ) {
     for operation in operations.read() {
         match operation {
             ScenarioEntityCommand::Spawn(request) => {
-                spawns.write(request.clone());
+                let request = request.clone();
+                commands.queue(move |world: &mut World| {
+                    if !apply_scripted_animal_spawn(world, &request) {
+                        warn!(animal = ?request.entity, "could not initialize the scripted animal");
+                        if world.get::<Animal>(request.entity).is_none() {
+                            let _ = world.despawn(request.entity);
+                        }
+                    }
+                });
             }
-            ScenarioEntityCommand::Need(request) if animals.contains(request.animal) => {
+            ScenarioEntityCommand::Need(request) => {
                 needs.write(*request);
             }
             ScenarioEntityCommand::Remove(entity) => {
@@ -295,17 +301,21 @@ fn apply_entity_commands(
                     ),
                 );
             }
-            ScenarioEntityCommand::Crate(entity)
-                if animals.get(*entity).is_ok_and(|crated| !crated) =>
-            {
-                commands.entity(*entity).insert_if_new(ScriptedCrating);
+            ScenarioEntityCommand::Crate(entity) => {
+                let entity = *entity;
+                commands.queue(move |world: &mut World| {
+                    if world.get::<Animal>(entity).is_some()
+                        && world.get::<ScriptedCrating>(entity).is_none()
+                    {
+                        world.entity_mut(entity).insert(ScriptedCrating);
+                    }
+                });
             }
             ScenarioEntityCommand::Name(entity) => {
                 commands.trigger(openzt2_world::world_spawn::generated_entity_name_application::GenerateWorldEntityName {
                     entity: *entity,
                 });
             }
-            _ => {}
         }
     }
 }

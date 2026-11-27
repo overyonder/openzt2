@@ -29,6 +29,7 @@ pub(super) fn install_fence_definition_with_broken_variant(
     let object = AssetId([42; 16]);
     let document = WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
+            collision_scores: None,
             authored_runtime: Default::default(),
             audio_cue_prefixes: Vec::new(),
             audio_stage_volumes: Vec::new(),

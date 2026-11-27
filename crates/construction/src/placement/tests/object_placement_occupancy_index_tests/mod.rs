@@ -41,7 +41,9 @@ fn occupancy_index_change_revalidates_an_unchanged_continuing_preview() {
             ConstructionPreview {
                 definition: AssetId([3; 16]),
                 transform: Transform::IDENTITY,
-                validity: PlacementValidity::Valid { cost: Money(100) },
+                validity: PlacementValidity::Valid {
+                    cost: Money::from_cents(100),
+                },
             },
             ObjectPlacementPreviewPermissionFacts {
                 unlocked: true,

@@ -1626,6 +1626,7 @@ fn real_vfx_indirect_contracts() -> Result<(), Box<dyn std::error::Error>> {
         real_time: 0.0,
         num_effects: 2,
         particle_budget: 200,
+        budget_groups: 1,
         ..default()
     };
     let sim_params_buffer = wgpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1633,9 +1634,11 @@ fn real_vfx_indirect_contracts() -> Result<(), Box<dyn std::error::Error>> {
         contents: cast_slice(&[sim_params]),
         usage: wgpu::BufferUsages::UNIFORM,
     });
+    let mut spawn_input_words = [0u32; super::SPAWN_INPUT_MIN_SIZE as usize / 4];
+    spawn_input_words[11] = 145;
     let spawn_inputs = wgpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("hanabi:test:indirect:spawn-inputs"),
-        contents: &[0; super::SPAWN_INPUT_MIN_SIZE as usize],
+        contents: cast_slice(&spawn_input_words),
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
     });
 
@@ -1677,6 +1680,7 @@ fn real_vfx_indirect_contracts() -> Result<(), Box<dyn std::error::Error>> {
     let spawner_rows = [
         GpuSpawnerParams {
             seed: 111,
+            group_budget_offset: 1,
             render_pong: 0,
             effect_metadata_index: 0,
             draw_indirect_index: 0,
@@ -1686,6 +1690,7 @@ fn real_vfx_indirect_contracts() -> Result<(), Box<dyn std::error::Error>> {
         },
         GpuSpawnerParams {
             seed: 222,
+            group_budget_offset: 1,
             render_pong: 1,
             effect_metadata_index: 1,
             draw_indirect_index: 1,
@@ -1863,7 +1868,10 @@ fn real_vfx_indirect_contracts() -> Result<(), Box<dyn std::error::Error>> {
 
     let prefix_out = readback_vec::<u32>(&device, &queue, &prefix_buffer, 8);
     assert_eq!(prefix_out, vec![130, 1]);
-    assert_eq!(readback_vec::<u32>(&device, &queue, &spawn_inputs, 4), [69]);
+    let remaining =
+        readback_vec::<u32>(&device, &queue, &spawn_inputs, super::SPAWN_INPUT_MIN_SIZE);
+    assert_eq!(remaining[0], 69);
+    assert_eq!(remaining[11], 14);
 
     let metadata_raw_out = readback_vec::<u32>(
         &device,

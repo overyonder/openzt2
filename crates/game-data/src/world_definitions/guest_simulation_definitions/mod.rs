@@ -100,6 +100,10 @@ pub struct GuestDefinition {
     pub viewing_need: Option<GuestSignedNeedDefinition>,
     #[serde(default)]
     pub happiness_need: Option<GuestSignedNeedDefinition>,
+    #[serde(default)]
+    pub show_need: Option<GuestShowNeedDefinition>,
+    #[serde(default)]
+    pub locomotion: GuestLocomotionDefinition,
     pub destination_weights: Vec<GuestDestinationWeight>,
     pub reactions: Vec<GuestReactionDefinition>,
     pub memory: GuestMemoryPolicy,
@@ -188,6 +192,31 @@ pub struct GuestSignedNeedDefinition {
     pub adjustment_q16: i32,
     pub trigger_q16: Option<i32>,
     pub cessation_q16: Option<i32>,
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+pub struct GuestShowNeedDefinition {
+    pub initial_q16: [i32; 2],
+    pub adjustment_q16: i32,
+    pub trigger_q16: Option<i32>,
+    pub cessation_q16: Option<i32>,
+    pub critical_q16: Option<i32>,
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct GuestLocomotionDefinition {
+    pub tables: Vec<super::staff_management::StaffLocomotionTable>,
+    pub directions: Vec<GuestDirectionalLocomotionClip>,
+    pub carry_speed_multiplier: Option<f32>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct GuestDirectionalLocomotionClip {
+    pub binder: AssetId,
+    pub speed: AssetId,
+    pub direction: AssetId,
+    pub clip: String,
+    pub wag: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]

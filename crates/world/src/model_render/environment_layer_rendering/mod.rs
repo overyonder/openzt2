@@ -7,7 +7,7 @@ use bevy::camera::{
 use bevy::ecs::{entity::EntityHashSet, relationship::RelationshipTarget};
 use bevy::pbr::DistanceFog;
 use bevy::prelude::*;
-use bevy::render::view::{Msaa, Tonemapping};
+use bevy::render::view::{DebandDither, Msaa, Tonemapping};
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
 use openzt2_world_state::{
     model_render::environment_render_layer::EnvironmentRenderLayer,
@@ -269,6 +269,7 @@ fn synchronize_environment_camera_stack(
                     *exposure,
                     *msaa,
                     Tonemapping::None,
+                    DebandDither::Disabled,
                     layer.map_or_else(RenderLayers::none, environment_render_mask),
                     ChildOf(world_camera),
                 ));

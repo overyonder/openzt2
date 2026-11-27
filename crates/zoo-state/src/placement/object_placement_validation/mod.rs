@@ -184,7 +184,7 @@ pub fn validate_object_placement_over_terrain_samples(
         return PlacementValidity::Invalid(PlacementFailure::InvalidTopology);
     }
     PlacementValidity::Valid {
-        cost: Money(definition.price_cents),
+        cost: Money::from_cents(definition.price_cents),
     }
 }
 

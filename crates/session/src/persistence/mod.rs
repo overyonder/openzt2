@@ -93,7 +93,6 @@ impl Plugin for PersistencePlugin {
             .add_message::<openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameCatalogueFailed>()
             .init_resource::<ProfileIndex>()
             .init_resource::<ProfileOptions>()
-            .init_resource::<openzt2_photos::PhotoAlbumProfileOptions>()
             .init_resource::<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>()
             .add_message::<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>()
             .init_resource::<SaveSlotCatalogue>()
@@ -134,13 +133,6 @@ impl Plugin for PersistencePlugin {
             .add_message::<ProfileDeleted>()
             .add_message::<ProfileOperationFailed>()
             .add_systems(Startup, initial_profile_activation::begin_startup_profile_activation)
-            .add_systems(
-                Update,
-                profile_filesystem_task_completion_application::project_photo_album_profile_options
-                    .after_ignore_deferred(profile_filesystem_task_completion_application::apply_completed_profile_filesystem_tasks_to_canonical_profile_state)
-                    .after_ignore_deferred(persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests)
-                    .run_if(resource_changed::<ProfileOptions>),
-            )
             .add_systems(
                 Update,
                 (

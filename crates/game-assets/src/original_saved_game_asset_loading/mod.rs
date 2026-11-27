@@ -16,7 +16,7 @@ use crate::{
     },
 };
 use bevy::{
-    asset::{AssetLoader, LoadContext, LoadedAsset, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext, LoadedAsset},
     prelude::*,
 };
 use std::{collections::BTreeMap, io};
@@ -172,10 +172,6 @@ impl AssetLoader for OriginalSavedGameAssetLoader {
             unlimited_cash,
             saved_entity_handles,
         })
-    }
-
-    fn extensions(&self) -> &[&str] {
-        &["zt2"]
     }
 }
 

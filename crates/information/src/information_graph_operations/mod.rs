@@ -1,8 +1,8 @@
 use bevy::prelude::*;
-use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_data::ui_document::action::information::{
     InformationGraphSeries, InformationGraphType, UiInformationAction,
 };
+use openzt2_game_data::AssetId;
 
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 
@@ -10,7 +10,6 @@ use openzt2_interface_state::information::information_graph_types::InformationGr
 
 pub(super) fn apply_authored_information_graph_action(
     action: &UiInformationAction,
-    document: &UiDocumentAsset,
     document_owner_entity: Entity,
     activated_node_entity: Entity,
     information_graphs: &mut Query<(&UiDocumentOwner, &mut InformationGraph)>,
@@ -24,10 +23,7 @@ pub(super) fn apply_authored_information_graph_action(
             set_information_graph_series_for_document(
                 document_owner_entity,
                 activated_node_entity,
-                Some((
-                    *graph,
-                    document.nested_ui_document_handle(*label_document).cloned(),
-                )),
+                Some((*graph, *label_document)),
                 None,
                 information_graphs,
                 commands,
@@ -50,7 +46,7 @@ pub(super) fn apply_authored_information_graph_action(
 fn set_information_graph_series_for_document(
     document_owner_entity: Entity,
     activated_node_entity: Entity,
-    selected_graph_series: Option<(InformationGraphSeries, Option<Handle<UiDocumentAsset>>)>,
+    selected_graph_series: Option<(InformationGraphSeries, AssetId)>,
     selected_graph_type: Option<InformationGraphType>,
     information_graphs: &mut Query<(&UiDocumentOwner, &mut InformationGraph)>,
     commands: &mut Commands,
@@ -70,7 +66,7 @@ fn set_information_graph_series_for_document(
             information_graph
                 .reborrow()
                 .map_unchanged(|graph| &mut graph.label_document)
-                .set_if_neq(label.clone());
+                .set_if_neq(Some(*label));
         }
         if let Some(selected_graph_type) = selected_graph_type {
             information_graph
@@ -81,8 +77,8 @@ fn set_information_graph_series_for_document(
     }
 
     if !existing_information_graph_was_updated {
-        let (graph, label_document) =
-            selected_graph_series.map_or((None, None), |(series, label)| (Some(series), label));
+        let (graph, label_document) = selected_graph_series
+            .map_or((None, None), |(series, label)| (Some(series), Some(label)));
         commands
             .entity(activated_node_entity)
             .insert(InformationGraph {

@@ -127,6 +127,10 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         scope.create_function(move |_, ()| Ok(queries.zoo_economy(None)?.1.adult.dollars()))?,
     )?;
     globals.set(
+        "ZT_GET_GUEST_VIEW_TILE_COUNT",
+        scope.create_function(move |_, ()| Ok(queries.guest_view_tile_count))?,
+    )?;
+    globals.set(
         "getHalfStars",
         scope.create_function(move |_, ()| {
             Ok(i64::from(

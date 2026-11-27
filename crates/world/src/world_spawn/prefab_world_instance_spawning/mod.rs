@@ -1,8 +1,9 @@
+pub mod award_crate_delivery;
 mod carried_prefab_presentation;
 mod fame_gate_prefab_replacement;
 pub mod morph_fade_projection;
 
-use super::prefab_presentation_render_tree::ReplacedPrefabReloaded;
+use super::prefab_presentation_render_tree::{PrefabRenderableSource, ReplacedPrefabReloaded};
 use avian3d::prelude::RigidBody;
 use bevy::ecs::entity_disabling::Disabled;
 use bevy::ecs::query::Allow;
@@ -12,8 +13,8 @@ use bevy::prelude::Commands;
 use bevy::prelude::Entity;
 use bevy::prelude::Handle;
 use bevy::prelude::Transform;
-use bevy::prelude::Visibility;
 use bevy::prelude::{warn, Assets, Component, Has, MessageReader, Query, Res, With};
+use bevy::prelude::{DetectChangesMut, Mut, Visibility};
 use openzt2_game_data::scene_prefab::PrefabEntity;
 use openzt2_game_data::scene_prefab::ScenePrefabEntityFlags;
 use openzt2_game_data::scene_prefab::ScenePrefabRenderableVisibilityFlags;
@@ -27,7 +28,9 @@ use crate::physics::collider_hydration::hydrate_scene_prefab_colliders_into_avia
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
 
-use crate::model_render::prefab_render_lod_tier_projection::bind_prefab_lod;
+use crate::model_render::prefab_render_lod_tier_projection::{
+    bind_prefab_lod, bind_prefab_lod_policy,
+};
 use crate::world_spawn::prefab_effect_trigger_hydration::spawn_prefab_effect_triggers;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
@@ -40,6 +43,7 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 pub(crate) fn register_prefab_instance_animation(app: &mut bevy::prelude::App) {
+    award_crate_delivery::register_award_crate_delivery(app);
     carried_prefab_presentation::register_carried_prefab_presentation(app);
     morph_fade_projection::register_prefab_morph_fades(app);
     fame_gate_prefab_replacement::register_fame_gate_prefab_replacement(app);
@@ -63,6 +67,7 @@ pub fn spawn_loaded_scene_prefab_as_world_instance(
     hydrate_loaded_scene_prefab_into_world_instance_root(
         commands,
         root,
+        PrefabWorldInstanceRootValues::default(),
         prefab,
         prefab_handle,
         world_root,
@@ -76,12 +81,28 @@ pub fn spawn_loaded_scene_prefab_as_world_instance(
     root
 }
 
+#[derive(Default)]
+pub struct PrefabWorldInstanceRootValues<'a> {
+    pub transform: Option<Mut<'a, Transform>>,
+    pub visibility: Option<Mut<'a, Visibility>>,
+    pub definition: Option<Mut<'a, DefinitionId>>,
+}
+
+/// Resolves the prefab root pose at an already sampled support point.
+fn fitted_prefab_root_transform(prefab: &ScenePrefabAsset, instance_pose: Transform) -> Transform {
+    let root = &prefab.canonical_scene_prefab_document().entities[0];
+    let mut transform = instance_pose.mul_transform(transform_from_authored(&root.transform));
+    transform.translation.y += prefab.ground_fit_height_offset_m().unwrap_or_default();
+    transform
+}
+
 /// Hydrate a newly admitted world entity without replacing its live identity.
 /// The root must not already own a hydrated prefab hierarchy.
 #[allow(clippy::too_many_arguments)]
 pub fn hydrate_loaded_scene_prefab_into_world_instance_root(
     commands: &mut Commands,
     root: Entity,
+    mut values: PrefabWorldInstanceRootValues<'_>,
     prefab: &ScenePrefabAsset,
     prefab_handle: Handle<ScenePrefabAsset>,
     world_root: Entity,
@@ -92,6 +113,33 @@ pub fn hydrate_loaded_scene_prefab_into_world_instance_root(
     instance_parent: Option<Entity>,
     prefab_collider_rigid_body: RigidBody,
 ) {
+    let row = &prefab.canonical_scene_prefab_document().entities[0];
+    let transform = if prefab.ground_fit_height_offset_m().is_some() {
+        instance_transform
+    } else {
+        fitted_prefab_root_transform(prefab, instance_transform)
+    };
+    let visible = if instance_visible && row.flags.0 & ScenePrefabEntityFlags::VISIBLE.0 != 0 {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    let mut entity = commands.entity(root);
+    if let Some(current) = &mut values.transform {
+        current.set_if_neq(transform);
+    } else {
+        entity.insert_if_new(transform);
+    }
+    if let Some(current) = &mut values.visibility {
+        current.set_if_neq(visible);
+    } else {
+        entity.insert_if_new(visible);
+    }
+    if let Some(current) = &mut values.definition {
+        current.set_if_neq(DefinitionId(definition));
+    } else {
+        entity.insert_if_new(DefinitionId(definition));
+    }
     hydrate_world_instance_prefab_rows(
         commands,
         root,
@@ -139,26 +187,55 @@ fn hydrate_world_instance_prefab_rows(
     new_root: Option<NewPrefabInstanceRoot>,
 ) {
     let document = prefab.canonical_scene_prefab_document();
+    commands
+        .entity(root)
+        .insert_if_new(super::prefab_socket_index::PrefabSocketIndexRoot);
+    let grounded = new_root.is_some() && prefab.ground_fit_height_offset_m().is_some();
+    if let Some(instance) = &new_root {
+        let mut entity = commands.entity(root);
+        entity
+            .insert_if_new(WorldMember { root: world_root })
+            .insert((
+                instance.persistent_id,
+                PrefabObjectPresentationAttachmentProjection(instance.definition),
+                PrefabSourceAssetHandle(instance.prefab_handle.clone()),
+                PrefabRenderableSource(prefab.model_source_digest()),
+                Inspectable {
+                    definition: instance.definition,
+                },
+            ));
+        if let Some(parent) = instance.parent {
+            entity.insert(ChildOf(parent));
+        }
+    }
     let mut entities = Vec::with_capacity(document.entities.len());
 
     for (index, row) in document.entities.iter().enumerate() {
         let local = transform_from_authored(&row.transform);
-        let transform = if index == 0 {
+        let row_is_instance = index == 0 && !grounded;
+        let transform = if row_is_instance {
             instance_transform.mul_transform(local)
+        } else if index == 0 {
+            fitted_prefab_root_transform(prefab, Transform::IDENTITY)
         } else {
             local
         };
         let visible = instance_visible && row.flags.0 & ScenePrefabEntityFlags::VISIBLE.0 != 0;
-        let mut entity = if index == 0 {
+        let mut entity = if row_is_instance {
             commands.entity(root)
         } else {
             commands.spawn_empty()
         };
-        if index != 0 || new_root.is_some() {
-            entity.insert((
+        if !row_is_instance || new_root.is_some() {
+            entity.insert_if_new((
                 PrefabInstanceRow(index),
                 WorldMember { root: world_root },
                 PrefabAuthoredAttachmentIdentifier(AssetId(row.attachment_id.0)),
+            ));
+        }
+        if !row_is_instance {
+            entity.insert((
+                PrefabInstanceRowOf(root),
                 transform,
                 if visible {
                     Visibility::Inherited
@@ -166,6 +243,10 @@ fn hydrate_world_instance_prefab_rows(
                     Visibility::Hidden
                 },
             ));
+            if index == 0 {
+                // Preserve the fitted scene pose when the support point moves.
+                entity.insert(ChildOf(root));
+            }
         }
         let spawned = entity.id();
         if let Some(bound) = row.local_render_bound {
@@ -180,16 +261,6 @@ fn hydrate_world_instance_prefab_rows(
         }
         if row.flags.0 & ScenePrefabEntityFlags::ACTIVE.0 == 0 {
             entity.insert(Disabled);
-        }
-        if let Some(root) = new_root.as_ref().filter(|_| index == 0) {
-            entity.insert((
-                DefinitionId(root.definition),
-                root.persistent_id,
-                PrefabObjectPresentationAttachmentProjection(root.definition),
-                PrefabSourceAssetHandle(root.prefab_handle.clone()),
-            ));
-        } else if index != 0 {
-            entity.insert(PrefabInstanceRowOf(root));
         }
         if let Some(billboard) = row.billboards.first() {
             entity.insert(
@@ -207,11 +278,6 @@ fn hydrate_world_instance_prefab_rows(
                 transform.rotation,
             );
         }
-        if let Some(root) = new_root.as_ref().filter(|_| index == 0) {
-            entity.insert(Inspectable {
-                definition: root.definition,
-            });
-        }
         drop(entity);
         attach_prefab_row_renderables(commands, prefab, row, index, spawned, world_root, visible);
         entities.push(spawned);
@@ -223,15 +289,15 @@ fn hydrate_world_instance_prefab_rows(
                 openzt2_world_state::animation_playback::model_joint_attachment_binding::ModelJointAttachment::new(entities[0], joint),
             );
         }
+        if let Some(policy) = &row.render_lod_policy {
+            bind_prefab_lod_policy(commands, &entities, entities[entity], root, policy);
+        }
         for lod in &row.lods {
             bind_prefab_lod(commands, &entities, entities[entity], lod);
         }
     }
 
     // Preserve the prefab's parent-child hierarchy.
-    if let Some(parent) = new_root.and_then(|root| root.parent) {
-        commands.entity(entities[0]).insert(ChildOf(parent));
-    }
     for (parent_index, row) in document.entities.iter().enumerate() {
         for child_index in &row.children {
             commands
@@ -253,6 +319,11 @@ fn hydrate_world_instance_prefab_rows(
     );
 
     spawn_prefab_effect_triggers(commands, prefab, &entities, world_root);
+    for (row, &owner) in document.entities.iter().zip(&entities) {
+        super::prefab_terrain_decal_projection::spawn_prefab_terrain_decal(
+            commands, prefab, row, owner, world_root,
+        );
+    }
 }
 
 #[derive(Component)]
@@ -344,7 +415,9 @@ pub(super) fn begin_rebuilding_world_instance_renderables_after_prefab_reload(
     instances: Query<(
         Entity,
         &PrefabSourceAssetHandle,
+        &PrefabRenderableSource,
         Option<&PrefabInstanceRows>,
+        Has<PrefabInstanceRow>,
     )>,
     row_renderables: Query<&PrefabRowRenderables, Allow<Disabled>>,
     renderables: Query<(), (With<PrefabRenderable>, Allow<Disabled>)>,
@@ -353,21 +426,28 @@ pub(super) fn begin_rebuilding_world_instance_renderables_after_prefab_reload(
     if reloaded.is_empty() {
         return;
     }
-    for (root, handle, rows) in &instances {
+    for (root, handle, source, rows, root_is_row) in &instances {
         if !reloaded.contains(&handle.0.id()) {
             continue;
         }
         let Some(prefab) = prefabs.get(&handle.0) else {
             continue;
         };
+        // Demand loading can republish the model's live #Scene subasset.
+        // Its attached renderables only need rebuilding when the content changes.
+        if source.matches_model(prefab) {
+            continue;
+        }
         if prefab.canonical_scene_prefab_document().entities.len()
-            != 1 + rows.map_or(0, |rows| rows.0.len())
+            != usize::from(root_is_row) + rows.map_or(0, |rows| rows.0.len())
         {
             warn!("reloaded prefab changed its entities; place the object again to see it");
             continue;
         }
-        for row in
-            std::iter::once(root).chain(rows.into_iter().flat_map(|rows| rows.0.iter().copied()))
+        for row in root_is_row
+            .then_some(root)
+            .into_iter()
+            .chain(rows.into_iter().flat_map(|rows| rows.0.iter().copied()))
         {
             if renderables.contains(row) {
                 commands
@@ -393,12 +473,14 @@ pub(super) fn begin_rebuilding_world_instance_renderables_after_prefab_reload(
 pub(super) fn finish_rebuilding_world_instance_renderables(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,
-    instances: Query<
+    mut instances: Query<
         (
             Entity,
             &PrefabSourceAssetHandle,
+            &mut PrefabRenderableSource,
             Option<&PrefabInstanceRows>,
             &WorldMember,
+            Has<PrefabInstanceRow>,
         ),
         With<PrefabInstanceRenderablesRebuilding>,
     >,
@@ -412,9 +494,12 @@ pub(super) fn finish_rebuilding_world_instance_renderables(
         Allow<Disabled>,
     >,
 ) {
-    for (root, prefab_handle, rows, member) in &instances {
+    for (root, prefab_handle, mut source, rows, member, root_is_row) in &mut instances {
         let rows = || {
-            std::iter::once(root).chain(rows.into_iter().flat_map(|rows| rows.0.iter().copied()))
+            root_is_row
+                .then_some(root)
+                .into_iter()
+                .chain(rows.into_iter().flat_map(|rows| rows.0.iter().copied()))
         };
         let row_and_draws = |row| {
             std::iter::once(row).chain(
@@ -480,6 +565,7 @@ pub(super) fn finish_rebuilding_world_instance_renderables(
                 visible,
             );
         }
+        source.set_if_neq(PrefabRenderableSource(prefab.model_source_digest()));
         commands
             .entity(root)
             .remove::<PrefabInstanceRenderablesRebuilding>();

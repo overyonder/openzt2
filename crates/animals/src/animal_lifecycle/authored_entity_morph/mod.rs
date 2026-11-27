@@ -34,11 +34,11 @@ use openzt2_zoo_state::{
     animal_health::types::{AnimalDied, Dead, DeathCause},
     animal_lifecycle::{animal_birth_and_release_contracts::AnimalBorn, types::Animal},
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
         running_actions::{
             BehaviorInstructionId, RunBehaviorMorphEntity, RunBehaviorTermination,
             RunningBehaviorInstruction,
         },
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     habitat::habitat_types::HabitatMember,
 };
@@ -126,7 +126,13 @@ pub(super) fn morph_authored_entities(
         if let Some(waiting) = pending.as_deref_mut() {
             if let Some(prefab) = waiting.prefab.as_ref() {
                 if waiting.step == step.id() && !waiting.prefab_settled {
-                    if !settlements.contains(&prefab.id()) {
+                    if !settlements.contains(&prefab.id())
+                        && !prefabs.contains(prefab.id())
+                        && !matches!(
+                            server.get_load_state(prefab.id()),
+                            Some(LoadState::Failed(_))
+                        )
+                    {
                         continue;
                     }
                     waiting.prefab_settled = true;

@@ -5,6 +5,7 @@ use openzt2_interface_state::immersive_modes::immersive_mode_state_types::Contro
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::{
     economy::facility_economy_types::{Price, Wallet},
+    economy::money_types::Money,
     guests::guest_simulation_types::Guest,
     locomotion::locomotion_types::{
         Arrived, Destination, Docking, LocomotionMode, Route, Steering,
@@ -61,7 +62,7 @@ pub(super) fn accept_transport_queue_reservations(
         if guest_world.root != station_world.root
             || circuit.closed
             || occupants >= usize::from(station.capacity)
-            || !fare.is_some_and(|fare| fare.0 .0 >= 0 && wallet.0 >= fare.0)
+            || !fare.is_some_and(|fare| fare.0 >= Money::ZERO && wallet.0 >= fare.0)
         {
             continue;
         }
@@ -119,7 +120,7 @@ pub(super) fn board_waiting_guests_when_transport_vehicle_arrives(
             .filter(|&guest| {
                 guests
                     .get(guest)
-                    .is_ok_and(|(_, _, wallet)| fare.0 .0 >= 0 && wallet.0 >= fare.0)
+                    .is_ok_and(|(_, _, wallet)| fare.0 >= Money::ZERO && wallet.0 >= fare.0)
             })
             .collect::<Vec<_>>();
         for (guest, (mount, seat)) in waiting.into_iter().zip(free_seats) {

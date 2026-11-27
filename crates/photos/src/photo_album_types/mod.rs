@@ -9,18 +9,6 @@ pub(super) const PHOTO_CAMERA_ROLL_CAPACITY: u32 = 24;
 pub(super) const INITIAL_PHOTO_ALBUM_SPREADS: u32 = 5;
 pub(super) const MAX_PHOTO_ALBUM_SPREADS: u32 = 100;
 
-#[derive(Resource, Default)]
-pub struct PhotoAlbumProfileOptions {
-    pub default_spreads: Option<u32>,
-}
-
-impl PhotoAlbumProfileOptions {
-    pub(super) fn get_default_spreads(&self) -> Option<u32> {
-        self.default_spreads
-            .map(|spreads| spreads.clamp(1, MAX_PHOTO_ALBUM_SPREADS))
-    }
-}
-
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DeletePhotoRequest {
     pub photo: Entity,

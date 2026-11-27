@@ -1,9 +1,20 @@
-use super::ground_track_policy::{GroundTrackPolicy, GroundTrackPolicyAsset};
 use super::sky_station_travel::SkyStationTravel;
 use avian3d::prelude::{ColliderAabb, SpatialQuery};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
+use openzt2_game_assets::world_definitions::{
+    world_definition_asset_set_state_and_borrowing_queries::{
+        WorldDefinitions, WorldDefinitionsView,
+    },
+    world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+};
+use openzt2_game_data::{
+    world_definitions::transportation_and_tours::{
+        GroundTrackPhysicsPolicy, TransportationTrackKind,
+    },
+    AssetId,
+};
+use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
 use openzt2_zoo_state::terrain::{
     terrain_chunk_types::TerrainChunk,
     terrain_collision_rebuilding_types::TerrainChunkCollisionSurface,
@@ -34,6 +45,8 @@ use openzt2_zoo_state::transport_tours::transport_vehicle_types::{
 pub(super) struct GroundTrackObstruction<'w, 's> {
     spatial: SpatialQuery<'w, 's>,
     parents: Query<'w, 's, &'static ChildOf>,
+    definitions: Query<'w, 's, &'static DefinitionId>,
+    membership: Query<'w, 's, &'static WorldMember>,
     bounds: Query<
         'w,
         's,
@@ -50,8 +63,10 @@ impl GroundTrackObstruction<'_, '_> {
         &self,
         from: Vec3,
         to: Vec3,
+        root: Entity,
         excluded: [Entity; 3],
-        policy: &GroundTrackPolicy,
+        policy: &GroundTrackPhysicsPolicy,
+        (definitions, eligible_types): (WorldDefinitionsView<'_>, Option<&[AssetId]>),
     ) -> Option<f32> {
         let span = to.xz() - from.xz();
         let length = span.length();
@@ -71,14 +86,27 @@ impl GroundTrackObstruction<'_, '_> {
                 let Ok(bounds) = self.bounds.get(entity) else {
                     return true;
                 };
-                let mut owners =
-                    std::iter::once(entity).chain(self.parents.iter_ancestors::<ChildOf>(entity));
-                if excluded.contains(&entity)
-                    || self.vehicles.contains(entity)
-                    || self
-                        .parents
-                        .iter_ancestors::<ChildOf>(entity)
+                let owners = || {
+                    std::iter::once(entity).chain(self.parents.iter_ancestors::<ChildOf>(entity))
+                };
+                let in_world = owners()
+                    .find_map(|owner| self.membership.get(owner).ok())
+                    .is_some_and(|member| member.root == root);
+                if !in_world
+                    || owners()
                         .any(|owner| excluded.contains(&owner) || self.vehicles.contains(owner))
+                    || eligible_types.is_some_and(|types| {
+                        !owners().any(|owner| {
+                            self.definitions.get(owner).is_ok_and(|id| {
+                                types.contains(&id.0)
+                                    || definitions.find_object(id.0).is_some_and(|object| {
+                                        types.iter().any(|kind| {
+                                            object.behavior_type_identifiers.contains(kind)
+                                        })
+                                    })
+                            })
+                        })
+                    })
                     || self
                         .visibility
                         .get(entity)
@@ -96,7 +124,7 @@ impl GroundTrackObstruction<'_, '_> {
                 let intersection = if static_intersection {
                     Some(along)
                 } else {
-                    let velocity = owners
+                    let velocity = owners()
                         .find_map(|owner| self.velocities.get(owner).ok())
                         .map_or(Vec2::ZERO, |velocity| velocity.0.xz());
                     let side_speed = velocity.perp_dot(heading);
@@ -130,7 +158,8 @@ pub struct SkyStationCrossing {
 }
 
 pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
-    (obstructions, ground_policy): (GroundTrackObstruction, GroundTrackPolicyAsset),
+    obstructions: GroundTrackObstruction,
+    (active_definitions, definitions): (Res<WorldDefinitions>, Res<Assets<WorldDefinitionAsset>>),
     commands: bevy::ecs::system::ParallelCommands,
     incidence: TrackIncidence,
     fixed_time: Res<Time<Fixed>>,
@@ -143,6 +172,7 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
         &mut Transform,
         &mut Velocity,
         &CircuitMember,
+        &WorldMember,
         Option<&DirectLocomotion>,
         &mut TransportVehicleArrival,
         Option<&mut SkyStationCrossing>,
@@ -161,6 +191,7 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
         Option<&CircuitDirection>,
     )>,
 ) {
+    let definitions = active_definitions.get(&definitions);
     let fixed_delta_seconds = fixed_time.delta_secs().max(0.0);
     transport_vehicles.par_iter_mut().for_each(
         |(
@@ -172,6 +203,7 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
             mut vehicle_transform,
             mut vehicle_velocity,
             circuit_member,
+            world,
             direct_locomotion,
             mut arrival,
             crossing,
@@ -330,9 +362,10 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
             let mut candidate_route_position = *route_position;
             let track_length = distances.travel_length(track_segment.geometry);
             let travel = if profile.kind == TransportationTrackKind::Ground {
-                ground_policy
-                    .get()
-                    .and_then(|policy| {
+                definitions
+                    .and_then(|definitions| {
+                        let track = definitions.find_track(profile.definition)?;
+                        let policy = track.ground_track_physics.as_ref()?;
                         let lookahead = requested_travel_distance + policy.collision_radius;
                         let sign = if moving_in_reverse { -1.0 } else { 1.0 };
                         let probe =
@@ -348,8 +381,10 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
                                     .distance_ahead(
                                         from,
                                         to,
+                                        world.root,
                                         [vehicle_entity, track_segment.from(), track_segment.to()],
                                         policy,
+                                        (definitions, track.ground_obstruction_types.as_deref()),
                                     )
                                     .map(|distance| offset + distance)
                             })

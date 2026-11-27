@@ -1,3 +1,4 @@
+use super::prefab_world_instance_spawning::award_crate_delivery::AwardCrateObjectOccupant;
 use super::world_prefab_record_hydration::ApplyStartingAnimalHiddenVisibility;
 use bevy::prelude::*;
 use openzt2_world_state::world_spawn::world_entity_crating::{
@@ -9,7 +10,11 @@ pub(super) fn remove_requested_world_entities_from_crates(
     mut commands: Commands,
     mut requests: MessageReader<RemoveWorldEntityFromCrate>,
     mut animals: Query<
-        (Option<&AnimalCrate>, Option<&mut Transform>),
+        (
+            Option<&AnimalCrate>,
+            Option<&mut Transform>,
+            Has<AwardCrateObjectOccupant>,
+        ),
         (CratedWorldEntity, Without<ContainedCratedAnimal>),
     >,
     crates: Query<(&ContainedCratedAnimal, &Transform), UncratedWorldEntity>,
@@ -22,7 +27,7 @@ pub(super) fn remove_requested_world_entities_from_crates(
         if !released.insert(animal) {
             continue;
         }
-        let Ok((crate_link, transform)) = animals.get_mut(animal) else {
+        let Ok((crate_link, transform, award_object)) = animals.get_mut(animal) else {
             continue;
         };
         if let Some(crate_link) = crate_link {
@@ -40,6 +45,12 @@ pub(super) fn remove_requested_world_entities_from_crates(
             commands
                 .entity(animal)
                 .remove::<(AnimalCrate, ApplyStartingAnimalHiddenVisibility)>();
+            if award_object {
+                commands.entity(animal).remove::<(
+                    AwardCrateObjectOccupant,
+                    avian3d::prelude::RigidBodyDisabled,
+                )>();
+            }
         } else {
             commands.entity(animal).remove::<ScriptedCrating>();
         }

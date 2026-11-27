@@ -3,11 +3,17 @@ use bevy::{
     prelude::*,
 };
 use openzt2_shows::shows::{
-    show_timing_operations::RunningShowPhaseTimer, ShowMixerTimeSlot, ShowMixerWait,
+    show_timing_operations::RunningShowPhaseTimer, ActiveShowTricks, ScheduledTrickToken,
+    ShowColumnWait, ShowMixerTimeSlot, ShowMixerWait, ShowRunSlotOrder, ShowScoreSamples,
+    ShowTrickTokens,
 };
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
+use openzt2_zoo_state::animal_behavior::behavior_token_types::{
+    BehaviorSelfToken, BehaviorTrickDestination, ClaimedBehaviorSelfToken,
+};
 use openzt2_zoo_state::shows::running_show_types::{
-    RunningShow, RunningShowFromRow, RunningShowOnStage, ShowPhase,
+    RunningShow, RunningShowFromRow, RunningShowOnStage, RunningShowTrick, ShowPhase,
+    ShowTrickBeingPerformedBy,
 };
 use openzt2_zoo_state::shows::show_schedule_types::{
     ScheduledShowBreakRow, ScheduledShowPerformancePlan, ScheduledShowRating, ScheduledShowRow,
@@ -21,9 +27,9 @@ use openzt2_zoo_state::shows::show_stage_types::ShowStageOpenState;
 use super::super::persistence_failure_types::WorldSnapshotPersistenceFailure;
 use super::{
     show_snapshot_types::{
-        RunningShowSnapshot, ScheduledShowBreakSnapshotRecord,
-        ScheduledShowPerformanceSnapshotRecord, ScheduledShowSnapshotRecord,
-        ShowStageSnapshotRecord,
+        ActiveShowTrickSnapshot, RunningShowContinuation, RunningShowSnapshot,
+        ScheduledShowBreakSnapshotRecord, ScheduledShowPerformanceSnapshotRecord,
+        ScheduledShowSnapshotRecord, ShowStageSnapshotRecord, ShowTrickTokenSnapshot,
     },
     world_snapshot_capture_system_parameters::ShowStageCaptureQueries,
 };
@@ -38,6 +44,30 @@ pub(in crate::persistence) struct ShowScheduleSnapshotQueries<'w, 's> {
             &'static RunningShowFromRow,
             &'static RunningShowOnStage,
             &'static RunningShowPhaseTimer,
+            Option<&'static ShowRunSlotOrder>,
+            Option<&'static ShowColumnWait>,
+            Option<&'static ShowScoreSamples>,
+            Option<&'static ActiveShowTricks>,
+        ),
+    >,
+    tricks: Query<
+        'w,
+        's,
+        (
+            &'static RunningShowTrick,
+            &'static ShowTrickBeingPerformedBy,
+            Option<&'static ShowTrickTokens>,
+            Option<&'static openzt2_shows::shows::PendingShowTrickToken>,
+        ),
+    >,
+    tokens: Query<
+        'w,
+        's,
+        (
+            &'static ScheduledTrickToken,
+            &'static BehaviorSelfToken,
+            Option<&'static ClaimedBehaviorSelfToken>,
+            Option<&'static BehaviorTrickDestination>,
         ),
     >,
     rows: Query<
@@ -101,12 +131,108 @@ pub(super) fn capture_sorted_show_snapshot_records_from_live_world(
     }
 
     let mut running = bevy::ecs::entity::EntityHashMap::new();
-    for (show, row, stage, clock) in &schedule.running {
-        let row = schedule
+    for (show, row, stage, clock, order, wait, scores, tricks) in &schedule.running {
+        let (row, _, _, _, _, _, slots, _) = schedule
             .rows
             .get(row.0)
-            .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?
-            .0;
+            .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+        let slots: bevy::ecs::entity::EntityHashMap<u32> = slots
+            .into_iter()
+            .flat_map(RelationshipTarget::iter)
+            .enumerate()
+            .map(|(index, entity)| (entity, index as u32))
+            .collect();
+        let reference = |entity| {
+            slots
+                .get(&entity)
+                .copied()
+                .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)
+        };
+        let continuation = if let Some((order, wait)) = order.zip(wait) {
+            let columns = order
+                .0
+                .iter()
+                .map(|column| {
+                    column
+                        .iter()
+                        .map(|&slot| reference(slot))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let wait_ns = u64::try_from(wait.remaining().as_nanos())
+                .map_err(|_| WorldSnapshotPersistenceFailure::CapacityExceeded)?;
+            let score_rows = |scores: &bevy::ecs::entity::EntityHashMap<f32>| {
+                let mut rows = scores
+                    .iter()
+                    .map(|(&slot, &score)| Ok((reference(slot)?, score)))
+                    .collect::<Result<Vec<_>, WorldSnapshotPersistenceFailure>>()?;
+                rows.sort_unstable_by_key(|(slot, _)| *slot);
+                Ok::<_, WorldSnapshotPersistenceFailure>(rows)
+            };
+            let scores = scores
+                .map(|scores| {
+                    Ok::<_, WorldSnapshotPersistenceFailure>((
+                        score_rows(&scores.predicted)?,
+                        score_rows(&scores.actual)?,
+                    ))
+                })
+                .transpose()?;
+            let mut active = Vec::new();
+            for trick in tricks.into_iter().flat_map(RelationshipTarget::iter) {
+                let (trick, performer, tokens, pending_token) =
+                    schedule.tricks.get(trick).map_err(|_| {
+                        WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference
+                    })?;
+                let performer = world_snapshot_capture_queries
+                    .entities_with_persistent_identifiers
+                    .get(performer.0)
+                    .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?
+                    .0;
+                let mut saved_tokens = Vec::new();
+                for token in tokens.into_iter().flat_map(RelationshipTarget::iter) {
+                    let (binding, token, claim, destination) =
+                        schedule.tokens.get(token).map_err(|_| {
+                            WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference
+                        })?;
+                    if binding.slot != trick.slot {
+                        return Err(
+                            WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference,
+                        );
+                    }
+                    saved_tokens.push(ShowTrickTokenSnapshot {
+                        name: token.name,
+                        available_at: token.available_at,
+                        expires_at: token.expires_at,
+                        execution: claim.map(|claim| claim.execution_id),
+                        destination: destination.map(|p| p.0.to_array()),
+                        payload: token.payload.and_then(|payload| {
+                            world_snapshot_capture_queries
+                                .entities_with_persistent_identifiers
+                                .get(payload)
+                                .ok()
+                                .map(|id| id.0)
+                        }),
+                    });
+                }
+                active.push(ActiveShowTrickSnapshot {
+                    slot: reference(trick.slot)?,
+                    performer,
+                    definition: trick.definition,
+                    scored: trick.scored,
+                    pending_token_duration: pending_token.map(|pending| pending.0),
+                    tokens: saved_tokens,
+                });
+            }
+            active.sort_unstable_by_key(|trick| trick.slot);
+            Some(RunningShowContinuation {
+                columns,
+                wait_ns,
+                scores,
+                tricks: active,
+            })
+        } else {
+            None
+        };
         if !show.trick_score.is_finite() || !show.stars.is_finite() {
             return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
         }
@@ -127,6 +253,7 @@ pub(super) fn capture_sorted_show_snapshot_records_from_live_world(
             completed_tricks: show.completed_tricks,
             failed_tricks: show.failed_tricks,
             remaining_ns,
+            continuation,
         };
         if running.insert(stage.0, snapshot).is_some() {
             return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);

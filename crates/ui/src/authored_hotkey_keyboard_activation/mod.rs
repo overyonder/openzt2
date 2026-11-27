@@ -216,11 +216,15 @@ impl AuthoredHeldCameraCommands<'_, '_> {
             })
     }
 
-    pub fn first_person(
+    pub fn first_person_actions(
         &self,
         mode: openzt2_game_data::AssetId,
-    ) -> impl Iterator<Item = openzt2_game_data::ui_document::action::camera::UiFirstPersonCommand> + '_
-    {
+    ) -> impl Iterator<
+        Item = (
+            KeyCode,
+            &openzt2_game_data::ui_document::action::camera::UiCameraAction,
+        ),
+    > + '_ {
         use openzt2_game_data::ui_document::{
             action::{camera::UiCameraAction, UiActionRecord},
             document::UiDocumentRole,
@@ -242,31 +246,45 @@ impl AuthoredHeldCameraCommands<'_, '_> {
                     .then(|| document.first_person_hotkeys(mode))
             })
             .flatten()
-            .filter(move |hotkey| {
+            .filter_map(move |hotkey| {
                 let key = crate::projection::authored_hotkey_projection::authored_hotkey_key_code(
                     hotkey.key_code,
                     &hotkey.character,
-                );
-                key.is_some_and(|key| {
+                )?;
+                let released = hotkey.trigger == UiDocumentHotkeyTrigger::KeyReleased;
+                let binding =
                     UiAuthoredHotkeyKeyboardActivationBinding::from_projected_authored_hotkey(
                         key,
                         hotkey.control_state,
-                        hotkey.trigger == UiDocumentHotkeyTrigger::KeyReleased,
+                        released,
                         hotkey.allow_repeat,
                         hotkey.key_code == 0x11,
-                    )
-                    .is_held(&self.keys, control)
-                })
+                    );
+                let matches = if released {
+                    let released = self.keys.just_released(key)
+                        || hotkey.key_code == 0x11
+                            && self.keys.just_released(KeyCode::ControlRight);
+                    released
+                        && if hotkey.key_code == 0x11 {
+                            !control
+                        } else {
+                            !self.keys.pressed(key)
+                        }
+                } else {
+                    binding.is_held(&self.keys, control)
+                };
+                matches.then_some((key, hotkey))
             })
-            .flat_map(|hotkey| &hotkey.actions)
-            .filter_map(|action| match action {
-                UiActionRecord::Camera(record) => match record.action {
-                    UiCameraAction::SetFirstPersonCommandState {
-                        command,
-                        pressed: true,
-                    } => Some(command),
-                    _ => None,
-                },
+            .flat_map(|(key, hotkey)| hotkey.actions.iter().map(move |action| (key, action)))
+            .filter_map(|(key, action)| match action {
+                UiActionRecord::Camera(record)
+                    if matches!(
+                        record.action,
+                        UiCameraAction::SetFirstPersonCommandState { .. }
+                    ) =>
+                {
+                    Some((key, &record.action))
+                }
                 _ => None,
             })
     }

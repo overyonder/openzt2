@@ -20,6 +20,9 @@ pub(crate) struct PendingSnapshotApplication {
 }
 
 #[derive(Component)]
+pub(super) struct SnapshotModeDocument(pub(super) Handle<WorldScenarioDocumentAsset>);
+
+#[derive(Component)]
 pub(super) struct SnapshotTerrainAsset(pub(super) Handle<TerrainAsset>);
 
 #[derive(Component)]

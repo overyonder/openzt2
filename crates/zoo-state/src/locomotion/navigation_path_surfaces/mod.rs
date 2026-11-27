@@ -309,7 +309,24 @@ impl TerrainDerivedNavigationGraph {
                 None => {}
             }
         }
-        for node in ground_candidates {
+        for [x, z] in changed_terrain_cells {
+            // The contact test samples a side and a point just beyond it.
+            for cell_x in x.saturating_sub(1)..=x.saturating_add(1) {
+                for cell_z in z.saturating_sub(1)..=z.saturating_add(1) {
+                    if let Some(paths) = self.path_surfaces_by_cell.get(&[cell_x, cell_z]) {
+                        elevated_candidates.extend(paths.values().copied());
+                    }
+                }
+            }
+        }
+        let candidates = || {
+            ground_candidates
+                .iter()
+                .chain(&elevated_candidates)
+                .copied()
+        };
+        let before = self.capture_incident_navigation_edges(candidates(), None);
+        for &node in &ground_candidates {
             let flags = &mut self.navigation_nodes[node as usize].eligibility_flags.0;
             let previous = *flags;
             if self.ground_path_count_by_node.contains_key(&node) {
@@ -325,17 +342,7 @@ impl TerrainDerivedNavigationGraph {
             }
         }
 
-        for [x, z] in changed_terrain_cells {
-            // The contact test samples a side and a point just beyond it.
-            for cell_x in x.saturating_sub(1)..=x.saturating_add(1) {
-                for cell_z in z.saturating_sub(1)..=z.saturating_add(1) {
-                    if let Some(paths) = self.path_surfaces_by_cell.get(&[cell_x, cell_z]) {
-                        elevated_candidates.extend(paths.values().copied());
-                    }
-                }
-            }
-        }
-        for node in elevated_candidates {
+        for &node in &elevated_candidates {
             if self.refresh_path_edges(node, &terrain_height) {
                 changes.elevated_nodes.insert(node);
                 if let Some(surface) = self.path_surface_at_node(node) {
@@ -343,6 +350,8 @@ impl TerrainDerivedNavigationGraph {
                 }
             }
         }
+        let after = self.capture_incident_navigation_edges(candidates(), None);
+        changes.affected_edges = Self::diff_navigation_edges(before, after);
         changes
     }
 

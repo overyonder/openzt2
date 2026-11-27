@@ -31,6 +31,8 @@ impl BehaviorTargetBiome<'_, '_> {
     }
 }
 
+pub const FORCED_BEHAVIOR_TOKEN_SCORE: f32 = 1_000_000_000.0;
+
 struct ScoredBehaviorCandidate<T> {
     entry: T,
     priority: f32,
@@ -40,6 +42,7 @@ struct ScoredBehaviorCandidate<T> {
 pub struct BehaviorCandidateRanking<T> {
     minimum_score: f32,
     candidates: Vec<ScoredBehaviorCandidate<T>>,
+    forced: Option<T>,
 }
 
 impl<T: Copy> BehaviorCandidateRanking<T> {
@@ -47,6 +50,7 @@ impl<T: Copy> BehaviorCandidateRanking<T> {
         Self {
             minimum_score,
             candidates: Vec::new(),
+            forced: None,
         }
     }
 
@@ -58,7 +62,23 @@ impl<T: Copy> BehaviorCandidateRanking<T> {
         });
     }
 
+    /// The first valid forced token takes over before the ordinary candidates are scored.
+    pub fn consider_token_candidate(&mut self, entry: T, priority: f32, score: f32, force: bool) {
+        if force {
+            self.forced.get_or_insert(entry);
+        } else {
+            self.consider(entry, priority, score);
+        }
+    }
+
+    pub const fn has_forced_candidate(&self) -> bool {
+        self.forced.is_some()
+    }
+
     pub fn finish(mut self, random: impl FnOnce() -> u32) -> Option<(T, f32)> {
+        if let Some(forced) = self.forced {
+            return Some((forced, FORCED_BEHAVIOR_TOKEN_SCORE));
+        }
         if self.candidates.len() <= 1 {
             return self
                 .candidates
@@ -385,6 +405,18 @@ mod need_point_threshold_tests {
 #[cfg(test)]
 mod candidate_ranking_tests {
     use super::BehaviorCandidateRanking;
+
+    #[test]
+    fn first_valid_forced_candidate_skips_ordinary_ranking_and_the_draw() {
+        let mut ranking = BehaviorCandidateRanking::new(30.0);
+        ranking.consider("ordinary", 10.0, 50.0);
+        ranking.consider_token_candidate("first", -1.0, -100.0, true);
+        ranking.consider_token_candidate("second", 20.0, 100.0, true);
+        assert_eq!(
+            ranking.finish(|| panic!("unexpected draw")),
+            Some(("first", super::FORCED_BEHAVIOR_TOKEN_SCORE)),
+        );
+    }
 
     #[test]
     fn score_difference_does_not_consume_a_draw() {

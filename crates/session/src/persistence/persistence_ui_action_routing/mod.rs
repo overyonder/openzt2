@@ -137,13 +137,21 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
             }
             match &authored_persistence_action.action {
                 UiPersistenceAction::SetProfileAttribute { key, value } => {
+                    use openzt2_interface_state::persistence::profile_types::PhotoAlbumProfileOptions;
                     if profile_index.selected_profile_identifier
                         == Some(profile_options.profile_identifier)
-                        && profile_options.attributes.get(key) != Some(value)
                     {
-                        profile_options
-                            .attributes
-                            .insert(key.clone(), value.clone());
+                        if key == PhotoAlbumProfileOptions::DEFAULT_SPREADS_ATTRIBUTE {
+                            let options = PhotoAlbumProfileOptions::parse_default_spreads(value);
+                            profile_options
+                                .reborrow()
+                                .map_unchanged(|profile| &mut profile.photo_album)
+                                .set_if_neq(options);
+                        } else if profile_options.attributes.get(key) != Some(value) {
+                            profile_options
+                                .attributes
+                                .insert(key.clone(), value.clone());
+                        }
                     }
                 }
                 UiPersistenceAction::SaveWorldSnapshotToSlot { save_slot } => {

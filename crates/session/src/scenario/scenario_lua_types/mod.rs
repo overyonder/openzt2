@@ -1,4 +1,5 @@
 use bevy::picking::hover::DirectlyHovered;
+use bevy::prelude::Entity;
 use openzt2_game_data::AssetId;
 use std::collections::BTreeSet;
 
@@ -74,6 +75,7 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     pub(super) fence_edges: &'a ScenarioLuaFenceEdgeQuery<'a, 'a>,
     pub(super) path_tiles: &'a ScenarioLuaPathTileQuery<'a, 'a>,
     pub(super) biome_cells: Option<&'a super::scenario_biome_cell_counts::WorldBiomeCellCounts>,
+    pub(super) ui_receiver: Option<(Entity, usize)>,
     pub(super) ui_nodes: &'a ScenarioLuaUiNodeQuery<'a, 'a>,
     pub(super) ui_roots: &'a ScenarioLuaUiRootQuery<'a, 'a>,
     pub(super) ui_documents: &'a bevy::prelude::Assets<openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset>,
@@ -82,6 +84,7 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     pub(super) real_seconds: f64,
     pub(super) overhead_camera: Option<&'a openzt2_interface_state::camera::camera_runtime_state_types::OverheadRig>,
     pub(super) construction_tool: Option<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool>,
+    pub(super) guest_view_tile_count: u32,
 }
 
 /// Live tanks and their heights.
@@ -127,6 +130,7 @@ pub(super) type ScenarioLuaUiNodeQuery<'w, 's> = bevy::prelude::Query<
         &'static bevy::ui::UiGlobalTransform,
         Option<&'static openzt2_interface_state::ui::authored_ui_selection_state::UiSelected>,
         Option<&'static openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled>,
+        Option<&'static openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiScenarioInteractionOverride>,
         Option<&'static DirectlyHovered>,
     ),
 >;

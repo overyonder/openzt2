@@ -41,6 +41,7 @@ impl UiDocumentRole {
             Self::Tutorial => "tutorial",
             Self::TutorialComplete => "tutorial-complete",
             Self::ChallengeOffer => "challenge-offer",
+            Self::ChallengeWon => "challenge-won",
             Self::InstantChallengeOffer => "instant-challenge-offer",
             Self::PhotoAlbum => "photo-album",
             Self::PhotoMode => "photo-mode",

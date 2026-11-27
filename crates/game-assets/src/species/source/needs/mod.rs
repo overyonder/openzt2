@@ -51,27 +51,23 @@ pub(crate) fn authored_need_identifier(kind: NeedKind) -> AssetId {
 
 pub(super) fn lower_variant_need_adjustments(
     variant: &RecordView<'_, '_>,
-    species: &RecordView<'_, '_>,
 ) -> Result<Box<[(AssetId, i32)]>, BindError> {
-    if variant.key == species.key {
-        return Ok(Box::default());
-    }
     let mut adjustments = BTreeMap::new();
     for record in variant
         .type_tokens()
         .into_iter()
-        .rev()
         .filter(|key| !source_document_names_are_semantically_equal(key, variant.key))
         .filter_map(|key| variant.find_resolved_source_record_by_reference(&key))
-        .take_while(|record| record.key != species.key)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
         .chain(std::iter::once(*variant))
     {
         for adjustment in unnamed_need_adjustments(record.source_document_element()) {
             for (name, value) in adjustment.attributes() {
-                if name.eq_ignore_ascii_case("name") {
+                if name.eq_ignore_ascii_case("name")
+                    || name
+                        .get(..2)
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("s_"))
+                    || value.trim().is_empty()
+                {
                     continue;
                 }
                 let value =

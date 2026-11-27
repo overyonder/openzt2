@@ -96,13 +96,15 @@ impl Plugin for ImmersiveModesPlugin {
             .add_systems(
                 Update,
                 (
-                    first_person_mode_control_execution::apply_guest_view_look_and_navigation_controls
+                    first_person_mode_control_execution::cancel_guest_view
                         .run_if(active_mode_is(ImmersiveMode::GuestView)),
                     first_person_mode_control_execution::apply_first_person_look_and_cancellation
                         .run_if(active_walking_first_person_mode),
-                    fossil_mode_control_execution::discover_fossil_or_cancel_active_fossil_search_mode
+                    fossil_mode_control_execution::discover_fossil_in_active_search_mode
                         .run_if(active_mode_is(ImmersiveMode::FossilSearch)),
                     fossil_mode_control_execution::cancel_active_fossil_assembly_mode
+                        .run_if(active_mode_is(ImmersiveMode::FossilAssembly)),
+                    fossil_mode_control_execution::interact_with_active_fossil_assembly
                         .run_if(active_mode_is(ImmersiveMode::FossilAssembly)),
                     photo_mode_control_execution::capture_or_cancel_active_photo_mode
                         .run_if(active_mode_is(ImmersiveMode::Photo)),
@@ -165,7 +167,7 @@ fn active_walking_first_person_mode(active: Query<&ActiveImmersiveMode>) -> bool
     active.iter().any(|active| {
         matches!(
             active.mode,
-            ImmersiveMode::FirstPerson | ImmersiveMode::SuperStaff
+            ImmersiveMode::FirstPerson | ImmersiveMode::SuperStaff | ImmersiveMode::FossilSearch
         )
     })
 }
@@ -174,8 +176,7 @@ fn active_view_mode(active: Query<&ActiveImmersiveMode>) -> bool {
     active.iter().any(|active| {
         matches!(
             active.mode,
-            ImmersiveMode::GuestView
-                | ImmersiveMode::FirstPerson
+            ImmersiveMode::FirstPerson
                 | ImmersiveMode::SuperStaff
                 | ImmersiveMode::FossilSearch
                 | ImmersiveMode::FossilAssembly

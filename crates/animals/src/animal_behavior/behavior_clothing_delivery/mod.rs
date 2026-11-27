@@ -126,6 +126,8 @@ pub(super) fn finish_clothing_delivery(
             continue;
         }
         if !delivery.is_added()
+            && !images.is_changed()
+            && !materials.is_changed()
             && !delivery
                 .textures
                 .iter()

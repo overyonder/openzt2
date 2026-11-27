@@ -144,19 +144,20 @@ impl Plugin for ShellPlugin {
                         shell_navigation_and_world_launch::begin_loading_selected_world,
                     ).chain_ignore_deferred()
                      .after_ignore_deferred(shell_ui_action_routing::route_authored_shell_ui_actions_to_navigation_requests),
-                    in_game_shell_ui_action_routing::route_authored_in_game_shell_ui_actions,
-                    in_game_options_overlay_lifecycle::close_finished_in_game_options_overlays
-                        .after(in_game_shell_ui_action_routing::route_authored_in_game_shell_ui_actions),
-                    exit_confirmation_presentation::
-                        reveal_authored_exit_confirmation_after_modal_projection,
-                    shell_navigation_and_world_launch::exit_application_after_request
-                        .after_ignore_deferred(in_game_shell_ui_action_routing::route_authored_in_game_shell_ui_actions),
+                    (
+                        in_game_shell_ui_action_routing::route_authored_in_game_shell_ui_actions,
+                        in_game_options_overlay_lifecycle::close_finished_in_game_options_overlays
+                            .after(in_game_shell_ui_action_routing::route_authored_in_game_shell_ui_actions),
+                        exit_confirmation_presentation::
+                            reveal_authored_exit_confirmation_after_modal_projection,
+                        shell_navigation_and_world_launch::exit_application_after_request
+                            .after_ignore_deferred(in_game_shell_ui_action_routing::route_authored_in_game_shell_ui_actions),
+                    ).in_set(GameSet::Intent),
                     menu_screen_lifecycle::route_requested_shell_menu_page
                         .after_ignore_deferred(in_game_shell_ui_action_routing::route_authored_in_game_shell_ui_actions)
                         .after_ignore_deferred(shell_navigation_and_world_launch::begin_loading_selected_world),
                 )
-                    .in_set(ShellNavigationAfterSettings)
-                    .in_set(GameSet::Intent),
+                    .in_set(ShellNavigationAfterSettings),
             )
             .add_systems(
                 Update,

@@ -7,8 +7,8 @@ use std::{
 };
 
 use openzt2_game_data::{
-    AssetId,
     world_scenario::{ScenarioDefinitionRecord, ScenarioScriptBinding},
+    AssetId,
 };
 
 use crate::{

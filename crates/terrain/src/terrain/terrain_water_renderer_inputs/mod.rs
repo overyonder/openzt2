@@ -24,7 +24,7 @@ use openzt2_zoo_state::aquatic::aquatic_simulation_types::{Tank, TankGeometry};
 use openzt2_zoo_state::environment::environment_state_types::EnvironmentMapSamples;
 use openzt2_zoo_state::habitat::{
     habitat_membership_and_containment::locate_habitat_at_world_position,
-    habitat_types::HabitatIndex,
+    habitat_types::{HabitatCellOf, HabitatIndex},
 };
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
 use openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::{
@@ -212,10 +212,11 @@ pub(super) fn sample_terrain_water_capture_demand(
     terrains: Res<Assets<TerrainAsset>>,
     materials: Res<Assets<EffectPassMaterial>>,
     waves: Query<(), With<NativeTerrainWaterGeometricWaveShaderState>>,
-    (tank_draws, tanks, habitats): (
+    (tank_draws, tanks, habitats, cell_owners): (
         Query<(&TankWaterDraw, &TerrainWaterSurfacePassKind)>,
         Query<(&TankGeometry, &WorldMember), With<Tank>>,
         Query<(&HabitatIndex, &TopologyGrid)>,
+        Query<&HabitatCellOf>,
     ),
 ) {
     let Ok((pose, selection, target, mut demand, world)) = cameras.single_mut() else {
@@ -256,6 +257,7 @@ pub(super) fn sample_terrain_water_capture_demand(
                     && (t < distance || distance < 0.0)
                     && locate_habitat_at_world_position(
                         habitats,
+                        &cell_owners,
                         (origin + direction * t).xz(),
                         *grid,
                     ) == Some(draw.tank)

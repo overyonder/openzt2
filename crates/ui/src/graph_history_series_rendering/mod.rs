@@ -80,7 +80,7 @@ pub(super) fn render_selected_information_graph_series_from_canonical_histories(
             render_graph_history_samples(drawings, graph, || {
                 samples
                     .iter()
-                    .map(|sample| (sample.month_index, i64::from(sample.half_stars)))
+                    .map(|sample| (sample.month_index, f64::from(sample.half_stars)))
             });
         }
         // The shipped graph selector contains this legacy spelling, but the
@@ -113,15 +113,16 @@ fn render_monthly_finance_history_series(
     });
 }
 
-fn monthly_finance_metric_value(sample: &MonthlyFinance, metric: FinanceMetric) -> i64 {
-    match metric {
-        FinanceMetric::Cash => sample.closing_cash.0,
-        FinanceMetric::Income => sample.income.0,
-        FinanceMetric::Expenses => sample.expenses.0,
-        FinanceMetric::Profit => sample.income.0.saturating_sub(sample.expenses.0),
-        FinanceMetric::DonationIncome => sample.donation_income.0,
-        FinanceMetric::TotalUsers => i64::from(sample.total_users),
-    }
+fn monthly_finance_metric_value(sample: &MonthlyFinance, metric: FinanceMetric) -> f64 {
+    let amount = match metric {
+        FinanceMetric::Cash => sample.closing_cash,
+        FinanceMetric::Income => sample.income,
+        FinanceMetric::Expenses => sample.expenses,
+        FinanceMetric::Profit => sample.income.saturating_add(-sample.expenses),
+        FinanceMetric::DonationIncome => sample.donation_income,
+        FinanceMetric::TotalUsers => return f64::from(sample.total_users),
+    };
+    f64::from(amount.dollars())
 }
 
 // The canonical histories are bounded to 120 entries and UI geometry is f32;
@@ -132,17 +133,17 @@ fn render_graph_history_samples<I>(
     graph: GraphHistorySeriesRenderingContext<'_>,
     samples: impl Fn() -> I,
 ) where
-    I: ExactSizeIterator<Item = (u32, i64)>,
+    I: ExactSizeIterator<Item = (u32, f64)>,
 {
     let count = samples().len();
     if count == 0 {
         return;
     }
-    let (minimum, maximum) = samples().fold((0_i64, 0_i64), |(minimum, maximum), (_, value)| {
-        (minimum.min(value), maximum.max(value))
-    });
-    let y_axis =
-        GraphYAxisRange::from_policy_and_sample_range(graph.policy, minimum as f64, maximum as f64);
+    let (minimum, maximum) = samples()
+        .fold((0.0_f64, 0.0_f64), |(minimum, maximum), (_, value)| {
+            (minimum.min(value), maximum.max(value))
+        });
+    let y_axis = GraphYAxisRange::from_policy_and_sample_range(graph.policy, minimum, maximum);
     let plot_width = graph.size.x - graph.plot_left - PLOT_RIGHT;
     let plot_height = graph.size.y - PLOT_TOP - PLOT_BOTTOM;
     let x_step = if count <= 1 {
@@ -161,7 +162,7 @@ fn render_graph_history_samples<I>(
             } else {
                 index as f32 * x_step
             };
-        let y = graph_value_bottom_position(y_axis, value as f64, plot_height);
+        let y = graph_value_bottom_position(y_axis, value, plot_height);
         if drawings.plot.is_some() {
             match graph.graph_type {
                 InformationGraphType::Bar => {

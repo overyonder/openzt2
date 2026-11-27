@@ -24,8 +24,6 @@ const MANAGER_ATTRIBUTES: [&str; 7] = [
     "DisplacementY",
 ];
 
-const TOKEN_ATTRIBUTES: [&str; 4] = ["Name", "GiveTo", "Payload", "Force"];
-
 pub(super) fn bind_authored_staff_manager_policy(
     record: &RecordView<'_, '_>,
     output: &mut WorldDefinitionLoweringTables,
@@ -150,106 +148,113 @@ fn lower_authored_policy_number(
 
 fn lower_authored_staff_tokens(
     record: &RecordView<'_, '_>,
-    staff_tokens: &'_ OrderedSourceDocumentNode,
+    staff_tokens: &OrderedSourceDocumentNode,
 ) -> Result<Vec<StaffTokenDispatchRule>, BindError> {
+    use super::world_definition_source_value_reading_and_conversion::element_bool;
+    use openzt2_game_data::world_definitions::staff_management::StaffTokenRoutingDefinition;
     let mut rules = Vec::new();
-    for token_entry in staff_tokens.element_children() {
-        let token = id(token_entry.name.as_str());
-        let token_lists = token_entry
-            .element_children()
-            .filter(|child| {
-                source_document_names_are_semantically_equal(child.name.as_str(), "BFAITokenList")
-            })
-            .collect::<Vec<_>>();
-        let token_list = token_lists.first().copied();
-        if token_lists.len() > 1 {
-            return Err(BindError::record(
-                record,
-                format!(
-                    "authored staff token {token:?} declares more than one BFAITokenList child"
-                ),
-            ));
-        }
-        let Some(token_list) = token_list else {
-            return Err(BindError::record(
-                record,
-                format!("authored staff token {token:?} has no BFAITokenList child"),
-            ));
-        };
-        for child in token_entry.element_children() {
-            if !source_document_names_are_semantically_equal(child.name.as_str(), "BFAITokenList") {
+    for entry in staff_tokens.element_children() {
+        let token = id(entry.name.as_str());
+        for list in entry.element_children() {
+            if !list.name.eq_ignore_ascii_case("BFAITokenList") {
                 return Err(BindError::record(
                     record,
-                    format!(
-                        "authored staff token {token:?} child {} is not supported",
-                        child.name.as_str()
-                    ),
+                    "staff token entry must contain BFAITokenList rows",
                 ));
             }
-        }
-        for token_row in token_list.element_children() {
-            if !source_document_names_are_semantically_equal(token_row.name.as_str(), "BFAIToken") {
-                return Err(BindError::record(
-                    record,
-                    format!(
-                        "authored BFAITokenList child {} on staff token {token:?} is not supported",
-                        token_row.name.as_str()
-                    ),
-                ));
-            }
-            let mut name: Option<&str> = None;
-            let mut give_to: Option<&str> = None;
-            let mut payload: Option<&str> = None;
-            let mut force: Option<&str> = None;
-            for (attribute_name, value) in token_row.attributes() {
-                let attribute = TOKEN_ATTRIBUTES
-                    .iter()
-                    .find(|candidate| source_document_names_are_semantically_equal(candidate, attribute_name))
-                    .ok_or_else(|| {
-                        BindError::record(
-                            record,
-                            format!(
-                                "authored BFAIToken attribute {attribute_name:?} on staff token {token:?} is not supported"
-                            ),
-                        )
-                    })?;
-                match *attribute {
-                    "Name" => name = Some(value),
-                    "GiveTo" => give_to = Some(value),
-                    "Payload" => payload = Some(value),
-                    "Force" => force = Some(value),
-                    _ => unreachable!("attribute names are matched from the authored vocabulary"),
+            for row in list.element_children() {
+                if !row.name.eq_ignore_ascii_case("BFAIToken") {
+                    return Err(BindError::record(
+                        record,
+                        "staff token list must contain BFAIToken rows",
+                    ));
                 }
+                let get = |key| {
+                    row.attribute_named_any(&[key])
+                        .filter(|value| !value.trim().is_empty())
+                };
+                let number = |key| {
+                    get(key)
+                        .map(|value| lower_authored_policy_number(record, key, value))
+                        .transpose()
+                };
+                let force = get("Force")
+                    .map(|_| element_bool(&row, &["Force"], false))
+                    .transpose()?;
+                let point_m = row.element_children().find(|node| node.name.eq_ignore_ascii_case("target"))
+                    .map(|target| {
+                        let coordinate = |key| target.attribute_named_any(&[key])
+                            .map(|value| lower_authored_policy_number(record, key, value)).transpose()
+                            .map(Option::unwrap_or_default);
+                        Ok::<_, BindError>(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(
+                            [coordinate("x")?, coordinate("y")?, coordinate("z")?],
+                        ))
+                    }).transpose()?;
+                rules.push(StaffTokenDispatchRule {
+                    token,
+                    name: get("Name").map(id),
+                    give_to: get("GiveTo").map(id),
+                    payload: get("Payload").map(id),
+                    force,
+                    routing: StaffTokenRoutingDefinition {
+                        list: list
+                            .attribute_named_any(&["Name"])
+                            .filter(|name| !name.trim().is_empty())
+                            .map(id),
+                        chance_percent: number("Chance")?,
+                        radius_m: number("Radius")?,
+                        chance_in_radius_percent: number("ChanceInRadius")?,
+                        time_in_seconds: number("Timein")?,
+                        timeout_seconds: number("Timeout")?,
+                        time_left_seconds: number("TimeLeft")?,
+                        time_to_activation_seconds: number("TimeToActivation")?,
+                        point_m,
+                        xml_payload: row
+                            .element_children()
+                            .find(|node| node.name.eq_ignore_ascii_case("tokenData"))
+                            .map(lower_staff_token_xml_element),
+                    },
+                });
             }
-            let authored_reference =
-                |value: Option<&str>| value.filter(|value| !value.trim().is_empty()).map(id);
-            rules.push(StaffTokenDispatchRule {
-                token,
-                name: authored_reference(name),
-                give_to: authored_reference(give_to),
-                payload: authored_reference(payload),
-                force: force
-                    .map(|value| match canonicalize_source_document_record_key(value).as_str() {
-                        "true" | "yes" | "1" => Ok(true),
-                        "false" | "no" | "0" => Ok(false),
-                        value => Err(BindError::record(
-                            record,
-                            format!(
-                                "authored BFAIToken Force {value:?} on staff token {token:?} is not a boolean"
-                            ),
-                        )),
-                    })
-                    .transpose()?,
-            });
         }
     }
     Ok(rules)
 }
 
+fn lower_staff_token_xml_element(
+    node: &OrderedSourceDocumentNode,
+) -> openzt2_game_data::world_definitions::staff_management::StaffTokenXmlElement {
+    use crate::source_document::ordered_source_document_types::OrderedSourceDocumentChild;
+    use openzt2_game_data::world_definitions::staff_management::{
+        StaffTokenXmlContent, StaffTokenXmlElement,
+    };
+    StaffTokenXmlElement {
+        name: node.name.to_string(),
+        attributes: node
+            .attributes()
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect(),
+        children: node
+            .child_items()
+            .iter()
+            .filter_map(|child| match child {
+                OrderedSourceDocumentChild::Text(text) => {
+                    Some(StaffTokenXmlContent::Text(text.value().to_owned()))
+                }
+                OrderedSourceDocumentChild::Element(element) => Some(
+                    StaffTokenXmlContent::Element(lower_staff_token_xml_element(element)),
+                ),
+                OrderedSourceDocumentChild::Comment
+                | OrderedSourceDocumentChild::ProcessingInstruction => None,
+            })
+            .collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::StaffRequestData;
     use super::id;
+    use super::StaffRequestData;
     use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
 
     use crate::source_document::blue_fang_actor_manifest_model_and_scene_resolution_index::BlueFangActorManifestModelAndSceneResolutionIndex;
@@ -296,8 +301,8 @@ mod tests {
     }
 
     #[test]
-    fn staff_manager_policy_lowers_with_authored_and_default_values()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn staff_manager_policy_lowers_with_authored_and_default_values(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let document = lower_staff_manager(AUTHORED_STAFF_MANAGER)?;
         let policy = document
             .staff_manager

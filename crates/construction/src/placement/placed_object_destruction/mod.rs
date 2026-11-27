@@ -106,6 +106,9 @@ pub(super) fn resolve_requested_building_destruction_assets(
             .find_object(reference.definition)
             .and_then(|object| object.destruction.as_ref());
         let ruin = destruction.and_then(|destruction| {
+            if destruction.ruin == AssetId::default() {
+                return None;
+            }
             let placeable =
                 |ruin: &AssetId| resolve_object_placeable_definition(catalogue, *ruin).is_some();
             let ruin = if placeable(&destruction.ruin) {

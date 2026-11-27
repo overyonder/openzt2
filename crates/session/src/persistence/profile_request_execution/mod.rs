@@ -176,6 +176,7 @@ pub(super) fn begin_creating_requested_profiles(
                     profile_identifier,
                     locale_identifier: AssetId::default(),
                     controller_input_enabled: true,
+                    photo_album: None,
                 attributes: Default::default(),
                 };
                 let mut stored_profile_records_and_settings =

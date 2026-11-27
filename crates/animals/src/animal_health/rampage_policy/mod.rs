@@ -52,10 +52,6 @@ impl AssetLoader for RampagePolicyLoader {
         reader.read_to_end(&mut bytes).await?;
         parse_rampage_policy(&bytes)
     }
-
-    fn extensions(&self) -> &[&str] {
-        &["xml"]
-    }
 }
 
 pub(super) fn parse_rampage_policy(bytes: &[u8]) -> io::Result<RampagePolicy> {

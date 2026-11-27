@@ -18,6 +18,9 @@ pub struct TransportationStationDefinition {
     /// Local X/Z offset in metres followed by the authored heading in degrees.
     #[serde(default)]
     pub passenger_exits: [Option<[f32; 3]>; 2],
+    /// Forward and reverse stop nodes, followed by the two return stop nodes.
+    #[serde(default)]
+    pub sky_stop_nodes: [Option<AssetId>; 4],
     pub capacity: u16,
 }
 #[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
@@ -40,6 +43,9 @@ pub struct TransportationTrackDefinition {
     pub max_grade_permille: u16,
     #[serde(default)]
     pub ground_track_physics: Option<GroundTrackPhysicsPolicy>,
+    /// Authored types eligible to take part in the circuit obstruction check.
+    #[serde(default)]
+    pub ground_obstruction_types: Option<Vec<AssetId>>,
     pub purchase_cost_cents: i64,
     #[serde(default)]
     pub sky_maximum_connection_distance_metres: Option<f32>,

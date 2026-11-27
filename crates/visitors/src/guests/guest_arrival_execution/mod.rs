@@ -39,6 +39,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::ZooEntrance;
 use super::guest_simulation_calculations::inclusive_u32;
 use super::guest_simulation_types::Guest;
+use openzt2_zoo_state::guests::guest_simulation_types::GuestEntranceApproach;
 use super::guest_simulation_types::GuestAmusement;
 use super::guest_simulation_types::GuestArchetype;
 use super::guest_simulation_types::GuestArrivalFailed;
@@ -185,6 +186,7 @@ pub(super) fn guest_arrivals_are_due(
 #[derive(SystemParam)]
 pub(crate) struct GuestArrivalParams<'w, 's> {
     clock: Single<'w, 's, &'static ZooClock>,
+    seed: Single<'w, 's, &'static ZooSeed>,
     admissions_open: Single<'w, 's, &'static ZooAdmissionsOpen>,
     definitions: Res<'w, Assets<WorldDefinitionAsset>>,
     active_definitions: Res<'w, WorldDefinitions>,
@@ -230,6 +232,7 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
 pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
     let GuestArrivalParams {
         clock,
+        seed,
         admissions_open,
         definitions,
         active_definitions,
@@ -341,12 +344,12 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
             continue;
         };
         let guest_id = definition.id;
-        if guest_need_rows(definition).is_none() {
+        let Some(needs) = guest_need_rows(definition) else {
             failed.write(GuestArrivalFailed {
                 reason: GuestArrivalFailure::MissingNeedRows(guest_id),
             });
             continue;
-        }
+        };
         let Some(object) = definitions.find_object(definition.object) else {
             failed.write(GuestArrivalFailed {
                 reason: GuestArrivalFailure::MissingObject {
@@ -378,6 +381,40 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
                 continue;
             }
         };
+        let mut initial_needs = [0; 8];
+        for index in [0, 1, 2, 4, 6, 7, 3, 5] {
+            let [minimum_wellness, maximum_wellness] = needs[index].initial_permille;
+            let n = maximum_wellness.saturating_sub(minimum_wellness) / 10;
+            let offset = if n == 0 {
+                0
+            } else {
+                random.next_u15() % (n + 1)
+            };
+            initial_needs[index] = maximum_wellness - offset * 10;
+        }
+        let tour_need = definition.view_scoring.tour_need.zip(definitions.tour_scoring())
+            .map(|(policy, scoring)| {
+                let need = sample_source_stat(policy.start, || random.next_u15());
+                openzt2_zoo_state::behavior_task_execution_types::running_actions::GuestTourDepartureGate {
+                    need, threshold: scoring.need_threshold, policy, triggered: need >= policy.trigger,
+                }
+            });
+        let show_need = definitions.guest_show_need(guest_id).and_then(|policy| {
+            let from_q16 = |value: i32| value as f32 / 65_536.0;
+            let trigger = from_q16(policy.trigger_q16?);
+            let cessation = from_q16(policy.cessation_q16?);
+            let [minimum, maximum] = policy.initial_q16.map(from_q16);
+            let range = (minimum < maximum).then(|| (maximum - minimum) as u32);
+            Some(
+                openzt2_zoo_state::shows::running_show_types::GuestShowNeed::from_authored(
+                    minimum,
+                    range,
+                    trigger,
+                    cessation,
+                    || random.next_u15(),
+                ),
+            )
+        });
         let name = localization.as_ref().and_then(|localization| {
             let pool = localization.find_person_name_pool(definition.name_pool)?;
             let mut draw_name_index =
@@ -409,7 +446,11 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
             )
         };
         let [cash_low, cash_high] = definition.starting_cash_cents.map(i64::from);
-        let cash = cash_low + i64::from(random.next_u15()) % (cash_high - cash_low + 1).max(1);
+        let cash = if cash_high > cash_low {
+            cash_low + i64::from(random.next_u15()) % (cash_high - cash_low + 1)
+        } else {
+            cash_low
+        };
         let favourite = definitions.guest_favourite_animal_trend()
             .zip(favourite_trend.as_deref_mut())
             .and_then(|(policy, trend)| super::guest_favourite_animal_trend_execution::choose_favourite_animal_for_spawned_guest(
@@ -446,10 +487,25 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
                 },
             ))
             .id();
+        insert_guest_visit_state(
+            &mut commands,
+            entity,
+            definition,
+            initial_needs,
+            DeterministicRng::from_entity(**seed, id, RngDomain::Guest),
+        );
+        if let Some(need) = tour_need {
+            commands.entity(entity).insert(need);
+        }
+        if let Some(need) = show_need {
+            commands.entity(entity).insert(need);
+        }
         if let Some(name) = name {
             commands.entity(entity).insert(name);
         }
+        reached_entrance.write(GuestReachedEntrance { guest: entity });
         if let Some((entrance, _)) = anchor.filter(|_| policy.spawn_at_entrance) {
+            commands.entity(entity).insert(GuestEntranceApproach);
             if grid.cell_of(position.xz()).is_none() {
                 commands
                     .entity(entity)
@@ -465,8 +521,6 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
                 destination: entrance.inside,
                 arrival_radius_m: f32::from(definition.radius_cm) * 0.01,
             });
-        } else {
-            reached_entrance.write(GuestReachedEntrance { guest: entity });
         }
     }
 }
@@ -508,57 +562,77 @@ pub(crate) fn initialize_spawned_guests(
             ) as u16
         };
         let initial_needs = needs.map(&mut initial_need_value);
+        insert_guest_visit_state(&mut commands, entity, definition, initial_needs, guest_rng);
         let mut entity_commands = commands.entity(entity);
-        entity_commands.insert((
-            GuestRng(guest_rng),
-            GuestPhase::Arriving,
-            GuestHunger {
-                value: initial_needs[0],
-                residual_q16: 0,
-            },
-            GuestThirst {
-                value: initial_needs[1],
-                residual_q16: 0,
-            },
-            GuestDessert {
-                value: initial_needs[2],
-                residual_q16: 0,
-            },
-            GuestGift {
-                value: initial_needs[3],
-                residual_q16: 0,
-            },
-            GuestEnergy {
-                value: initial_needs[4],
-                residual_q16: 0,
-            },
-            GuestRestroom {
-                value: initial_needs[5],
-                residual_q16: 0,
-            },
-            GuestSocial {
-                value: initial_needs[6],
-                residual_q16: 0,
-            },
-            GuestAmusement {
-                value: initial_needs[7],
-                residual_q16: 0,
-            },
-            definition
-                .happiness_need
-                .map_or(GuestSatisfaction(1_000, 0), |policy| {
-                    GuestSatisfaction::from_source_q16(policy.initial_q16)
-                }),
-            GuestEducation(0),
-            GuestDeparturePoints(definition.initial_departure_points_q16),
-            VisitTime::default(),
-            GuestMemories::new(definition.memory.capacity),
-        ));
-        if let Some(viewing_need) = definition.viewing_need {
-            entity_commands.insert(GuestViewingNeed::new(viewing_need.initial_q16));
-        }
         if let Some(name) = name {
             entity_commands.insert_if_new(name);
         }
+    }
+}
+
+fn sample_source_stat([minimum, maximum]: [f32; 2], draw: impl FnOnce() -> u16) -> f32 {
+    if maximum > minimum {
+        let width = ((maximum - minimum) as u32).saturating_add(1);
+        minimum + (u32::from(draw()) % width) as f32
+    } else {
+        minimum
+    }
+}
+
+fn insert_guest_visit_state(
+    commands: &mut Commands,
+    entity: Entity,
+    definition: &openzt2_game_data::world_definitions::guest_simulation_definitions::GuestDefinition,
+    initial_needs: [u16; 8],
+    guest_rng: DeterministicRng,
+) {
+    let mut entity_commands = commands.entity(entity);
+    entity_commands.insert((
+        GuestRng(guest_rng),
+        GuestPhase::Arriving,
+        GuestHunger {
+            value: initial_needs[0],
+            residual_q16: 0,
+        },
+        GuestThirst {
+            value: initial_needs[1],
+            residual_q16: 0,
+        },
+        GuestDessert {
+            value: initial_needs[2],
+            residual_q16: 0,
+        },
+        GuestGift {
+            value: initial_needs[3],
+            residual_q16: 0,
+        },
+        GuestEnergy {
+            value: initial_needs[4],
+            residual_q16: 0,
+        },
+        GuestRestroom {
+            value: initial_needs[5],
+            residual_q16: 0,
+        },
+        GuestSocial {
+            value: initial_needs[6],
+            residual_q16: 0,
+        },
+        GuestAmusement {
+            value: initial_needs[7],
+            residual_q16: 0,
+        },
+        definition
+            .happiness_need
+            .map_or(GuestSatisfaction(1_000, 0), |policy| {
+                GuestSatisfaction::from_source_q16(policy.initial_q16)
+            }),
+        GuestEducation(0),
+        GuestDeparturePoints(definition.initial_departure_points_q16),
+        VisitTime::default(),
+        GuestMemories::new(definition.memory.capacity),
+    ));
+    if let Some(viewing_need) = definition.viewing_need {
+        entity_commands.insert(GuestViewingNeed::new(viewing_need.initial_q16));
     }
 }

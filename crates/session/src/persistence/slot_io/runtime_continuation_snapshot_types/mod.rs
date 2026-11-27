@@ -32,7 +32,15 @@ pub(super) struct RuntimeDomainContinuation {
     #[serde(skip)]
     pub water_filter_cleanup: Vec<(u64, u64)>,
     #[serde(skip)]
+    pub authored_float_attributes: Vec<(u64, Vec<(openzt2_game_data::AssetId, f32)>)>,
+    #[serde(skip)]
     pub guests: Vec<super::guest_continuation_snapshot::GuestContinuation>,
+    #[serde(skip)]
+    pub staff_jobs: Vec<super::staff_job_continuation_snapshot::SavedStaffJob>,
+    #[serde(skip)]
+    pub staff: Vec<super::staff_continuation_snapshot::SavedStaffContinuation>,
+    #[serde(skip)]
+    pub cloning_center_occupancy: Vec<(u64, u64)>,
     pub trick_popularity: Option<std::collections::BTreeMap<openzt2_game_data::AssetId, f32>>,
 }
 

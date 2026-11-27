@@ -61,13 +61,13 @@ pub(crate) fn project_live_guest_status_to_visible_information_panels(
                 UiIntegerPropertyBindingSource::GuestEnergyPermille => i64::from(status.2.value),
                 UiIntegerPropertyBindingSource::GuestRestroomPermille => i64::from(status.3.value),
                 UiIntegerPropertyBindingSource::GuestSocialPermille => i64::from(status.4.value),
-                UiIntegerPropertyBindingSource::GuestSatisfactionPermille => i64::from(status.5.0),
-                UiIntegerPropertyBindingSource::GuestEducationPermille => i64::from(status.6.0),
+                UiIntegerPropertyBindingSource::GuestSatisfactionPermille => i64::from(status.5 .0),
+                UiIntegerPropertyBindingSource::GuestEducationPermille => i64::from(status.6 .0),
                 UiIntegerPropertyBindingSource::GuestVisitTicks => {
                     i64::try_from(status.7.elapsed_ticks).unwrap_or(i64::MAX)
                 }
                 UiIntegerPropertyBindingSource::GuestCashCents => {
-                    super::text_replacement_operations::currency_cents(status.8.0)
+                    super::text_replacement_operations::currency_cents(status.8 .0)
                 }
                 _ => continue,
             };

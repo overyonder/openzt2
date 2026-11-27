@@ -5,4 +5,5 @@ use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_depen
 pub struct SelectedWorldDocumentHandles {
     pub map: Handle<WorldScenarioDocumentAsset>,
     pub start: Handle<WorldScenarioDocumentAsset>,
+    pub mode: Option<Handle<WorldScenarioDocumentAsset>>,
 }

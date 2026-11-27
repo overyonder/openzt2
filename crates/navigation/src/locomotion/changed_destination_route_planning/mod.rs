@@ -37,6 +37,42 @@ pub(super) struct ActiveRouteSearch {
     scratch: RouteScratch,
 }
 
+#[derive(Component)]
+pub(super) struct InstalledRouteEdges {
+    pub(super) request: u64,
+    edges: Vec<[u32; 2]>,
+}
+
+impl InstalledRouteEdges {
+    pub(super) fn is_affected_by(
+        &self,
+        edges: &[([u32; 2], openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::NavigationEdgeChange)],
+        nodes: &[u32],
+    ) -> bool {
+        self.edges.iter().any(|edge| {
+            nodes.contains(&edge[0])
+                || nodes.contains(&edge[1])
+                || edges.iter().any(|(key, change)| {
+                    key == edge && super::pathfinding::edge_became_more_restrictive(*change)
+                })
+        })
+    }
+}
+
+impl ActiveRouteSearch {
+    pub(super) fn is_affected_by(
+        &self,
+        edges: &[([u32; 2], openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::NavigationEdgeChange)],
+        nodes: &[u32],
+    ) -> bool {
+        self.search.is_affected_by(&self.scratch, edges, nodes)
+    }
+
+    pub(super) fn reset(&mut self) {
+        self.search = RouteSearch::default();
+    }
+}
+
 #[derive(Resource, Default)]
 pub(super) struct ReusableRouteSearchScratch(Vec<RouteScratch>);
 
@@ -108,6 +144,7 @@ pub(super) fn queue_changed_navigation_destinations(
             }
         }
         route.clear();
+        commands.entity(entity).try_remove::<InstalledRouteEdges>();
         if let Some(mut active) = active {
             active.search = RouteSearch::default();
         } else if !waiting {
@@ -204,7 +241,8 @@ pub(super) fn advance_active_navigation_searches(
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
 ) {
-    let mut finished = Parallel::<Vec<(u64, Entity, Option<NavigationFailure>)>>::default();
+    let mut finished =
+        Parallel::<Vec<(u64, Entity, Result<Vec<[u32; 2]>, NavigationFailure>)>>::default();
     agents.par_iter_mut().for_each(
         |(
             entity,
@@ -223,7 +261,7 @@ pub(super) fn advance_active_navigation_searches(
             };
             let navigation = graph.terrain_derived_navigation_graph();
             let active = &mut *active;
-            if graph.is_changed()
+            if active.scratch.costs.len() != navigation.navigation_node_count()
                 || member.is_changed()
                 || fence_crossing_index.is_changed(member.root)
                 || tank_water.as_ref().is_some_and(DetectChanges::is_changed)
@@ -348,22 +386,39 @@ pub(super) fn advance_active_navigation_searches(
                 Ok(true) => {}
                 Err(_) => route.clear(),
             }
-            finished.scope(|results| results.push((destination.request_id, entity, result.err())));
+            let outcome = result.map(|_| {
+                active
+                    .scratch
+                    .reverse_path
+                    .windows(2)
+                    .rev()
+                    .map(|pair| [pair[1], pair[0]])
+                    .collect()
+            });
+            finished.scope(|results| results.push((destination.request_id, entity, outcome)));
         },
     );
 
     let mut completed: Vec<_> = finished.drain().collect();
     completed.sort_unstable_by_key(|(id, entity, _)| (*id, entity.to_bits()));
-    for (request_id, entity, failure) in completed {
+    for (request_id, entity, outcome) in completed {
         let mut actor = commands.entity(entity);
         actor.remove::<ActiveRouteSearch>();
-        if let Some(reason) = failure {
-            actor.remove::<Destination>();
-            navigation_failures.write(NavigationFailed {
-                entity,
-                request_id,
-                reason,
-            });
+        match outcome {
+            Ok(edges) => {
+                actor.insert(InstalledRouteEdges {
+                    request: request_id,
+                    edges,
+                });
+            }
+            Err(reason) => {
+                actor.remove::<(Destination, InstalledRouteEdges)>();
+                navigation_failures.write(NavigationFailed {
+                    entity,
+                    request_id,
+                    reason,
+                });
+            }
         }
     }
 }

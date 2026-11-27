@@ -23,41 +23,47 @@ pub(super) fn capture_world_snapshot_record_from_live_world(
         })
         .unwrap_or("Zoo");
 
-    let source_document = match world_snapshot_capture_queries.world_documents.single() {
-        Ok((handles, selection, scenario)) => {
-            let assets = world_snapshot_capture_queries
-                .world_scenario_assets
-                .as_deref()
-                .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?;
-            let server = world_snapshot_capture_queries
-                .asset_server
-                .as_deref()
-                .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?;
-            let campaign = world_snapshot_capture_queries
-                .world_scenarios
-                .as_deref()
-                .and_then(|active| active.get(assets))
-                .and_then(|view| view.campaign_for_scenario(selection.requested))
-                .map(|(campaign, _)| campaign);
-            Some(
-                super::saved_world_descriptor_capture::capture_saved_world_descriptor(
+    let (source_document, mode_document_path) =
+        match world_snapshot_capture_queries.world_documents.single() {
+            Ok((handles, selection, scenario)) => {
+                let assets = world_snapshot_capture_queries
+                    .world_scenario_assets
+                    .as_deref()
+                    .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?;
+                let server = world_snapshot_capture_queries
+                    .asset_server
+                    .as_deref()
+                    .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?;
+                let campaign = world_snapshot_capture_queries
+                    .world_scenarios
+                    .as_deref()
+                    .and_then(|active| active.get(assets))
+                    .and_then(|view| view.campaign_for_scenario(selection.requested))
+                    .map(|(campaign, _)| campaign);
+                let source = super::saved_world_descriptor_capture::capture_saved_world_descriptor(
                     handles,
                     selection,
                     campaign,
                     scenario.map(|document| &document.0),
                     assets,
                     server,
-                )?,
-            )
-        }
-        Err(_) => None,
-    };
+                )?;
+                let mode = handles
+                    .mode
+                    .as_ref()
+                    .and_then(|mode| mode.path())
+                    .map(ToString::to_string);
+                (Some(source), mode)
+            }
+            Err(_) => (None, None),
+        };
     Ok(WorldSnapshotRecord {
         scenario_definition_identifier: world_root.scenario,
         requested_world_definition_identifier: world_selection.requested,
         map_definition_identifier: world_selection.map,
         starting_point_definition_identifier: world_selection.start,
         session_mode: world_selection.mode,
+        mode_document_path,
         last_saved_unix_timestamp_milliseconds: current_unix_timestamp_milliseconds(),
         display_name: world_display_name.to_owned(),
         source_document,

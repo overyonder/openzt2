@@ -50,6 +50,7 @@ fn placement_preview_keeps_its_footprint_and_grid_decals_when_the_pose_changes()
     let definition = placeable.id;
     let document = WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
+            collision_scores: None,
             authored_runtime: Default::default(),
             audio_cue_prefixes: Vec::new(),
             audio_stage_volumes: Vec::new(),

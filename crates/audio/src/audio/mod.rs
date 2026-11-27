@@ -2,7 +2,7 @@
 use openzt2_zoo_state::audio::audio_environment_types;
 use openzt2_zoo_state::audio::audio_playback_message_types;
 
-pub mod ambient_audio_emitter_playback;
+mod ambient_audio_emitter_playback;
 mod audio_cue_playback;
 mod audio_cue_resolution;
 mod audio_player_spawning;
@@ -68,7 +68,6 @@ impl Plugin for AudioPlugin {
         app.add_audio_source::<stage_voice_acoustics::StageVoiceSource>()
             .add_computed_state::<MenuMusicState>()
             .add_message::<PlayAudioCue>()
-            .add_message::<ambient_audio_emitter_playback::AddAwardAmbientCue>()
             .add_message::<PlayPositionedAudioCue>()
             .add_message::<PlayAudioClip>()
             .add_message::<StopAudioCue>()
@@ -119,8 +118,6 @@ impl Plugin for AudioPlugin {
                         .chain(),
                     crowd_audio_playback::project_current_crowd_into_audio_playback,
                     play_changed_allowed_ambient_audio_emitters,
-                    ambient_audio_emitter_playback::play_awarded_ambient_cues
-                        .run_if(on_message::<ambient_audio_emitter_playback::AddAwardAmbientCue>),
                     admit_pending_menu_music.run_if(
                         resource_changed::<AudioAssets>
                             .or_eager(on_message::<AssetEvent<AudioAsset>>),

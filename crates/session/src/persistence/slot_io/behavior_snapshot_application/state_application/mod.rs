@@ -30,6 +30,7 @@ use openzt2_zoo_state::{
     },
     staff::staff_job_types::{
         JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask, StaffJobRouting, StaffJobTarget,
+        UnsuccessfulStaffJobCandidates,
     },
 };
 use std::collections::BTreeMap;
@@ -54,7 +55,6 @@ struct RestoredBehaviorEconomyTransaction {
 
 pub(super) fn apply_prepared_behavior_actor(
     commands: &mut Commands,
-    root: Entity,
     record: &BehaviorTaskActorSnapshot,
     prepared: PreparedBehaviorActor,
     identities: &BTreeMap<BehaviorSnapshotEntityReference, Entity>,
@@ -306,7 +306,6 @@ pub(super) fn apply_prepared_behavior_actor(
             emitted: splash.emitted,
         });
     }
-    entity.insert(task);
     if instruction_state.pursuit.is_some()
         || instruction_state.economy.is_some()
         || instruction_state.movement.is_some()
@@ -316,6 +315,7 @@ pub(super) fn apply_prepared_behavior_actor(
     {
         entity.insert(instruction_state);
     }
+    entity.insert(task);
     if let (Some(owner), Some(origin)) = (&record.synchronized, prepared.synchronized_origin) {
         let target = resolve(&owner.target);
         commands.spawn((
@@ -331,30 +331,60 @@ pub(super) fn apply_prepared_behavior_actor(
         ));
     }
     if let (Some(job), Some(frame)) = (&record.staff_job, prepared.job_frame) {
-        let job_entity = commands
-            .spawn((
-                StaffJob {
-                    kind: job.kind,
-                    target: resolve(&job.target),
-                    urgency: job.urgency,
-                    token: job.token,
-                },
-                StaffJobTarget(resolve(&job.target)),
-                StaffJobRouting {
-                    subject_type: job.subject_type,
-                    recipient: job.recipient,
-                },
-                JobClaim { staff: actor },
-                StaffJobBehaviorTask {
-                    document: frame.document,
-                    task: frame.program,
-                    declaration_index: frame.declaration,
-                    execution_id: Some(execution_id),
-                },
-            ))
-            .id();
+        let target = job.target.as_ref().map(resolve);
+        let member = application
+            .actors
+            .p0()
+            .get(actor)
+            .ok()
+            .and_then(|actor| actor.world_member)
+            .copied();
+        let mut job_entity = commands.spawn((
+            StaffJob {
+                kind: job.kind,
+                target,
+                point: job.point.map(Vec3::from_array),
+                priority: job
+                    .priority
+                    .or_else(|| job.urgency.map(|urgency| f32::from_bits(u32::MAX - urgency)))
+                    .filter(|priority| priority.is_finite() && *priority > 0.0)
+                    .unwrap_or(openzt2_game_data::world_definitions::staff_management::StaffRequestData::CONSTRUCTED_DEFAULT.priority),
+                issued_at_seconds: job.issued_at_seconds,
+                remaining_wait_seconds: job.remaining_wait_seconds,
+                first_attempt: job.first_attempt,
+                token: job.token,
+            },
+            StaffJobRouting {
+                subject_type: job.subject_type,
+                recipient: job.recipient,
+            },
+            JobClaim { staff: actor },
+            StaffJobBehaviorTask {
+                document: frame.document,
+                task: frame.program,
+                declaration_index: frame.declaration,
+                execution_id: Some(execution_id),
+            },
+        ));
+        if let Some(target) = target {
+            job_entity.insert(StaffJobTarget(target));
+        }
+        if let Some(member) = member {
+            job_entity.insert(member);
+        }
+        if let Some(id) = job.persistent_identifier {
+            job_entity
+                .insert(openzt2_world_state::world_spawn::persistent_id_types::PersistentId(id));
+        }
+        if !job.rejected_staff.is_empty() {
+            let mut rejected = UnsuccessfulStaffJobCandidates::default();
+            for staff in &job.rejected_staff {
+                rejected.record(resolve(staff));
+            }
+            job_entity.insert(rejected);
+        }
         if job.progressing {
-            commands.entity(job_entity).insert(JobProgress);
+            job_entity.insert(JobProgress);
         }
     }
 }
@@ -372,11 +402,11 @@ pub(in crate::persistence) fn bind_restored_behavior_instruction_state(
     )>,
 ) {
     for (entity, saved, instruction, economy, following, spline, retry) in &mut actors {
-        let mut actor = commands.entity(entity);
-        actor.remove::<RestoredBehaviorInstructionState>();
         let Some(instruction) = instruction.map(RunningBehaviorInstruction::id) else {
             continue;
         };
+        let mut actor = commands.entity(entity);
+        actor.remove::<RestoredBehaviorInstructionState>();
         if let Some((leg, seconds)) = saved.pursuit {
             actor.insert((
                 PendingBehaviorPursuit { instruction, leg },

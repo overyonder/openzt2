@@ -49,6 +49,17 @@ pub struct EquippedInteractionTool {
 #[derive(Component)]
 pub struct ImmersiveHudSuppression;
 
+/// Number of traversable sides highlighted at the Guest View pointer.
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GuestViewTileCount(pub u32);
+
+/// Camera pose relative to the assembly table and the authored rotation increment.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct FossilAssemblyView {
+    pub table_relative_camera: Transform,
+    pub piece_rotation_radians: f32,
+}
+
 #[derive(Component)]
 #[relationship(relationship_target = ImmersiveSubjectSessions)]
 pub struct ImmersiveSubject(pub Entity);

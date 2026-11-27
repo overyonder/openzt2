@@ -4,7 +4,6 @@ use bevy::{prelude::*, time::Stopwatch};
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationOperation;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest;
@@ -19,7 +18,6 @@ use super::{
 #[derive(Component)]
 pub(in crate::world_spawn) struct PhysicalChildPlayback {
     state: usize,
-    last_tick: Option<u64>,
     elapsed: Stopwatch,
 }
 
@@ -27,20 +25,12 @@ impl PhysicalChildPlayback {
     pub(in crate::world_spawn) fn new(state: usize) -> Self {
         Self {
             state,
-            last_tick: None,
             elapsed: Stopwatch::new(),
         }
     }
 
-    fn period_finished(&mut self, tick: u64, fixed_hz: u16, duration: std::time::Duration) -> bool {
-        let previous = self.last_tick.replace(tick).unwrap_or(tick);
-        // Tick-domain units preserve fractional periods exactly.
-        self.elapsed.tick(std::time::Duration::from_secs(
-            tick.saturating_sub(previous),
-        ));
-        let Some(period) = duration.checked_mul(u32::from(fixed_hz)) else {
-            return false;
-        };
+    fn period_finished(&mut self, delta: std::time::Duration, period: std::time::Duration) -> bool {
+        self.elapsed.tick(delta);
         if period.is_zero() || self.elapsed.elapsed() <= period {
             return false;
         }
@@ -51,7 +41,7 @@ impl PhysicalChildPlayback {
 
 pub(in crate::world_spawn) fn advance_authored_child_lifetimes(
     mut commands: Commands,
-    clock: Single<&ZooClock>,
+    time: Res<Time<Fixed>>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     controllers: Query<(
@@ -69,7 +59,6 @@ pub(in crate::world_spawn) fn advance_authored_child_lifetimes(
     settings: Res<openzt2_game_assets::graphics_settings_types::GraphicsSettings>,
     mut notifications: MessageWriter<PhysicalPresentationRequest>,
 ) {
-    let clock = clock.into_inner();
     let Some(definitions) = definitions.get(&assets) else {
         return;
     };
@@ -98,11 +87,12 @@ pub(in crate::world_spawn) fn advance_authored_child_lifetimes(
             continue;
         }
         // Native advances one period per update and uses a strict elapsed > duration test.
-        if !playback.period_finished(
-            clock.tick,
-            definitions.timing().fixed_hz,
-            animation.duration,
-        ) {
+        let delta = if playback.is_added() {
+            std::time::Duration::ZERO
+        } else {
+            time.timestep()
+        };
+        if !playback.period_finished(delta, animation.duration) {
             continue;
         }
         if !animation.looping {
@@ -127,12 +117,13 @@ mod tests {
     fn child_periods_use_simulation_ticks_without_fractional_period_drift() {
         let mut playback = PhysicalChildPlayback::new(0);
         let period = std::time::Duration::from_millis(1320);
-        assert!(!playback.period_finished(100, 30, period));
-        assert!(!playback.period_finished(139, 30, period));
-        assert!(playback.period_finished(140, 30, period));
-        assert!(!playback.period_finished(140, 30, period));
-        assert!(!playback.period_finished(179, 30, period));
-        assert!(playback.period_finished(180, 30, period));
-        assert!(playback.period_finished(219, 30, period));
+        let elapsed = |ticks: u64| std::time::Duration::from_nanos(33_333_333 * ticks);
+        assert!(!playback.period_finished(elapsed(0), period));
+        assert!(!playback.period_finished(elapsed(39), period));
+        assert!(playback.period_finished(elapsed(1), period));
+        assert!(!playback.period_finished(elapsed(0), period));
+        assert!(!playback.period_finished(elapsed(39), period));
+        assert!(playback.period_finished(elapsed(1), period));
+        assert!(playback.period_finished(elapsed(39), period));
     }
 }

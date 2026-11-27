@@ -176,6 +176,7 @@ use std::collections::BTreeMap;
 
 pub mod container_quantity_source_lowering;
 pub mod expanding_column_source_lowering;
+mod interaction_policy_lowering;
 pub mod named_physical_presentation_source_lowering;
 pub mod staff_manager_policy_source_lowering;
 pub mod staff_request_controller_source_lowering;
@@ -278,11 +279,10 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
 ) -> Result<
     (
         WorldDefinitionDocument,
-        super::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAssetMetadata,
-        std::collections::BTreeSet<String>,
+        super::world_definition_source_document_lowering::WorldDefinitionSourceMetadata,
     ),
     BindError,
->{
+> {
     if auxiliary.is_none() {
         if let Some(document) = documents.iter().find(|document| {
             matches!(
@@ -305,6 +305,7 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
             "ZTGuestViewMode",
             "ZTPhotoMode",
             "ZTSuperStaffMode",
+            "ZTPuzzleMode",
             "ZTFenceMode",
         ],
     )?;
@@ -339,6 +340,9 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
     let mut output = WorldDefinitionLoweringTables::default();
     let mut metadata = super::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAssetMetadata::default();
     for record in &primary_records {
+        if let Some(policy) = interaction_policy_lowering::world_guest_influence_policy(record)? {
+            metadata.guest_influence_policy = Some(policy);
+        }
         render_lod_source_lowering::lower_authored_render_lod_distances(
             record,
             &mut metadata.render_lod_distances,
@@ -351,6 +355,12 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
             metadata
                 .environment_map_nodes
                 .insert(AssetId::from_key(record.key), node);
+        }
+        if record.has_type_token("ambient") {
+            let tables = authored_staff_and_animal_catalogue_lowering::lower_authored_staff_locomotion_tables(record)?;
+            if !tables.is_empty() {
+                metadata.ambient_locomotion.insert(id(record.key), tables);
+            }
         }
     }
     output.document.animation_binder_rigs = primary_records
@@ -467,8 +477,9 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
             .iter()
             .find(|record| id(record.key) == guest.id)
         {
-            if let Some(need) = guest_definition_source_lowering::lower_guest_show_need(record)? {
-                metadata.guest_show_needs.insert(guest.id, need);
+            let watches = interaction_policy_lowering::guest_influence_watches(record)?;
+            if !watches.is_empty() {
+                metadata.guest_influence_watches.insert(guest.id, watches);
             }
         }
     }
@@ -503,7 +514,37 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
     document.admission_price_bands_cents = admission_price_bands_cents;
     document.tranquilizer_mode = tranquilizer_mode;
     metadata.timekeeper = timekeeper;
-    Ok((document, metadata, tank_material_paths))
+    let mut physical_actors = std::collections::BTreeMap::new();
+    for object in &document.objects {
+        if let Some(record) = primary_records
+            .iter()
+            .find(|record| id(record.key) == object.id)
+        {
+            let interactions = interaction_policy_lowering::staff_interactions(record)?;
+            if !interactions.is_empty() {
+                metadata.staff_interactions.insert(object.id, interactions);
+            }
+            let influences = interaction_policy_lowering::object_influences(record)?;
+            if !influences.is_empty() {
+                metadata.object_influences.insert(object.id, influences);
+            }
+            let actors =
+                named_physical_presentation_source_lowering::lower_physical_actor_bindings(
+                    record, object,
+                )?;
+            if !actors.is_empty() {
+                physical_actors.insert(object.id, actors);
+            }
+        }
+    }
+    Ok((
+        document,
+        super::world_definition_source_document_lowering::WorldDefinitionSourceMetadata {
+            runtime: metadata,
+            tank_material_paths,
+            physical_actors,
+        },
+    ))
 }
 
 fn bind_record_shard(
@@ -585,6 +626,10 @@ fn bind_record_shard(
     })
     .or_else(|| {
         (canonicalize_source_document_record_key(&kind) == "terrdeformationui")
+            .then_some(WorldDefinitionSourceRecordKind::Container)
+    })
+    .or_else(|| {
+        (canonicalize_source_document_record_key(&kind) == "bfginfluencemgr")
             .then_some(WorldDefinitionSourceRecordKind::Container)
     })
     .or_else(|| {

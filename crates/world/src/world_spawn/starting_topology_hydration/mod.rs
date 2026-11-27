@@ -21,7 +21,7 @@ use openzt2_world_state::world_spawn::world_load_completion_marker::{
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
-use openzt2_zoo_state::topology::gate_operation_types::Gate;
+use openzt2_zoo_state::topology::gate_operation_types::{AuthoredGateVariant, Gate};
 use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
@@ -82,22 +82,29 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
     let mut fence_definitions_by_gate = None;
     for fence in &start.fences {
         let source_definition = fence.definition;
-        let resolved = definitions
-            .find_fence(source_definition)
-            .map(|definition| (definition, false))
-            .or_else(|| {
-                fence_definitions_by_gate
-                    .get_or_insert_with(|| {
-                        let mut by_gate = BTreeMap::new();
-                        for definition in definitions.fences() {
-                            by_gate.entry(definition.gate).or_insert(definition);
-                        }
-                        by_gate
-                    })
-                    .get(&source_definition)
-                    .copied()
-                    .map(|definition| (definition, true))
-            });
+        let resolved = if let Some(former) = asset.former_fence_type(start.id, fence.persistent_id)
+        {
+            definitions
+                .find_fence(former)
+                .map(|definition| (definition, true))
+        } else {
+            definitions
+                .find_fence(source_definition)
+                .map(|definition| (definition, fence.gate))
+                .or_else(|| {
+                    fence_definitions_by_gate
+                        .get_or_insert_with(|| {
+                            let mut by_gate = BTreeMap::new();
+                            for definition in definitions.fences() {
+                                by_gate.entry(definition.gate).or_insert(definition);
+                            }
+                            by_gate
+                        })
+                        .get(&source_definition)
+                        .copied()
+                        .map(|definition| (definition, true))
+                })
+        };
         let Some((definition, gate)) = resolved else {
             if active_definitions.is_complete() {
                 commands
@@ -123,7 +130,15 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
         {
             continue;
         }
-        fences.push((fence, definition.id, gate));
+        fences.push((
+            fence,
+            definition.id,
+            gate.then_some(if source_definition == definition.id {
+                definition.gate
+            } else {
+                source_definition
+            }),
+        ));
     }
     let used_nodes = fences
         .iter()
@@ -168,11 +183,14 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
         if fence.protected {
             commands.entity(entity).insert(TopologyProtected);
         }
-        if gate || fence.gate {
-            commands.entity(entity).insert(Gate {
-                open: false,
-                locked: false,
-            });
+        if let Some(variant) = gate {
+            commands.entity(entity).insert((
+                Gate {
+                    open: false,
+                    locked: false,
+                },
+                AuthoredGateVariant(variant),
+            ));
         }
     }
     commands.entity(root).insert(StartingFenceTopologyHydrated);

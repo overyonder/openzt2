@@ -1,6 +1,6 @@
 //! Blue Fang DAT and supporting source-document loading into one terrain asset.
 
-use std::{collections::HashSet, io};
+use std::{collections::BTreeSet, io, path::Path};
 
 use bevy::{
     asset::{io::Reader, AssetLoader, LoadContext},
@@ -8,7 +8,7 @@ use bevy::{
 };
 
 use crate::{
-    asset_source::generated_asset_publication::GeneratedAssetPublication,
+    asset_source::{generated_asset_publication::GeneratedAssetPublication, AssetArchives},
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document,
         ordered_source_document_types::OrderedSourceDocument, path::AssetPath,
@@ -28,6 +28,11 @@ use crate::{
 
 use super::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
+#[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
+pub struct TerrainSourceAssetSettings {
+    pub tank_water_source_paths: Vec<std::path::PathBuf>,
+}
+
 #[derive(TypePath)]
 pub(super) struct TerrainSourceAssetLoader {
     asset_archives: crate::asset_source::AssetArchives,
@@ -45,7 +50,7 @@ impl FromWorld for TerrainSourceAssetLoader {
 
 impl AssetLoader for TerrainSourceAssetLoader {
     type Asset = TerrainAsset;
-    type Settings = ();
+    type Settings = TerrainSourceAssetSettings;
     type Error = io::Error;
 
     #[cfg_attr(
@@ -55,7 +60,7 @@ impl AssetLoader for TerrainSourceAssetLoader {
     async fn load(
         &self,
         reader: &mut dyn Reader,
-        _settings: &Self::Settings,
+        settings: &Self::Settings,
         load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
         let mut terrain_source_bytes = Vec::new();
@@ -122,29 +127,12 @@ impl AssetLoader for TerrainSourceAssetLoader {
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
             );
         }
-        let mut loaded_configuration_paths = source_documents
-            .iter()
-            .map(|document| document.path.as_str().to_ascii_lowercase())
-            .collect::<HashSet<_>>();
-        loop {
-            let paths = referenced_configuration_paths(&source_documents)
-                .into_iter()
-                .filter(|path| loaded_configuration_paths.insert(path.to_ascii_lowercase()))
-                .collect::<Vec<_>>();
-            if paths.is_empty() {
-                break;
-            }
-            for path in paths {
-                let bytes = load_context
-                    .read_asset_bytes(path.clone())
-                    .await
-                    .map_err(|error| io::Error::other(format!("{path}: {error}")))?;
-                source_documents.push(
-                    parse_blue_fang_source_document(AssetPath::new(&path), &bytes)
-                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
-                );
-            }
-        }
+        load_water_configuration_documents(
+            &self.asset_archives,
+            &mut GeneratedAssetPublication::Labeled(load_context),
+            &mut source_documents,
+        )
+        .await?;
         let (terrain_presentation, terrain_biomes, terrain_waterfall) =
             lower_authored_terrain_presentation_and_biomes_and_waterfall(
                 &source_documents,
@@ -162,11 +150,35 @@ impl AssetLoader for TerrainSourceAssetLoader {
             canonical_terrain_grid,
             &self.asset_archives,
             &mut GeneratedAssetPublication::Labeled(load_context),
+            &settings.tank_water_source_paths,
         )
         .await
     }
+}
 
-    fn extensions(&self) -> &[&str] {
-        &["dat"]
+pub(super) async fn load_water_configuration_documents(
+    archives: &AssetArchives,
+    context: &mut GeneratedAssetPublication<'_, '_>,
+    documents: &mut Vec<OrderedSourceDocument>,
+) -> io::Result<()> {
+    let mut seen: BTreeSet<_> = documents
+        .iter()
+        .map(|document| document.path.key())
+        .collect();
+    loop {
+        let paths = referenced_configuration_paths(documents)
+            .into_iter()
+            .filter(|path| seen.insert(AssetPath::new(path).key()))
+            .collect::<Vec<_>>();
+        if paths.is_empty() {
+            return Ok(());
+        }
+        for path in paths {
+            let bytes = context.read_source(archives, Path::new(&path)).await?;
+            documents.push(
+                parse_blue_fang_source_document(AssetPath::new(&path), &bytes)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+            );
+        }
     }
 }

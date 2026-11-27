@@ -147,8 +147,8 @@ fn resolve_track_sale(
         return None;
     }
     let refund = calculate_authored_object_sale_refund(object)?;
-    let amount = refund.0.checked_mul(i64::try_from(removed).ok()?)?;
-    Some((edit, piece, Money(amount)))
+    let amount = refund.checked_scale(removed as f32)?;
+    Some((edit, piece, amount))
 }
 
 pub(super) fn prepare_transport_track_sale(
@@ -168,7 +168,7 @@ pub(super) fn prepare_transport_track_sale(
         let sale = active
             .get(&definitions)
             .and_then(|definitions| resolve_track_sale(&sales, request.target, definitions))
-            .and_then(|(edit, piece, refund)| Some((edit, piece, refund.0.checked_neg()?)));
+            .map(|(edit, piece, refund)| (edit, piece, -refund));
         let Some((edit, piece, cost)) = sale else {
             rejected.write(TransportTrackConstructionEditPreparationRejected {
                 transaction: request.transaction,
@@ -176,8 +176,6 @@ pub(super) fn prepare_transport_track_sale(
             });
             continue;
         };
-        let mut edit = edit;
-        edit.applied_entities.clear();
         if let Some((index, world)) = piece {
             let cut = allocators
                 .get_mut(world.root)
@@ -201,7 +199,7 @@ pub(super) fn prepare_transport_track_sale(
         commands.entity(request.transaction).insert(edit);
         prepared.write(TransportTrackConstructionEditPrepared {
             transaction: request.transaction,
-            cost: Money(cost),
+            cost,
         });
     }
 }

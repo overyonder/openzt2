@@ -824,6 +824,7 @@ pub(in crate::terrain) fn project_scene_caustic_passes(
 
 pub(in crate::terrain) fn update_scene_caustic_bindings(
     sources: Query<&MeshMaterial3d<EffectPassMaterial>, Without<TerrainWaterCausticScenePass>>,
+    source_visibility: Query<&InheritedVisibility, Without<TerrainWaterCausticScenePass>>,
     targets: Query<&TerrainWaterCausticSceneTarget>,
     roots: Query<&SceneCausticPhysicalRoot>,
     regions: TerrainWaterRegionQuery,
@@ -838,13 +839,14 @@ pub(in crate::terrain) fn update_scene_caustic_bindings(
             &SceneCausticWaterOwner,
             &MeshMaterial3d<EffectPassMaterial>,
             &mut Visibility,
+            &mut InheritedVisibility,
         ),
         With<TerrainWaterCausticScenePass>,
     >,
     mut effects: ResMut<Assets<EffectPassMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
-    for (primitive, view, water, handle, mut visibility) in &mut passes {
+    for (primitive, view, water, handle, mut visibility, mut inherited_visibility) in &mut passes {
         let bound = (|| -> std::io::Result<bool> {
             let Ok(root) = roots.get(primitive.parent()) else {
                 return Ok(false);
@@ -932,17 +934,23 @@ pub(in crate::terrain) fn update_scene_caustic_bindings(
             effect.write_programmable_float_registers_to_persistent_buffers(&mut buffers);
             Ok(ready)
         })();
-        match bound {
-            Ok(true) => {
-                visibility.set_if_neq(Visibility::Inherited);
-            }
-            Ok(false) => {
-                visibility.set_if_neq(Visibility::Hidden);
-            }
-            Err(error) => {
-                visibility.set_if_neq(Visibility::Hidden);
-                error!(%error, "caustic source sampling or projection evaluation failed");
-            }
+        if let Err(error) = &bound {
+            error!(%error, "caustic source sampling or projection evaluation failed");
         }
+        let ready = matches!(bound, Ok(true));
+        // These leaf draws are created after the main visibility propagation pass.
+        let (local, inherited) = if ready {
+            (
+                Visibility::Inherited,
+                source_visibility
+                    .get(primitive.parent())
+                    .copied()
+                    .unwrap_or(InheritedVisibility::VISIBLE),
+            )
+        } else {
+            (Visibility::Hidden, InheritedVisibility::HIDDEN)
+        };
+        visibility.set_if_neq(local);
+        inherited_visibility.set_if_neq(inherited);
     }
 }

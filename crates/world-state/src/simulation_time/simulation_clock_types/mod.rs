@@ -2,6 +2,13 @@ use bevy::prelude::*;
 
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ZooClockAdvance;
+
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZooTimekeeperElapsed {
+    pub root: Entity,
+    pub event: openzt2_game_assets::world_definitions::timing::TimekeeperEvent,
+    pub count: u32,
+}
 use num_integer::Integer;
 
 /// Zoo time in fixed simulation ticks.
@@ -207,18 +214,6 @@ impl ZooDayCadence {
             .checked_mul(self.tick_numerator)?
             .checked_add(scaled_fraction)
     }
-}
-
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ZooSlowTickElapsed {
-    pub root: Entity,
-    pub count: u32,
-}
-
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ZooHeartbeatElapsed {
-    pub root: Entity,
-    pub count: u32,
 }
 
 /// An authored text node showing the localized zoo date.

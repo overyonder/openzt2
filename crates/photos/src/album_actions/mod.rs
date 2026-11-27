@@ -32,12 +32,16 @@ use super::album_operations::{
     select_photo_in_album_display_slot,
 };
 use super::photo_album_types::{
-    ActivePhotoAlbum, DeletePhotoRequest, EnlargedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS,
-    MAX_PHOTO_ALBUM_SPREADS, PHOTO_ALBUM_PAGE_SIZE, PhotoAlbumCapacityPages, PhotoAlbumChoiceRow,
-    PhotoAlbumPage, PhotoCameraRoll, PhotoCameraRollRow, PhotoMove, PhotoMoveTarget,
-    PhotoPointerDrag, SelectedAlbumPhoto, WorldActivePhotoAlbum, WorldPhotoCameraRoll,
+    ActivePhotoAlbum, DeletePhotoRequest, EnlargedAlbumPhoto, PhotoAlbumCapacityPages,
+    PhotoAlbumChoiceRow, PhotoAlbumPage, PhotoCameraRoll, PhotoCameraRollRow, PhotoMove,
+    PhotoMoveTarget, PhotoPointerDrag, SelectedAlbumPhoto, WorldActivePhotoAlbum,
+    WorldPhotoCameraRoll, INITIAL_PHOTO_ALBUM_SPREADS, MAX_PHOTO_ALBUM_SPREADS,
+    PHOTO_ALBUM_PAGE_SIZE,
 };
-use super::photo_configuration::{PhotoConfiguration, PhotoConfigurationSource};
+use super::photo_configuration::{
+    profile_album_spreads, PhotoConfiguration, PhotoConfigurationSource,
+};
+use openzt2_interface_state::persistence::profile_types::ProfileOptions;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPhotoActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
@@ -130,12 +134,12 @@ pub(super) fn route_photo_ui_actions(
         Query<&mut PhotoAlbumCapacityPages, With<PhotoAlbum>>,
         Query<&mut PhotoMoveTarget>,
     ),
-    (members, mut orders, configuration, configurations, album_options): (
+    (members, mut orders, configuration, configurations, profile): (
         Query<&AlbumPhotos>,
         Query<&mut PhotoAlbumOrder>,
         Res<PhotoConfigurationSource>,
         Res<Assets<PhotoConfiguration>>,
-        Option<Res<super::PhotoAlbumProfileOptions>>,
+        Option<Res<ProfileOptions>>,
     ),
     mut allocators: Query<&mut PersistentIdAllocator>,
     mut deletions: MessageWriter<DeletePhotoRequest>,
@@ -145,9 +149,9 @@ pub(super) fn route_photo_ui_actions(
     active_photo_modes: Query<(Entity, &ImmersiveCamera), With<PhotoControl>>,
     mut commands: Commands,
 ) {
-    let default_album_spreads = album_options
-        .as_ref()
-        .and_then(|options| options.get_default_spreads())
+    let default_album_spreads = profile
+        .as_deref()
+        .and_then(profile_album_spreads)
         .or_else(|| {
             configurations
                 .get(&configuration.0)

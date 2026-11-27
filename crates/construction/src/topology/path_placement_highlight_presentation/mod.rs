@@ -40,7 +40,7 @@ use openzt2_zoo_state::{
 
 #[derive(Resource)]
 pub(super) struct PathPlacementHighlightAssets {
-    rules: Handle<PathPlacementHighlightAsset>,
+    pub(super) rules: Handle<PathPlacementHighlightAsset>,
     materials: HashMap<(bevy::asset::AssetId<Image>, bool), Handle<StandardMaterial>>,
 }
 
@@ -146,6 +146,7 @@ pub(super) fn present_ground_path_placement_highlights(
         };
         let valid = validate_path_construction_cells(
             cells.clone(),
+            |cell| *cell,
             definition,
             &index,
             *grid,

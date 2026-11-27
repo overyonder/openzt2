@@ -4,6 +4,8 @@ use bevy::prelude::*;
 use openzt2_game_data::behavior::action::modification::{
     BehaviorFact, BehaviorFactModificationOperation,
 };
+use openzt2_game_data::AssetId;
+use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     GuestTourDepartureGate, RunBehaviorFactModifications, RunningBehaviorInstruction,
@@ -59,9 +61,11 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
     mut experiences: Query<&mut GuestSurveyExperience>,
     mut food_purchases: Query<&mut GuestFoodPurchaseCounts>,
     mut containers: Query<&mut FacilityContainedWaste>,
+    mut fossil_centers: Query<&mut AuthoredFloatAttributes>,
     mut caffeine_flags: Query<&mut CaffeineFlags>,
     mut commands: Commands,
 ) {
+    let bone_level = AssetId::from_key("f_bonelevel");
     for (actor, (task, instruction, running_action), mut random) in
         std::iter::once(tasks.get_mut(activation.entity)).flatten()
     {
@@ -102,6 +106,7 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                         | BehaviorFact::AteFavoriteFood
                         | BehaviorFact::AteNonFavoriteFood
                         | BehaviorFact::TrashLevel
+                        | BehaviorFact::BoneLevel
                         | BehaviorFact::CaffeineMode
                         | BehaviorFact::DeCaffeineMode
                 )
@@ -113,6 +118,11 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                 .is_some_and(|subject| {
                     if modification.modified_fact == BehaviorFact::TrashLevel {
                         return containers.contains(subject);
+                    }
+                    if modification.modified_fact == BehaviorFact::BoneLevel {
+                        return fossil_centers
+                            .get(subject)
+                            .is_ok_and(|attributes| attributes.get(bone_level).is_some());
                     }
                     if caffeine {
                         return needs.contains(subject) && caffeine_flags.contains(subject);
@@ -151,6 +161,17 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                     random.0.range_u32(count).unwrap_or(0)
                 })
                 .expect("scalar context was validated before application");
+            if modification.modified_fact == BehaviorFact::BoneLevel {
+                let mut attributes = fossil_centers
+                    .get_mut(subject)
+                    .expect("validated fossil center");
+                let previous = attributes.get(bone_level).expect("validated bone level");
+                let next = previous + authored_delta as f32 / 65_536.0;
+                if next != previous {
+                    attributes.set(bone_level, next);
+                }
+                continue;
+            }
             if modification.modified_fact == BehaviorFact::ViewAnimals {
                 if let Ok(mut need) = viewing_needs.get_mut(subject) {
                     need.add_source_delta(authored_delta);

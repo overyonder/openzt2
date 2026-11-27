@@ -1,8 +1,8 @@
 use openzt2_game_data::{
-    AssetId,
     world_definitions::biomes_locations_and_details::{
         BiomeAutomaticPlacementChoice, BiomeAutomaticPlacementRange,
     },
+    AssetId,
 };
 
 use super::{

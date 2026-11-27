@@ -7,7 +7,9 @@ use openzt2_zoo_state::behavior_task_execution_types::abandon_behavior_task_for_
 use openzt2_zoo_state::maintenance::maintenance_types::AppliedHabitatWasteCleanup;
 
 use super::{
-    staff_job_types::{JobClaim, StaffJob, StaffJobBehaviorTask, StaffJobCancellationPending},
+    staff_job_types::{
+        JobClaim, StaffJob, StaffJobBehaviorTask, StaffJobCancellationPending, StaffJobTarget,
+    },
     staff_lifecycle_messages::{CancelStaffJobRequest, StaffJobCancelled, StaffJobCompleted},
 };
 use openzt2_zoo_state::behavior_task_execution_types::AppliedBehaviorLitterKill;
@@ -48,22 +50,39 @@ pub fn cancel_requested_jobs_and_jobs_with_invalid_world_relations(
     jobs: Query<(
         Entity,
         &StaffJob,
+        Option<&StaffJobTarget>,
+        &WorldMember,
         Option<&JobClaim>,
         Option<&StaffJobBehaviorTask>,
         Option<&AppliedHabitatWasteCleanup>,
         Option<&AppliedBehaviorLitterKill>,
         Has<StaffJobCancellationPending>,
     )>,
-    world_members: Query<(), With<WorldMember>>,
+    world_members: Query<&WorldMember>,
     dead_animals: Query<(), With<Dead>>,
     mut cancelled_jobs: MessageWriter<StaffJobCancelled>,
     mut explicitly_requested_jobs: Local<HashSet<Entity>>,
 ) {
     explicitly_requested_jobs.clear();
     explicitly_requested_jobs.extend(cancellation_requests.read().map(|request| request.job));
-    for (job_entity, job, claim, behavior, applied_cleanup, applied_litter, cancelling) in &jobs {
-        let target_is_live = world_members.get(job.target).is_ok()
-            && !(job.kind == Some(StaffJobKind::Treat) && dead_animals.contains(job.target));
+    for (
+        job_entity,
+        job,
+        target,
+        job_world,
+        claim,
+        behavior,
+        applied_cleanup,
+        applied_litter,
+        cancelling,
+    ) in &jobs
+    {
+        let target = target.map(|target| target.0).filter(|&target| {
+            world_members
+                .get(target)
+                .is_ok_and(|member| member.root == job_world.root)
+                && !(job.kind == Some(StaffJobKind::Treat) && dead_animals.contains(target))
+        });
         let target_was_consumed = claim.is_some()
             && behavior.is_some_and(|behavior| match job.kind {
                 Some(StaffJobKind::CleanHabitat) => applied_cleanup
@@ -73,16 +92,16 @@ pub fn cancel_requested_jobs_and_jobs_with_invalid_world_relations(
                 }
                 _ => false,
             });
-        if (target_is_live || target_was_consumed)
+        if (target.is_some() || job.point.is_some() || target_was_consumed)
             && !cancelling
             && !explicitly_requested_jobs.contains(&job_entity)
         {
             continue;
         }
-        if let Some(kind) = job.kind.filter(|_| target_is_live) {
+        if let (Some(kind), Some(target)) = (job.kind, target) {
             cancelled_jobs.write(StaffJobCancelled {
                 kind,
-                target: job.target,
+                target,
                 token: job.token,
             });
         }

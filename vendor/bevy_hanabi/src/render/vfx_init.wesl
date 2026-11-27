@@ -77,7 +77,7 @@ fn find_location_from_particle(update_particle_index: u32) -> EffectLocation {
 @group(1) @binding(0) var<storage, read_write> particle_buffer : ParticleBuffer;
 @group(1) @binding(1) var<storage, read_write> indirect_buffer : IndirectBuffer;
 @if(READ_PARENT_PARTICLE)
-@group(1) @binding(2) var<storage, read> parent_particle_buffer : ParentParticleBuffer;
+@group(1) @binding(2) var<storage, read_write> parent_particle_buffer : ParentParticleBuffer;
 
 // "spawner" group @2
 @group(2) @binding(0) var<storage, read> spawners : array<Spawner>;
@@ -146,10 +146,29 @@ fn main(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
         return;
     }
 
+    let group_offset = (*spawner).group_budget_offset;
+    if group_offset != 0u {
+        let group_budget = &spawn_inputs.points[group_offset - 1u].group_budget;
+        var remaining = atomicLoad(group_budget);
+        loop {
+            if remaining == 0u {
+                return;
+            }
+            let reserve = atomicCompareExchangeWeak(group_budget, remaining, remaining - 1u);
+            if reserve.exchanged {
+                break;
+            }
+            remaining = reserve.old_value;
+        }
+    }
+
     if sim_params.particle_budget != 0xffffffffu {
         var remaining = atomicLoad(&spawn_inputs.remaining_budget);
         loop {
             if remaining == 0u {
+                if group_offset != 0u {
+                    atomicAdd(&spawn_inputs.points[group_offset - 1u].group_budget, 1u);
+                }
                 return;
             }
             let reserve = atomicCompareExchangeWeak(&spawn_inputs.remaining_budget, remaining, remaining - 1u);

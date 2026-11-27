@@ -32,7 +32,7 @@ use openzt2_zoo_state::{
 };
 
 use super::fossil_definition_index::FossilDefinitionIndex;
-use crate::fossil_site_types::{
+use openzt2_zoo_state::extinct_animals::fossil_recovery_types::{
     DigPit, FossilSiteKind, RequestedFossilPuzzle, SetFossilPuzzleToFind,
 };
 

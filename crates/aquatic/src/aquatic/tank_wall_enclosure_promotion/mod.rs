@@ -16,7 +16,9 @@ use openzt2_zoo_state::aquatic::aquatic_simulation_types::{
     PendingTankRestoration, Tank, TankEnvironment, TankGeometry, TankWallTopHeight, TankWater, WaterQuality,
 };
 use openzt2_zoo_state::aquatic::tank_wall_ground_sampling::TankWallGroundSampling;
-use openzt2_zoo_state::habitat::habitat_types::{HabitatIndex, HabitatRegion};
+use openzt2_zoo_state::habitat::habitat_cell_ownership_changes::HabitatCellOwnershipChanged;
+use openzt2_zoo_state::habitat::habitat_types::{HabitatCellOf, HabitatIndex, HabitatRegion};
+use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_topology_cell;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, TopologyNode};
 
@@ -141,7 +143,11 @@ fn read_tank_wall_boundary(
 pub(super) fn promote_or_restore_habitats_enclosed_by_tank_walls(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    habitat_index: Single<Ref<HabitatIndex>>,
+    (habitat_index, cell_owners, mut habitat_changes): (
+        Single<(Entity, Ref<HabitatIndex>)>,
+        Query<&HabitatCellOf>,
+        Option<MessageReader<HabitatCellOwnershipChanged>>,
+    ),
     terrain_index: Single<Ref<TerrainIndex>>,
     mut terrain_assets: MessageReader<AssetEvent<TerrainAsset>>,
     changed_habitats: Query<Entity, Changed<HabitatRegion>>,
@@ -164,7 +170,7 @@ pub(super) fn promote_or_restore_habitats_enclosed_by_tank_walls(
     (ground, boundaries): (TankWallGroundSampling, HabitatBoundaryQueries),
     mut commands: Commands,
 ) {
-    let habitat_index = habitat_index.into_inner();
+    let (world_root, habitat_index) = habitat_index.into_inner();
     let terrain_index = terrain_index.into_inner();
     let terrain_loaded = terrain_assets.read().any(|event| {
         matches!(
@@ -184,15 +190,22 @@ pub(super) fn promote_or_restore_habitats_enclosed_by_tank_walls(
     candidates.extend(pending_habitats.iter().filter_map(|(habitat, pending)| {
         (inputs_changed || pending.restore_next).then_some(habitat)
     }));
+    let ownership_changed = habitat_changes.as_mut().is_some_and(|changes| {
+        let changed = changes.read().any(|change| change.root == world_root);
+        changes.clear();
+        changed
+    });
     let resolve_changed_restorations =
-        habitat_index.is_changed() || !changed_restorations.is_empty();
+        habitat_index.is_changed() || ownership_changed || !changed_restorations.is_empty();
     if candidates.is_empty() && !resolve_changed_restorations {
         return;
     }
     let mut restorations: EntityHashMap<(Entity, &PendingTankRestoration, bool)> =
         EntityHashMap::default();
     for (entity, pending, world) in &pending_restorations {
-        let Some(habitat) = habitat_index.habitat_for_topology_cell(pending.seed_cell) else {
+        let Some(habitat) =
+            locate_habitat_at_topology_cell(&habitat_index, &cell_owners, pending.seed_cell)
+        else {
             continue;
         };
         if habitats

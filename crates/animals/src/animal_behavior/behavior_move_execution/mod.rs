@@ -24,7 +24,7 @@ use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::habitat::{
     habitat_membership_and_containment::locate_habitat_at_world_position,
-    habitat_types::{HabitatIndex, HabitatMember, HabitatRegion},
+    habitat_types::{HabitatCellOf, HabitatIndex, HabitatMember, HabitatRegion},
 };
 use openzt2_zoo_state::locomotion::locomotion_types::{
     ActiveTerrainDerivedNavigationGraph, NavFlags,
@@ -43,6 +43,7 @@ pub(super) struct KeeperLandApproach<'w, 's> {
         ),
     >,
     regions: Query<'w, 's, &'static HabitatRegion>,
+    cell_owners: Query<'w, 's, &'static HabitatCellOf>,
     animals: Query<
         'w,
         's,
@@ -96,12 +97,17 @@ pub(super) fn start_current_supported_behavior_move_actions(
         Query<&mut Transform>,
         Query<&mut openzt2_zoo_state::locomotion::locomotion_types::SwimLayer>,
     ),
-    (programs, continuations, guests, entrances, grids): (
+    (programs, continuations, guests, entrances, grids, token_points): (
         Res<Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>,
         openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationFrames,
         Query<(), With<openzt2_zoo_state::guests::guest_simulation_types::Guest>>,
         Query<&openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::ZooEntrance>,
         Query<&openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid>,
+        Query<(
+            &openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorTokenContext,
+            &openzt2_zoo_state::animal_behavior::behavior_token_types::ClaimedBehaviorSelfToken,
+            &ChildOf,
+        )>,
     ),
 ) {
     for (
@@ -128,7 +134,8 @@ pub(super) fn start_current_supported_behavior_move_actions(
         }
         let move_action = &running_action.0;
         let definitions = active_world_definitions.get(&world_definition_assets);
-        if !ambient && !animal_actors.contains(actor)
+        if !ambient
+            && !animal_actors.contains(actor)
             && !staff_mode_has_authored_locomotion(
                 move_action.locomotion_speed,
                 staff_role,
@@ -138,34 +145,38 @@ pub(super) fn start_current_supported_behavior_move_actions(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         }
-        let Some(target) = travel_sites.for_actor(actor, &behavior_task) else {
+        let placement = travel_sites.delivery_point(actor, &behavior_task);
+        let token_point = behavior_task
+            .object
+            .and_then(|object| token_points.get(object).ok())
+            .filter(|(_, claim, recipient)| {
+                claim.execution_id == behavior_task.execution_id && recipient.parent() == actor
+            })
+            .and_then(|(context, _, _)| context.point);
+        let target = placement.or(behavior_task.target());
+        let target_transform = target.and_then(|target| entity_global_transforms.get(target).ok());
+        let point_from_token = placement.is_none() && token_point.is_some();
+        let destination = if let Some(point) = token_point.filter(|_| point_from_token) {
+            Some(point)
+        } else {
+            target
+                .zip(target_transform)
+                .and_then(|(target, transform)| {
+                    let named_node_position = move_action.target_node_name.as_deref().map(|name| {
+                        authored_attachment_transforms
+                            .pose(target, name)
+                            .map(|pose| pose.translation())
+                    });
+                    resolve_behavior_move_destination(transform.translation(), named_node_position)
+                        .ok()
+                })
+        };
+        let Some(mut destination) = destination else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
-        };
-        let Some(target_transform) = entity_global_transforms.get(target).ok() else {
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            continue;
-        };
-        let named_node_position = move_action
-            .target_node_name
-            .as_deref()
-            .map(|target_node_name| {
-                authored_attachment_transforms
-                    .pose(target, target_node_name)
-                    .map(|transform| transform.translation())
-            });
-        let mut destination = match resolve_behavior_move_destination(
-            target_transform.translation(),
-            named_node_position,
-        ) {
-            Ok(destination) => destination,
-            Err(BehaviorMoveDestinationResolutionFailure::MissingTargetNode) => {
-                mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-                continue;
-            }
         };
         if let Ok(water) = water_targets.get(actor) {
-            if water.region == target
+            if !point_from_token && Some(water.region) == target
                 && matches!(
                     water.kind,
                     openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::NaturalWaterTargetKind::Surface { .. }
@@ -178,12 +189,14 @@ pub(super) fn start_current_supported_behavior_move_actions(
                 destination = water.water;
             }
         }
-        if move_action.target_node_name.is_none()
-            && staff_role
-                .and_then(|role| definitions.and_then(|view| view.find_staff(role.0)))
-                .is_some_and(|staff| staff.role == StaffRoleKind::Keeper)
-            && land_approach.animals.contains(target)
-        {
+        if let Some(target) = target.filter(|target| {
+            !point_from_token
+                && move_action.target_node_name.is_none()
+                && staff_role
+                    .and_then(|role| definitions.and_then(|view| view.find_staff(role.0)))
+                    .is_some_and(|staff| staff.role == StaffRoleKind::Keeper)
+                && land_approach.animals.contains(*target)
+        }) {
             let approach = &mut land_approach;
             let Ok((graph, habitats, grid)) = approach.world_navigation.get(member.root) else {
                 continue;
@@ -234,8 +247,12 @@ pub(super) fn start_current_supported_behavior_move_actions(
                     &mut approach.candidates,
                 );
                 let Some(shore) = approach.candidates.iter().copied().find(|position| {
-                    locate_habitat_at_world_position(habitats, position.xz(), *grid)
-                        == Some(habitat)
+                    locate_habitat_at_world_position(
+                        habitats,
+                        &approach.cell_owners,
+                        position.xz(),
+                        *grid,
+                    ) == Some(habitat)
                 }) else {
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                     continue;
@@ -243,7 +260,8 @@ pub(super) fn start_current_supported_behavior_move_actions(
                 destination = shore;
             }
         }
-        if move_action.depth_below_surface_m.is_some() || move_action.height_above_floor_m.is_some() {
+        if move_action.depth_below_surface_m.is_some() || move_action.height_above_floor_m.is_some()
+        {
             let point = destination.xz();
             if let (Some(surface), Some(floor)) = (
                 terrain.water_surface_height(member.root, point),
@@ -257,14 +275,21 @@ pub(super) fn start_current_supported_behavior_move_actions(
                     } else {
                         destination.y
                     };
-                    if ambient && target == actor {
+                    if ambient && target == Some(actor) {
                         use openzt2_zoo_state::locomotion::locomotion_types::SwimLayer;
                         let Ok(mut pose) = poses.get_mut(actor) else {
-                            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                            mark_behavior_task_for_failure_and_stop_navigation(
+                                actor,
+                                &mut commands,
+                            );
                             continue;
                         };
                         pose.translation.y = destination.y;
-                        let layer = if destination.y < surface { SwimLayer::Submerged } else { SwimLayer::Surface };
+                        let layer = if destination.y < surface {
+                            SwimLayer::Submerged
+                        } else {
+                            SwimLayer::Surface
+                        };
                         if let Ok(mut current) = swim_layers.get_mut(actor) {
                             current.set_if_neq(layer);
                         } else {
@@ -285,29 +310,35 @@ pub(super) fn start_current_supported_behavior_move_actions(
             continue;
         };
         let request_id = generation.advance();
-        let departure_entrance = entrances.get(target).ok().filter(|_| {
-            move_action.target_node_name.is_none() && guests.contains(actor) && {
-                let (document, declaration) = if behavior_task.depth == 0 {
-                    (&behavior_task.document, behavior_task.declaration)
-                } else if let Some(root) = continuations.frames(actor).next() {
-                    (&root.document, root.declaration)
-                } else {
-                    (&behavior_task.document, behavior_task.declaration)
-                };
-                programs
-                    .get(document)
-                    .and_then(|document| document.behavior_task_at_index(declaration))
-                    .is_some_and(|task| {
-                        task.scores.iter().any(|score| {
-                            matches!(
+        let departure_entrance = target
+            .and_then(|target| entrances.get(target).ok())
+            .zip(target_transform)
+            .filter(|_| {
+                !point_from_token
+                    && move_action.target_node_name.is_none()
+                    && guests.contains(actor)
+                    && {
+                        let (document, declaration) = if behavior_task.depth == 0 {
+                            (&behavior_task.document, behavior_task.declaration)
+                        } else if let Some(root) = continuations.frames(actor).next() {
+                            (&root.document, root.declaration)
+                        } else {
+                            (&behavior_task.document, behavior_task.declaration)
+                        };
+                        programs
+                            .get(document)
+                            .and_then(|document| document.behavior_task_at_index(declaration))
+                            .is_some_and(|task| {
+                                task.scores.iter().any(|score| {
+                                    matches!(
                                 score,
                                 openzt2_game_data::behavior::score::BehaviorScore::LeaveZooPressure
                             )
-                        })
-                    })
-            }
-        });
-        if let Some(entrance) = departure_entrance {
+                                })
+                            })
+                    }
+            });
+        if let Some((entrance, target_transform)) = departure_entrance {
             destination = definitions
                 .and_then(|definitions| definitions.guest_generation())
                 .map_or(entrance.exit, |policy| {
@@ -318,7 +349,11 @@ pub(super) fn start_current_supported_behavior_move_actions(
                 grid.width != 0 && grid.height != 0 && grid.cell_of(destination.xz()).is_none()
             }) {
                 commands.entity(actor).insert(
-                    openzt2_zoo_state::locomotion::locomotion_types::EntranceNavigationConnection { request_id, gate: entrance.exit, inbound: false }
+                    openzt2_zoo_state::locomotion::locomotion_types::EntranceNavigationConnection {
+                        request_id,
+                        gate: entrance.exit,
+                        inbound: false,
+                    },
                 );
             }
         }

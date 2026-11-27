@@ -1,7 +1,7 @@
 use openzt2_zoo_state::locomotion::locomotion_types::SpatialCell;
 use openzt2_zoo_state::transport_tours::transport_topology_types::{TrackStart, TrackEnd, TrackSegment};
 use openzt2_construction::construction::transport_spatial_picking::TransportSpatialPicking;
-use super::ground_track_policy::{GroundTrackPolicyAsset, TrackTerrain};
+use super::ground_track_policy::TrackTerrain;
 use openzt2_zoo_state::transport_tours::transport_highlight_style::TransportHighlightStyle;
 use openzt2_zoo_state::transport_tours::transport_pick_bounds::TransportPickBounds;
 use openzt2_zoo_state::transport_tours::transport_topology_types::{TrackRoute, TrackIncidence};
@@ -386,7 +386,6 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
         &mut Transform,
     )>,
     terrain: TrackTerrain,
-    ground_track: GroundTrackPolicyAsset,
     mut terrain_changed: MessageReader<
         openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged,
     >,
@@ -395,12 +394,13 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
     else {
         return;
     };
+    let grade_changed = terrain_changed.read().next().is_some();
+    terrain_changed.clear();
     let changed = tool.is_changed()
         || policy.is_changed()
         || definitions.is_changed()
         || active_definitions.is_changed()
-        || ground_track.is_changed()
-        || terrain_changed.read().count() != 0;
+        || grade_changed;
     let (
         Ok((cursor, world_member, hover)),
         Ok((mut preview, mut track_preview, mut transform)),
@@ -509,17 +509,20 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
             &path_points,
         );
         let across = selected_kind != TransportationTrackKind::Ground
-            || ground_track.get().is_some_and(|ground| {
-                terrain.across_grade_allowed(
-                    world_member.root,
-                    &path_points,
-                    [
-                        stations.contains(track_preview.from_endpoint),
-                        to_station.is_some_and(|to| stations.contains(to)),
-                    ],
-                    ground,
-                )
-            });
+            || track_definition
+                .ground_track_physics
+                .as_ref()
+                .is_none_or(|ground| {
+                    terrain.across_grade_allowed(
+                        world_member.root,
+                        &path_points,
+                        [
+                            stations.contains(track_preview.from_endpoint),
+                            to_station.is_some_and(|to| stations.contains(to)),
+                        ],
+                        ground,
+                    )
+                });
         let gentle = track_piece_chain_turns_are_gentle(from_heading, &path_points, to_heading);
         let validity = if !gentle {
             PlacementValidity::Invalid(PlacementFailure::InvalidTopology)

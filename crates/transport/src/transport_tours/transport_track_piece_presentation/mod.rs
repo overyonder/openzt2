@@ -1,4 +1,4 @@
-use super::ground_track_policy::{GroundTrackPaintSource, GroundTrackPolicyAsset};
+use super::ground_track_policy::{GroundTrackPaintAsset, GroundTrackPaintSource};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackRouteItem;
 use openzt2_zoo_state::transport_tours::transport_topology_types::{
@@ -385,7 +385,7 @@ pub(super) fn invalidate_ground_track_surface_drawings(
     mut commands: Commands,
     (graphics, policy, active, definition_assets): (
         Res<GraphicsSettings>,
-        GroundTrackPolicyAsset,
+        GroundTrackPaintAsset,
         Res<WorldDefinitions>,
         Res<Assets<WorldDefinitionAsset>>,
     ),
@@ -1061,7 +1061,7 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
     authored_materials: Res<Assets<MaterialAsset>>,
     graphics_settings: Res<GraphicsSettings>,
     (ground_tracks, mut images, mut paint_cache, mut image_events): (
-        GroundTrackPolicyAsset,
+        GroundTrackPaintAsset,
         ResMut<Assets<Image>>,
         Local<GroundTrackPaintImages>,
         MessageReader<AssetEvent<Image>>,
@@ -1353,11 +1353,10 @@ mod tests;
 
 #[derive(Component)]
 #[relationship(relationship_target = TransportConstructionMarkers)]
-pub(super) struct TransportConstructionMarkerOf {
-    #[relationship]
-    owner: Entity,
-    ordinal: u8,
-}
+pub(super) struct TransportConstructionMarkerOf(Entity);
+
+#[derive(Component, PartialEq, Eq)]
+pub(super) struct TransportConstructionMarkerOrdinal(u8);
 
 #[derive(Component)]
 #[relationship_target(relationship = TransportConstructionMarkerOf)]
@@ -1392,7 +1391,10 @@ pub(super) fn bind_authored_transport_construction_marker_roles(
     >,
     children: Query<&Children>,
     parents: Query<&ChildOf>,
-    mut roles: Query<&mut TransportConstructionMarkerOf>,
+    mut roles: Query<(
+        &TransportConstructionMarkerOf,
+        &mut TransportConstructionMarkerOrdinal,
+    )>,
 ) {
     let find_owner = |entity| {
         parents
@@ -1401,12 +1403,13 @@ pub(super) fn bind_authored_transport_construction_marker_roles(
     };
     let mut affected: bevy::ecs::entity::EntityHashSet = added_owners.iter().collect();
     for entity in changed_nodes {
-        if let Ok(role) = roles.get(entity) {
-            affected.insert(role.owner);
+        if let Ok((role, _)) = roles.get(entity) {
+            affected.insert(role.0);
             if find_owner(entity).is_none() {
-                commands
-                    .entity(entity)
-                    .remove::<TransportConstructionMarkerOf>();
+                commands.entity(entity).remove::<(
+                    TransportConstructionMarkerOf,
+                    TransportConstructionMarkerOrdinal,
+                )>();
             }
         }
         affected.extend(find_owner(entity));
@@ -1434,29 +1437,27 @@ pub(super) fn bind_authored_transport_construction_marker_roles(
             if let Some(ordinal) = ordinal {
                 authored.push((entity, ordinal as u8));
             } else if roles.contains(entity) {
-                commands
-                    .entity(entity)
-                    .remove::<TransportConstructionMarkerOf>();
+                commands.entity(entity).remove::<(
+                    TransportConstructionMarkerOf,
+                    TransportConstructionMarkerOrdinal,
+                )>();
             }
         }
         let paired = station && authored.iter().any(|&(_, ordinal)| ordinal == 3);
         for (entity, ordinal) in authored {
             let ordinal = if paired { ordinal / 2 } else { ordinal };
-            if let Ok(mut role) = roles.get_mut(entity) {
-                if role.owner == owner {
-                    if role.ordinal != ordinal {
-                        role.ordinal = ordinal;
-                    }
-                    continue;
+            if let Ok((role, mut current)) = roles.get_mut(entity) {
+                current.set_if_neq(TransportConstructionMarkerOrdinal(ordinal));
+                if role.0 != owner {
+                    commands
+                        .entity(entity)
+                        .insert(TransportConstructionMarkerOf(owner));
                 }
-                // Changing the owner updates both ends of the relationship.
-                commands
-                    .entity(entity)
-                    .insert(TransportConstructionMarkerOf { owner, ordinal });
             } else {
-                commands
-                    .entity(entity)
-                    .insert(TransportConstructionMarkerOf { owner, ordinal });
+                commands.entity(entity).insert((
+                    TransportConstructionMarkerOf(owner),
+                    TransportConstructionMarkerOrdinal(ordinal),
+                ));
             }
         }
     }
@@ -1488,14 +1489,20 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
         ),
     >,
     route_pieces: Query<&TrackPieces>,
-    changed_roles: Query<&TransportConstructionMarkerOf, Changed<TransportConstructionMarkerOf>>,
+    changed_roles: Query<
+        &TransportConstructionMarkerOf,
+        Or<(
+            Changed<TransportConstructionMarkerOf>,
+            Changed<TransportConstructionMarkerOrdinal>,
+        )>,
+    >,
     mut joints: MessageReader<TransportTrackJointChanged>,
     routes: Query<TrackRoute>,
     incidence: TrackIncidence,
     junctions: Query<(), With<TransportTrackJunction>>,
     mut markers: Query<
         (
-            &TransportConstructionMarkerOf,
+            &TransportConstructionMarkerOrdinal,
             &mut Visibility,
             &mut Transform,
         ),
@@ -1503,7 +1510,7 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
     >,
 ) {
     let mut dirty: bevy::ecs::entity::EntityHashSet = changed_pieces.iter().collect();
-    dirty.extend(changed_roles.iter().map(|role| role.owner));
+    dirty.extend(changed_roles.iter().map(|role| role.0));
     dirty.extend(
         joints
             .read()
@@ -1540,7 +1547,7 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
             let Ok((role, mut visibility, mut transform)) = markers.get_mut(child) else {
                 continue;
             };
-            let shown = if role.ordinal == 0 {
+            let shown = if role.0 == 0 {
                 open_end
                     .inspect(|end| {
                         let local = piece_transform
@@ -1552,7 +1559,7 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
                         }
                     })
                     .is_some()
-            } else if role.ordinal == 1 {
+            } else if role.0 == 1 {
                 false
             } else {
                 continue;
@@ -1592,18 +1599,24 @@ pub(super) fn show_construction_markers_at_unconnected_station_ends(
             )>,
         ),
     >,
-    changed_roles: Query<&TransportConstructionMarkerOf, Changed<TransportConstructionMarkerOf>>,
+    changed_roles: Query<
+        &TransportConstructionMarkerOf,
+        Or<(
+            Changed<TransportConstructionMarkerOf>,
+            Changed<TransportConstructionMarkerOrdinal>,
+        )>,
+    >,
     mut joints: MessageReader<TransportTrackJointChanged>,
     routes: Query<TrackRoute>,
     incidence: TrackIncidence,
-    mut markers: Query<(&TransportConstructionMarkerOf, &mut Visibility)>,
+    mut markers: Query<(&TransportConstructionMarkerOrdinal, &mut Visibility)>,
 ) {
     let definitions_changed = definition_assets.is_changed() || active_definitions.is_changed();
     let Some(definitions) = active_definitions.get(&definition_assets) else {
         return;
     };
     let mut dirty: bevy::ecs::entity::EntityHashSet = changed_stations.iter().collect();
-    dirty.extend(changed_roles.iter().map(|role| role.owner));
+    dirty.extend(changed_roles.iter().map(|role| role.0));
     dirty.extend(joints.read().map(|joint| joint.0));
     if definitions_changed {
         dirty.extend(stations.iter().map(|(entity, ..)| entity));
@@ -1631,7 +1644,7 @@ pub(super) fn show_construction_markers_at_unconnected_station_ends(
             let Ok((role, mut visibility)) = markers.get_mut(marker) else {
                 continue;
             };
-            let endpoint = role.ordinal;
+            let endpoint = role.0;
             let open_end = connected.get(usize::from(endpoint)).filter(|&&used| !used)
                 .and_then(|_| {
                     crate::transport_tours::topology::calculate_authored_transport_station_endpoint_world_position(

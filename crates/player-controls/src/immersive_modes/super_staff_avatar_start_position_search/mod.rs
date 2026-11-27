@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
 use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
-use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
+use openzt2_zoo_state::habitat::habitat_types::{HabitatCellOf, HabitatIndex};
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
@@ -25,6 +25,7 @@ pub(super) struct SuperStaffAvatarStartSurface<'w, 's> {
     terrain_assets: Res<'w, Assets<TerrainAsset>>,
     terrain_chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
     habitats: Query<'w, 's, (&'static HabitatIndex, &'static TopologyGrid)>,
+    cell_owners: Query<'w, 's, &'static HabitatCellOf>,
 }
 
 impl SuperStaffAvatarStartSurface<'_, '_> {
@@ -37,7 +38,7 @@ impl SuperStaffAvatarStartSurface<'_, '_> {
 
     fn is_inside_habitat(&self, root: Entity, world_xz: Vec2) -> bool {
         self.habitats.get(root).is_ok_and(|(index, grid)| {
-            locate_habitat_at_world_position(index, world_xz, *grid).is_some()
+            locate_habitat_at_world_position(index, &self.cell_owners, world_xz, *grid).is_some()
         })
     }
 

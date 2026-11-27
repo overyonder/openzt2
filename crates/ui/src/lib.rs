@@ -55,7 +55,6 @@ pub mod authored_ui_text_layout_presentation;
 use openzt2_interface_state::ui::authored_ui_visual_types;
 pub mod authored_visual_layer_draw_order;
 pub mod authored_wheel_scroll;
-pub mod authored_wheel_scroll_diagnostic_types;
 mod authored_window_interaction;
 mod authored_zoo_message_lists;
 mod controller_ui_action_routing;
@@ -488,13 +487,15 @@ impl Plugin for GameUiPlugin {
             modal_render_diagnostics::trace_changed_modal_render_state
                 .after(bevy::ui::UiSystems::PostLayout),
         );
-        app.sub_app_mut(bevy::render::RenderApp).add_systems(
-            bevy::render::ExtractSchedule,
-            (
-                authored_visual_layer_draw_order::place_authored_aspect_draws_in_owner_stack_slot,
-                authored_text_physical_glyph_projection::preserve_authored_font_aspect_in_extracted_text_draws,
-            ).after(bevy::ui_render::RenderUiSystems::ExtractInlineImages),
-        );
+        if let Some(render) = app.get_sub_app_mut(bevy::render::RenderApp) {
+            render.add_systems(
+                bevy::render::ExtractSchedule,
+                (
+                    authored_visual_layer_draw_order::place_authored_aspect_draws_in_owner_stack_slot,
+                    authored_text_physical_glyph_projection::preserve_authored_font_aspect_in_extracted_text_draws,
+                ).after(bevy::ui_render::RenderUiSystems::ExtractInlineImages),
+            );
+        }
     }
 }
 

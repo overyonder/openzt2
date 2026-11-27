@@ -194,6 +194,10 @@ pub struct RunBehaviorFeedback(pub action::feedback::BehaviorFeedbackAction);
 #[derive(Component)]
 pub struct RunBehaviorViewAnimals(pub action::view_animals::BehaviorViewAnimalsAction);
 
+/// Tour boarding stations this guest has visited.
+#[derive(Component, Default)]
+pub struct GuestVisitedTourStations(pub bevy::ecs::entity::EntityHashSet);
+
 /// Source tour need and the current zoo's tour limit for departure.
 #[derive(Component, Clone, Copy, PartialEq)]
 pub struct GuestTourDepartureGate {
@@ -245,19 +249,6 @@ impl BehaviorViewingProgress {
 #[derive(Component)]
 pub struct RunBehaviorViewEvent(pub action::view_event::BehaviorViewEventAction);
 
-#[derive(EntityEvent)]
-pub struct AuthoredRadiusViewEvent {
-    #[event_target]
-    pub recipient: Entity,
-    pub source: Entity,
-    pub view_key: AssetId,
-    pub education: f32,
-    pub donation: f32,
-    pub feedback: Option<action::feedback::BehaviorFeedbackAction>,
-    pub source_target: Option<Entity>,
-    pub source_object: Option<Entity>,
-}
-
 /// A guest thought delivered by a view event. The guest owns it as a child.
 #[derive(Component)]
 pub struct AuthoredViewThought {
@@ -299,14 +290,6 @@ pub struct RunBehaviorEconomy {
     pub cost_override: Option<f32>,
     pub tracker: Option<AssetId>,
     pub general: bool,
-    pub keeper_refill: Option<BehaviorRefillContinuation>,
-}
-
-#[derive(Clone, Copy)]
-pub struct BehaviorRefillContinuation {
-    pub phase: BehaviorTaskExecutionPhase,
-    pub action_after_refill: usize,
-    pub amount_q16: i32,
 }
 
 /// A world-owned authored account tracker, attached to the active world.
@@ -433,6 +416,13 @@ pub struct RunBehaviorDockTankWall(pub action::specialized::BehaviorDockTankWall
 
 #[derive(Component)]
 pub struct RunBehaviorStaffTrainAnimal(pub action::specialized::BehaviorStaffTrainAnimalAction);
+
+/// The completed evaluation of a player gesture sequence.
+#[derive(EntityEvent)]
+pub struct CompletedPlayerTraining {
+    pub entity: Entity,
+    pub perfect: bool,
+}
 
 /// Authored training choices enabled for a particular trainer assignment.
 #[derive(Component, Clone, PartialEq, Eq)]
@@ -587,20 +577,6 @@ pub fn complete_behavior_instruction(
     });
 }
 
-pub fn complete_behavior_refill(
-    actor: Entity,
-    id: BehaviorInstructionId,
-    tick: u64,
-    after: BehaviorRefillContinuation,
-    commands: &mut Commands,
-) {
-    commands.trigger(BehaviorInstructionCompleted {
-        actor,
-        id,
-        outcome: InstructionOutcome::CompleteRefill { tick, after },
-    });
-}
-
 pub struct SelectedBehaviorSet {
     pub program: AssetId,
     pub document: Handle<BehaviorDocumentAsset>,
@@ -614,10 +590,6 @@ pub struct SelectedBehaviorSet {
 
 enum InstructionOutcome {
     Complete(u64),
-    CompleteRefill {
-        tick: u64,
-        after: BehaviorRefillContinuation,
-    },
     EnterSet(SelectedBehaviorSet),
 }
 
@@ -626,6 +598,13 @@ pub enum BehaviorStepFixedSet {
     Think,
     Act,
 }
+
+/// Applies the guest survey action before departures reach economy settlement.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GuestDepartureSurveyApplication;
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GuestDepartureFameApplication;
 
 #[derive(Component)]
 pub struct BehaviorInstructionAwaitingActivation;
@@ -824,12 +803,6 @@ pub fn apply_behavior_instruction_completion(
         match &completion.outcome {
             InstructionOutcome::Complete(tick) => {
                 advance_behavior_task_to_next_action(&mut task, *tick)
-            }
-            InstructionOutcome::CompleteRefill { tick, after } => {
-                task.phase = after.phase;
-                task.action = after.action_after_refill;
-                task.repetitions = 0;
-                task.next_action_tick = *tick;
             }
             InstructionOutcome::EnterSet(set) => {
                 let return_action = if set.repeat.is_some() {
@@ -1041,8 +1014,6 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
                 .authored_action(document, task.declaration, task.action)
         })
         .cloned();
-    let keeper_refill =
-        document.and_then(|document| resolve_refill_continuation(document, task, action.as_ref()?));
     let reservation = world
         .get_resource::<Assets<BehaviorDocumentAsset>>()
         .and_then(|documents| {
@@ -1516,7 +1487,6 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
                 cost_override,
                 tracker,
                 general,
-                keeper_refill,
             },
         ),
         BehaviorAction::RandomSet {
@@ -1588,65 +1558,6 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
             RunBehaviorSendSubjectTrigger(action),
         ),
     }
-}
-
-fn resolve_refill_continuation(
-    document: &BehaviorDocumentAsset,
-    task: &BehaviorTaskExecutionState,
-    current_action: &BehaviorAction,
-) -> Option<BehaviorRefillContinuation> {
-    use openzt2_game_data::behavior::{
-        action::{
-            entity_role::BehaviorEntityRole,
-            modification::{BehaviorFact, BehaviorFactModificationOperation},
-        },
-        scalar::BehaviorScalarQ16,
-    };
-    if task.phase != BehaviorTaskExecutionPhase::Execution || task.depth != 0 {
-        return None;
-    }
-    let BehaviorAction::Economy {
-        transaction,
-        general: false,
-        tracker: None,
-        ..
-    } = current_action
-    else {
-        return None;
-    };
-    if *transaction != AssetId::from_key("refill") {
-        return None;
-    }
-    let declaration = document.behavior_task_at_index(task.declaration)?;
-    let next_index = task.action.saturating_add(1);
-    let (phase, index, next) =
-        if let Some(next) = declaration.execution.lowered_actions().get(next_index) {
-            (BehaviorTaskExecutionPhase::Execution, next_index, next)
-        } else {
-            (
-                BehaviorTaskExecutionPhase::Completion,
-                0,
-                declaration.completion.lowered_actions().first()?,
-            )
-        };
-    let BehaviorAction::FactModifications(modifications) = next else {
-        return None;
-    };
-    let [modification] = modifications.as_slice() else {
-        return None;
-    };
-    let BehaviorScalarQ16::FixedQ16(amount_q16) = modification.modification_value else {
-        return None;
-    };
-    (amount_q16 > 0
-        && modification.affected_entity_role == BehaviorEntityRole::Target
-        && modification.modified_fact == BehaviorFact::FoodLevel
-        && modification.modification_operation == BehaviorFactModificationOperation::Add)
-        .then_some(BehaviorRefillContinuation {
-            phase,
-            action_after_refill: index.saturating_add(1),
-            amount_q16,
-        })
 }
 
 fn insert_action<A: Component>(

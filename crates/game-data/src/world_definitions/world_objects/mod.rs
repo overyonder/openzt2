@@ -205,6 +205,21 @@ pub struct WorldObjectDetachActionDefinition {
     pub destination: WorldObjectDetachDestination,
     pub created_objects: Vec<(AssetId, WorldObjectDetachDestination)>,
 }
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
+pub struct WorldObjectCollisionScores {
+    pub base: Option<i32>,
+    pub by_type: Vec<(AssetId, i32)>,
+    pub by_attribute: Vec<WorldObjectCollisionAttributeScore>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
+pub struct WorldObjectCollisionAttributeScore {
+    pub subject_type: AssetId,
+    pub property: AssetId,
+    pub score: i32,
+    pub always_validate: bool,
+}
+
 // This schema record may contain floating-point members and therefore cannot derive `Eq`.
 #[allow(
     clippy::derive_partial_eq_without_eq,
@@ -362,6 +377,8 @@ pub struct WorldObjectDefinition {
     pub audio_cue_prefixes: Vec<String>,
     #[serde(default)]
     pub audio_stage_volumes: Vec<WorldObjectAudioStageVolume>,
+    #[serde(default)]
+    pub collision_scores: Option<WorldObjectCollisionScores>,
     pub kind: WorldObjectKind,
     /// `ZTAIWaterFilterComponent`, when this object filters tank water.
     #[serde(default)]

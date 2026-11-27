@@ -12,9 +12,10 @@ use openzt2_game_data::{
 
 use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
-use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
-use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
-use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
+use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::{
+    SetUiListRowCount, UiListPolicy, UiListRow, UiScenarioGoalGroup, UiScenarioGoalGroupDocument,
+    UiScenarioGoalRow,
+};
 use openzt2_interface_state::ui::authored_ui_node_projection_components::{
     UiDocumentMembers, UiDocumentOwner,
 };
@@ -26,10 +27,7 @@ use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjective;
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveAuthoredVisibility;
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatus;
 
-use super::scenario_ui_types::{
-    ScenarioGoalRowOf, ScenarioGoalRows, ScenarioObjectiveCategoryFilter,
-    ScenarioObjectiveStatusFilter,
-};
+use super::scenario_ui_types::{ScenarioObjectiveCategoryFilter, ScenarioObjectiveStatusFilter};
 
 impl From<&openzt2_game_data::ui_document::action::scenarios::ObjectiveStatusFilter>
     for ScenarioObjectiveStatusFilter
@@ -78,15 +76,16 @@ pub(super) fn size_and_bind_authored_scenario_goal_rows(
         Ref<UiListPolicy>,
         &UiDocumentOwner,
         Option<&Children>,
+        Has<UiScenarioGoalGroupDocument>,
     )>,
-    rows: Query<(Entity, &UiListRow, &ChildOf, Option<&ScenarioGoalRowOf>)>,
+    mut rows: Query<(Entity, &UiListRow, &ChildOf, Option<&mut UiScenarioGoalRow>)>,
     changed_rows: Query<Entity, (With<UiListRow>, Or<(Changed<UiListRow>, Changed<ChildOf>)>)>,
     category_filters: Query<&ScenarioObjectiveCategoryFilter>,
     mut row_counts: MessageWriter<SetUiListRowCount>,
 ) {
     let membership_changed =
         removed_objectives.read().count() != 0 || !changed_objectives.is_empty();
-    let new_lists = lists.iter().any(|(_, policy, _, _)| {
+    let new_lists = lists.iter().any(|(_, policy, ..)| {
         policy.source == UiWidgetLiveCollectionSource::ScenarioObjectives && policy.is_changed()
     });
     if !(membership_changed || new_lists || !changed_rows.is_empty()) {
@@ -94,7 +93,7 @@ pub(super) fn size_and_bind_authored_scenario_goal_rows(
     }
     let mut resize = EntityHashSet::default();
     let mut affected = EntityHashSet::default();
-    for (list, policy, owner, children) in &lists {
+    for (list, policy, owner, children, grouped) in &lists {
         if policy.source != UiWidgetLiveCollectionSource::ScenarioObjectives {
             continue;
         }
@@ -106,16 +105,18 @@ pub(super) fn size_and_bind_authored_scenario_goal_rows(
                         "overview",
                     )));
             }
-            resize.insert(list);
-            affected.extend(children.into_iter().flatten().copied());
+            if !grouped {
+                resize.insert(list);
+                affected.extend(children.into_iter().flatten().copied());
+            }
         }
     }
     affected.extend(changed_rows.iter().filter(|row| {
         rows.get(*row)
             .ok()
             .and_then(|(_, _, parent, _)| lists.get(parent.parent()).ok())
-            .is_some_and(|(_, policy, _, _)| {
-                policy.source == UiWidgetLiveCollectionSource::ScenarioObjectives
+            .is_some_and(|(_, policy, _, _, grouped)| {
+                !grouped && policy.source == UiWidgetLiveCollectionSource::ScenarioObjectives
             })
     }));
     if affected.is_empty() && resize.is_empty() {
@@ -131,15 +132,24 @@ pub(super) fn size_and_bind_authored_scenario_goal_rows(
         });
     }
     for row in affected {
-        let Ok((entity, row, _, bound)) = rows.get(row) else {
+        let Ok((entity, row, parent, bound)) = rows.get_mut(row) else {
             continue;
         };
-        match ordered.get(usize::from(row.index)) {
-            Some(&(objective, _)) if bound.is_none_or(|bound| bound.0 != objective) => {
-                commands.entity(entity).insert(ScenarioGoalRowOf(objective));
+        match (ordered.get(usize::from(row.index)), bound) {
+            (Some(&(objective, _)), Some(mut bound)) => {
+                bound.set_if_neq(UiScenarioGoalRow {
+                    list: parent.parent(),
+                    objective,
+                });
             }
-            None if bound.is_some() => {
-                commands.entity(entity).remove::<ScenarioGoalRowOf>();
+            (Some(&(objective, _)), None) => {
+                commands.entity(entity).insert(UiScenarioGoalRow {
+                    list: parent.parent(),
+                    objective,
+                });
+            }
+            (None, Some(_)) => {
+                commands.entity(entity).remove::<UiScenarioGoalRow>();
             }
             _ => {}
         }
@@ -153,7 +163,6 @@ pub(super) fn project_changed_scenario_goal_rows(
     status_filters: Query<Ref<ScenarioObjectiveStatusFilter>>,
     category_filters: Query<Ref<ScenarioObjectiveCategoryFilter>>,
     lists: Query<&UiDocumentOwner, With<UiListPolicy>>,
-    documents: Query<&UiDocumentMembers>,
     changed_filters: Query<
         Entity,
         Or<(
@@ -162,14 +171,14 @@ pub(super) fn project_changed_scenario_goal_rows(
         )>,
     >,
     changed_objectives: Query<
-        &ScenarioGoalRows,
+        Entity,
         Or<(
             Changed<ScenarioObjectiveStatus>,
             Changed<ScenarioObjectiveAuthoredVisibility>,
             Changed<ScenarioObjective>,
         )>,
     >,
-    changed_rows: Query<Entity, (With<UiListRow>, Changed<ScenarioGoalRowOf>)>,
+    changed_rows: Query<Entity, Changed<UiScenarioGoalRow>>,
     added_children: Query<
         Entity,
         Or<(
@@ -178,7 +187,7 @@ pub(super) fn project_changed_scenario_goal_rows(
             Changed<ChildOf>,
         )>,
     >,
-    mut rows: Query<(Entity, &ChildOf, &ScenarioGoalRowOf, &mut Visibility), With<UiListRow>>,
+    mut rows: Query<(Entity, &UiScenarioGoalRow, &mut Visibility)>,
     objectives: Query<(
         &ScenarioObjective,
         &ScenarioObjectiveStatus,
@@ -194,7 +203,7 @@ pub(super) fn project_changed_scenario_goal_rows(
                 &mut Visibility,
                 &mut Node,
             ),
-            Without<UiListRow>,
+            Without<UiScenarioGoalRow>,
         >,
     ),
 ) {
@@ -203,13 +212,16 @@ pub(super) fn project_changed_scenario_goal_rows(
         return;
     };
     let mut affected: EntityHashSet = changed_rows.iter().collect();
-    for related in &changed_objectives {
-        affected.extend(related.iter());
-    }
-    for document in &changed_filters {
-        if let Ok(members) = documents.get(document) {
-            affected.extend(members.iter().filter(|member| rows.contains(*member)));
-        }
+    let dirty_objectives = changed_objectives.iter().collect::<EntityHashSet>();
+    let dirty_documents = changed_filters.iter().collect::<EntityHashSet>();
+    if !dirty_objectives.is_empty() || !dirty_documents.is_empty() {
+        affected.extend(rows.iter().filter_map(|(entity, row, _)| {
+            (dirty_objectives.contains(&row.objective)
+                || lists
+                    .get(row.list)
+                    .is_ok_and(|owner| dirty_documents.contains(&owner.0)))
+            .then_some(entity)
+        }));
     }
     for child in &added_children {
         if let Some(row) = parents
@@ -223,13 +235,13 @@ pub(super) fn project_changed_scenario_goal_rows(
         affected.extend(rows.iter().map(|(entity, ..)| entity));
     }
     for row in affected {
-        let Ok((entity, parent, bound, mut visibility)) = rows.get_mut(row) else {
+        let Ok((entity, bound, mut visibility)) = rows.get_mut(row) else {
             continue;
         };
-        let Ok(owner) = lists.get(parent.parent()) else {
+        let Ok(owner) = lists.get(bound.list) else {
             continue;
         };
-        let Ok((objective, status, authored_visible)) = objectives.get(bound.0) else {
+        let Ok((objective, status, authored_visible)) = objectives.get(bound.objective) else {
             continue;
         };
         let record = scenarios
@@ -280,6 +292,39 @@ pub(super) fn project_changed_scenario_goal_rows(
                 }
             }
         }
+    }
+}
+
+pub(super) fn project_scenario_goal_group_visibility(
+    dirty_rows: Query<Entity, (With<UiScenarioGoalRow>, Changed<Visibility>)>,
+    dirty_groups: Query<Entity, Changed<UiScenarioGoalGroup>>,
+    parents: Query<&ChildOf>,
+    children: Query<&Children>,
+    rows: Query<(&UiScenarioGoalRow, &Visibility), Without<UiScenarioGoalGroup>>,
+    mut groups: Query<(&UiScenarioGoalGroup, &mut Visibility), Without<UiScenarioGoalRow>>,
+) {
+    let mut changed = dirty_groups.iter().collect::<EntityHashSet>();
+    for row in &dirty_rows {
+        changed.extend(
+            parents
+                .iter_ancestors::<ChildOf>(row)
+                .filter(|&parent| groups.contains(parent)),
+        );
+    }
+    for entity in changed {
+        let Ok((group, mut visibility)) = groups.get_mut(entity) else {
+            continue;
+        };
+        let visible = children.iter_descendants::<Children>(entity).any(|child| {
+            rows.get(child).is_ok_and(|(row, visible)| {
+                row.list == group.list && *visible != Visibility::Hidden
+            })
+        });
+        visibility.set_if_neq(if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
     }
 }
 

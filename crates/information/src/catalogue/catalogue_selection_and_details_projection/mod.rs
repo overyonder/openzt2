@@ -47,7 +47,7 @@ use super::super::{
     information_view_types::InformationViewClass,
     projection::{
         animal_pickup_release_information_projection::authored_multi_icon_key_for_conservation_status,
-        text_replacement_operations::replace_projected_ui_text_if_changed,
+        text_replacement_operations::{currency_cents, replace_projected_ui_text_if_changed},
     },
 };
 
@@ -375,9 +375,9 @@ pub(crate) fn project_selected_catalogue_entry_to_purchase_information_document(
                                 .find_path(details_definition)
                                 .is_some_and(|path| !path.elevated)
                             {
-                                price.0.saturating_mul(4)
+                                currency_cents(price).saturating_mul(4)
                             } else {
-                                price.0
+                                currency_cents(price)
                             },
                             !omit_fractional_currency_cents,
                             &mut formatted_amount,

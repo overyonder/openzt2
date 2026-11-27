@@ -161,7 +161,7 @@ pub(super) fn bind_fossil_piece_pictures(
         };
         if let Some(picture) = picture {
             if let Ok(material) = pictures.get(picture.0) {
-                if let Some(material) = materials.get_mut(&material.0) {
+                if let Some(mut material) = materials.get_mut(&material.0) {
                     if material.base_color_texture.as_ref() != Some(&texture) {
                         material.base_color_texture = Some(texture);
                     }

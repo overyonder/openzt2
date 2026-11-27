@@ -27,10 +27,8 @@ use openzt2_world_state::world_spawn::{
 use openzt2_zoo_state::{
     animal_lifecycle::types::{Animal, SpeciesHandle},
     progression::{
-        award_and_progression_fact_types::{ProgressionFactChanged, ScenarioAwardPointTotal},
-        fame_types::ZooMaximumFame,
-        profile_challenge_types::TotalAnimalsReleasedCount,
-        rating_types::ZooRating,
+        award_and_progression_fact_types::ProgressionFactChanged, fame_types::ZooMaximumFame,
+        profile_challenge_types::TotalAnimalsReleasedCount, rating_types::ZooRating,
         unlock_types::UnlockedCatalogueDefinitionSet,
     },
 };
@@ -87,7 +85,6 @@ fn authored_fame_changes_as_the_zoo_grows() -> io::Result<()> {
     .add_plugins(LuaScriptAssetLoadingPlugin)
     .init_asset::<WorldDefinitionAsset>()
     .init_resource::<WorldDefinitions>()
-    .register_required_components::<WorldRoot, ScenarioAwardPointTotal>()
     .register_required_components::<WorldRoot, TotalAnimalsReleasedCount>()
     .register_required_components::<WorldRoot, UnlockedCatalogueDefinitionSet>()
     .add_message::<FameGateAppearanceRequested>()
@@ -121,7 +118,7 @@ fn authored_fame_changes_as_the_zoo_grows() -> io::Result<()> {
         Update,
         (
             reduce_living_animal_population_and_welfare,
-            update_authored_fame,
+            update_authored_fame::<false>,
             publish_world_maximum_fame,
         )
             .chain(),

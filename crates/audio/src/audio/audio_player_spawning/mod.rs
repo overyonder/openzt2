@@ -1,5 +1,7 @@
 use super::spatial_cue_distance::SpatialCueDistance;
+use super::stage_voice_acoustics::DIRECT_MIX;
 use super::stage_voice_acoustics::{PendingStageVoice, StageVoiceAcoustics};
+use bevy::audio::output_mix::AudioMixInput;
 use bevy::{
     audio::{AudioPlayer, AudioSource, PlaybackSettings, Volume},
     prelude::*,
@@ -176,7 +178,11 @@ pub(super) fn spawn_audio_player_or_deferred_playback(
     } else if uses_stage_acoustics {
         playback_entity.insert((PendingStageVoice(clip), playback_settings));
     } else {
-        playback_entity.insert((AudioPlayer(clip), playback_settings));
+        playback_entity.insert((
+            AudioPlayer(clip),
+            playback_settings,
+            AudioMixInput(DIRECT_MIX),
+        ));
     }
     if request.emitter.is_some() {
         playback_entity.insert(Transform::IDENTITY);

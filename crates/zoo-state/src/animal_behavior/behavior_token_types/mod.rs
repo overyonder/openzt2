@@ -17,6 +17,29 @@ pub struct BehaviorSelfToken {
     pub retain_on_failure: bool,
 }
 
+impl BehaviorSelfToken {
+    pub const fn is_available_at(&self, tick: u64) -> bool {
+        self.available_at <= tick && tick < self.expires_at
+    }
+}
+
+/// Point and force authored for this delivery. The token's `ChildOf` is
+/// the recipient, and its entity payload can name a different participant.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct BehaviorTokenContext {
+    pub force: bool,
+    pub point: Option<Vec3>,
+}
+
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub struct BehaviorTokenXmlPayload(
+    pub openzt2_game_data::world_definitions::staff_management::StaffTokenXmlElement,
+);
+
+/// A delivery asked its recipient to reconsider when the token becomes available.
+#[derive(Component)]
+pub struct PendingBehaviorTokenReconsideration;
+
 #[derive(Component)]
 pub struct BehaviorTokenExpires;
 
@@ -49,57 +72,6 @@ pub struct BehaviorTrickDestination(pub Vec3);
 /// Placement position to which a show prop's authored offsets are relative.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct BehaviorTrickPropOrigin(pub Vec3);
-
-/// Qualifier values carried by authored token payloads.
-#[derive(Component, Default)]
-pub struct BehaviorTokenFacts(
-    pub  Vec<(
-        openzt2_game_data::behavior::eligibility::BehaviorEligibilityFactInput,
-        openzt2_game_data::behavior::eligibility::BehaviorEligibilityFactValue,
-    )>,
-);
-
-impl BehaviorTokenFacts {
-    pub fn satisfies(
-        &self,
-        requirement: &openzt2_game_data::behavior::eligibility::BehaviorCandidateEligibilityFact,
-    ) -> bool {
-        use openzt2_game_data::behavior::eligibility::{
-            BehaviorEligibilityFactComparison as Comparison, BehaviorEligibilityFactValue as Value,
-        };
-        let Some((_, value)) = self
-            .0
-            .iter()
-            .rev()
-            .find(|(key, _)| *key == requirement.fact_input)
-        else {
-            return false;
-        };
-        match (*value, requirement.expected_value) {
-            (Value::Q16(left), Value::Q16(right)) => match requirement.comparison {
-                Comparison::Equal => left == right,
-                Comparison::NotEqual => left != right,
-                Comparison::Less => left < right,
-                Comparison::LessOrEqual => left <= right,
-                Comparison::Greater => left > right,
-                Comparison::GreaterOrEqual => left >= right,
-            },
-            (Value::Symbol(left), Value::Symbol(right)) => match requirement.comparison {
-                Comparison::Equal => left == right,
-                Comparison::NotEqual => left != right,
-                _ => false,
-            },
-            (
-                Value::SymbolThreshold { symbol: left, q16 },
-                Value::SymbolThreshold {
-                    symbol: right,
-                    q16: threshold,
-                },
-            ) => left == right && q16 >= threshold,
-            _ => false,
-        }
-    }
-}
 
 /// An authored transaction's token-carried price and accounting category.
 #[derive(Component, Clone, Copy)]

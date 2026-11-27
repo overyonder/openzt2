@@ -131,26 +131,11 @@ pub(super) fn project_information_view_filters_to_world_entities(
 
 pub(super) fn project_information_view_filters_to_authored_controls(
     filters: Res<InformationViewFilters>,
-    all_bindings: Query<(Entity, &WorldViewFilterToggle)>,
-    changed_bindings: Query<
-        (Entity, &WorldViewFilterToggle),
-        Or<(Changed<WorldViewFilterToggle>, Changed<UiSelected>)>,
-    >,
-    mut selections: Query<&mut UiSelected>,
+    mut selections: Query<(Ref<WorldViewFilterToggle>, &mut UiSelected)>,
 ) {
     let filters_changed = filters.is_changed();
-    let affected = filters_changed
-        .then(|| all_bindings.iter())
-        .into_iter()
-        .flatten()
-        .chain(
-            (!filters_changed)
-                .then(|| changed_bindings.iter())
-                .into_iter()
-                .flatten(),
-        );
-    for (entity, binding) in affected {
-        if let Ok(mut selection) = selections.get_mut(entity) {
+    for (binding, mut selection) in &mut selections {
+        if filters_changed || binding.is_changed() || selection.is_changed() {
             let visible = filters.category_is_visible(binding.category);
             selection.set_if_neq(UiSelected(visible == binding.selected_when_visible));
         }

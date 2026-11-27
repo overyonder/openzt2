@@ -20,6 +20,9 @@ struct RampageStartCheck(Timer);
 #[derive(Component)]
 struct RampageTimeRemaining(Timer);
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RampageAudioMixProjection;
+
 #[derive(Component, PartialEq)]
 pub struct RampageAudioMix {
     pub loop_cue: openzt2_game_data::AssetId,
@@ -63,6 +66,7 @@ pub(super) fn register_rampage_timers(app: &mut App) {
     .add_systems(
         Update,
         project_rampage_music
+            .in_set(RampageAudioMixProjection)
             .in_set(openzt2_world_state::application_schedule::GameSet::Presentation)
             .run_if(super::in_state(super::GamePhase::InGame)),
     )

@@ -4,16 +4,43 @@ use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, Asset
 
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct StaffJob {
     /// Domain-specific settlement for jobs that need it.
     pub kind: Option<StaffJobKind>,
-    pub target: Entity,
-    pub urgency: u32,
+    /// Submitted identity for terminal receipts. Live target access uses StaffJobTarget.
+    pub target: Option<Entity>,
+    pub point: Option<Vec3>,
+    pub priority: f32,
+    pub issued_at_seconds: f32,
+    pub remaining_wait_seconds: f32,
+    /// Cleared when the first claim dispatches its task token.
+    pub first_attempt: bool,
     /// Lowercase authored request token. Distinct tokens on one target are
     /// distinct jobs; a missing token cannot select a behavior task.
     pub token: Option<AssetId>,
 }
+
+impl StaffJob {
+    pub fn advance_wait(&mut self, elapsed_seconds: f32) {
+        if self.remaining_wait_seconds > 0.0 {
+            self.remaining_wait_seconds -= elapsed_seconds;
+        }
+    }
+
+    pub fn destination(&self, live_target_position: Option<Vec3>) -> Option<Vec3> {
+        self.point.or(live_target_position)
+    }
+}
+
+/// The live target of a job. The job can finish after a target is consumed.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = StaffJobsAtTarget)]
+pub struct StaffJobTarget(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = StaffJobTarget)]
+pub struct StaffJobsAtTarget(Vec<Entity>);
 
 #[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StaffJobRouting {
@@ -22,14 +49,20 @@ pub struct StaffJobRouting {
     pub recipient: Option<AssetId>,
 }
 
-/// Urgency of an authored staff request. A lower authored priority is served
-/// first, and a request without a positive priority is never dispatched.
-/// Positive floats have the same bit ordering as their numeric ordering.
-pub fn authored_staff_request_urgency(priority: f32) -> Option<u32> {
-    if !priority.is_finite() || priority <= 0.0 {
-        return None;
-    }
-    Some(u32::MAX - priority.to_bits())
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StaffCognitiveEligibility {
+    pub interruptible: bool,
+    pub on_tap: bool,
+    pub blocks_request_search: bool,
+}
+
+#[derive(Component)]
+pub struct StaffLocalViewingArea;
+
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StaffRequestResourceCoverage {
+    pub food: bool,
+    pub water: bool,
 }
 
 /// The point in a dirty tank where the water-cleaning manager asks a keeper

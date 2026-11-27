@@ -10,24 +10,138 @@ use crate::source_document::{
     },
 };
 use openzt2_game_data::{
-    AssetId,
     world_definitions::world_objects::{
         WorldObjectFadeRange, WorldObjectNamedPhysicalPresentationDefinition,
     },
+    AssetId,
 };
 use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Debug)]
+pub(in crate::world_definitions) struct AuthoredPhysicalActor {
+    pub(in crate::world_definitions) source: String,
+    pub(in crate::world_definitions) reference: String,
+    pub(in crate::world_definitions) start:
+        Option<openzt2_game_data::scene_prefab::PrefabAnimationStart>,
+}
+
+pub(super) fn lower_physical_actor_bindings(
+    record: &RecordView<'_, '_>,
+    object: &openzt2_game_data::world_definitions::world_objects::WorldObjectDefinition,
+) -> Result<BTreeMap<AssetId, AuthoredPhysicalActor>, BindError> {
+    use openzt2_game_data::scene_prefab::PrefabAnimationStart;
+    let mut selected = object
+        .named_physical_presentations
+        .iter()
+        .map(|row| row.name)
+        .chain(
+            object
+                .presentation_attachments
+                .iter()
+                .flat_map(|controller| controller.states.iter().map(|state| state.child_binder)),
+        )
+        .collect::<BTreeSet<_>>();
+    let mut actors = BTreeMap::new();
+    let families = std::iter::once(*record).chain(
+        record
+            .type_tokens()
+            .into_iter()
+            .rev()
+            .filter(|name| name != record.key)
+            .filter_map(|name| record.find_resolved_source_record_by_reference(&name)),
+    );
+    for family in families {
+        if selected.is_empty() {
+            break;
+        }
+        let mut nodes = vec![family.source_document_element()];
+        while let Some(node) = nodes.pop() {
+            let children = node.element_children().collect::<Vec<_>>();
+            nodes.extend(children.into_iter().rev());
+            if !source_document_names_are_semantically_equal(&node.name, "BFNamedBinder") {
+                continue;
+            }
+            let Some(name) = node.attribute_named_any(&["binderName"]) else {
+                continue;
+            };
+            let key = AssetId::from_key(&canonicalize_source_document_record_key(name));
+            let Some(component) = find_presentation_component(node) else {
+                continue;
+            };
+            if !selected.remove(&key)
+                || !source_document_names_are_semantically_equal(
+                    &component.name,
+                    "BFActorComponent",
+                )
+            {
+                continue;
+            }
+            let Some(actor) = component.attribute_named_any(&["actorfile"]) else {
+                continue;
+            };
+            let start = component
+                .attribute_named_any(&["activeSequenceName"])
+                .filter(|key| !key.trim().is_empty())
+                .map(|clip| {
+                    let seconds = component
+                        .attribute_named_any(&["activeSequenceTime"])
+                        .map_or(Some(0.0), parse_blue_fang_source_numeric_lexeme::<f32>)
+                        .filter(|value| value.is_finite())
+                        .ok_or_else(|| BindError::record(record, "invalid active sequence time"))?;
+                    let looping =
+                        super::world_definition_source_value_reading_and_conversion::element_bool(
+                            &component,
+                            &["activeSequenceLoop"],
+                            true,
+                        )?;
+                    Ok::<_, BindError>(PrefabAnimationStart {
+                        clip_key: clip.to_owned(),
+                        looping,
+                        time_seconds: seconds,
+                    })
+                })
+                .transpose()?;
+            actors.insert(
+                key,
+                AuthoredPhysicalActor {
+                    source: family.source_path(),
+                    reference: actor.to_owned(),
+                    start,
+                },
+            );
+        }
+    }
+    Ok(actors)
+}
 
 pub(super) fn lower_named_physical_presentations(
     record: &RecordView<'_, '_>,
     scene_paths: &BTreeMap<String, String>,
 ) -> Result<Vec<WorldObjectNamedPhysicalPresentationDefinition>, BindError> {
-    lower_named_physical_binders(record, scene_paths, false)
+    lower_named_physical_binders(record, scene_paths, false, None)
+}
+
+pub(super) fn lower_fossil_lab_presentation(
+    record: &RecordView<'_, '_>,
+    scene_paths: &BTreeMap<String, String>,
+) -> Result<Option<WorldObjectNamedPhysicalPresentationDefinition>, BindError> {
+    Ok(
+        lower_named_physical_binders(record, scene_paths, false, Some("puzzleInteriorObj"))?
+            .into_iter()
+            .next()
+            .map(|mut presentation| {
+                presentation.required = false;
+                presentation.initially_visible = false;
+                presentation
+            }),
+    )
 }
 
 fn lower_named_physical_binders(
     record: &RecordView<'_, '_>,
     scene_paths: &BTreeMap<String, String>,
     optional_only: bool,
+    only_name: Option<&str>,
 ) -> Result<Vec<WorldObjectNamedPhysicalPresentationDefinition>, BindError> {
     let mut presentations = Vec::new();
     let mut seen = BTreeSet::new();
@@ -35,6 +149,11 @@ fn lower_named_physical_binders(
         let Some(name) = binder.attribute_named_any(&["binderName"]) else {
             continue;
         };
+        if only_name
+            .is_some_and(|expected| !source_document_names_are_semantically_equal(name, expected))
+        {
+            continue;
+        }
         let Some(component) = find_presentation_component(binder) else {
             continue;
         };
@@ -199,7 +318,7 @@ pub(super) fn lower_parented_named_physical_presentations(
         .map(|binder| binder.name)
         .collect::<BTreeSet<_>>();
     presentations.extend(
-        lower_named_physical_binders(record, scene_paths, true)?
+        lower_named_physical_binders(record, scene_paths, true, None)?
             .into_iter()
             .filter(|binder| !populated.contains(&binder.name)),
     );
@@ -439,6 +558,7 @@ mod tests {
                 <BFNamedBinder binderName="vent"><instance><BFPhysObj><BFSimpleLODComponent modelfile="vent.nif"/></BFPhysObj></instance></BFNamedBinder>
                 <BFNamedBinder binderName="dead" required="0"><instance><BFPhysObj><BFSimpleLODComponent modelfile="vent.nif"/></BFPhysObj></instance></BFNamedBinder>
                 <BFNamedBinder binderName="vendor"><instance><BFPhysObj><BFActorComponent actorfile="vendor.bfm"/></BFPhysObj></instance></BFNamedBinder>
+                <BFNamedBinder binderName="puzzleInteriorObj" required="1"><instance><BFPhysObj><BFSimpleLODComponent modelfile="vent.nif" scale="2"/></BFPhysObj></instance></BFNamedBinder>
             </binder>
         </BFTypedBinder>"#,
         )
@@ -463,6 +583,14 @@ mod tests {
             .objects
             .first()
             .ok_or_else(|| std::io::Error::other("building object is absent"))?;
+        let lab = object
+            .named_physical_presentations
+            .iter()
+            .find(|presentation| presentation.name == AssetId::from_key("puzzleinteriorobj"))
+            .expect("fossil lab should be available to the assembly mode");
+        assert_eq!(lab.prefab, AssetId::from_virtual_path("vent.nif#scene"));
+        assert_eq!(lab.scale, 2.0);
+        assert!(!lab.required && !lab.initially_visible);
         let parented = object
             .named_physical_presentations
             .iter()
@@ -506,8 +634,8 @@ mod tests {
     }
 
     #[test]
-    fn event_marker_shows_only_its_unfinished_binder_initially()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn event_marker_shows_only_its_unfinished_binder_initially(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let marker = parse_blue_fang_source_document(
             AssetPath::new("event_marker.xml"),
             br#"<BFTypedBinder binderType="gesture_event_marker">
@@ -605,8 +733,8 @@ mod tests {
     }
 
     #[test]
-    fn feeder_fade_states_spawn_and_show_only_the_current_state()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn feeder_fade_states_spawn_and_show_only_the_current_state(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let object = lower_object(
             br#"<BFTypedBinder binderType="insects">
             <types><entity><food><insects/></food></entity></types>
@@ -635,8 +763,8 @@ mod tests {
     }
 
     #[test]
-    fn fade_states_beside_a_main_model_spawn_at_the_origin()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn fade_states_beside_a_main_model_spawn_at_the_origin(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let object = lower_object(
             br#"<BFTypedBinder binderType="bin">
             <types><entity><building><bin/></building></entity></types>
@@ -661,12 +789,10 @@ mod tests {
                 (AssetId::from_key("empty"), true, true, Some([-1.0, 1.0])),
             ]
         );
-        assert!(
-            object
-                .named_physical_presentations
-                .iter()
-                .all(|presentation| presentation.attach_node.is_none())
-        );
+        assert!(object
+            .named_physical_presentations
+            .iter()
+            .all(|presentation| presentation.attach_node.is_none()));
         Ok(())
     }
 }

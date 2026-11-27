@@ -3,7 +3,8 @@ use openzt2_zoo_state::maintenance::ZooCleanlinessProjection;
 mod animal_waste_production;
 mod authored_maintenance_facts_and_service_effects;
 mod authored_trash_level_application;
-mod first_person_waste_cleaning;
+mod first_person_staff_aim_presentation;
+pub mod first_person_waste_cleaning;
 mod loose_litter_sweeping_staff_job_execution;
 mod maintenance_staff_job_claim_effect_progress_and_completion;
 mod maintenance_staff_job_requests;
@@ -12,8 +13,7 @@ mod staff_waste_termination;
 mod waste_container_emptying_staff_job_execution;
 pub(crate) mod zoo_cleanliness_projection;
 
-use bevy::{ecs::schedule::common_conditions::on_message, prelude::*};
-use openzt2_interface_state::input::input_types::ActionRequest;
+use bevy::prelude::*;
 use openzt2_world_state::application_schedule::GameSet;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
@@ -62,13 +62,37 @@ impl Plugin for MaintenancePlugin {
             .add_observer(remove_waste_contribution)
             .add_observer(withdraw_disabled_waste_contribution);
 
-        game_application.add_systems(
-            Update,
-            first_person_waste_cleaning::clean_nearest_waste_from_first_person_use_action
-                .after(GameSet::Input)
-                .run_if(on_message::<ActionRequest>)
-                .run_if(in_state(GamePhase::InGame)),
-        );
+        game_application
+            .add_message::<first_person_waste_cleaning::AdvanceFirstPersonStaffActions>()
+            .add_observer(first_person_waste_cleaning::play_first_person_staff_effect)
+            .add_systems(
+                Update,
+                first_person_staff_aim_presentation::present_first_person_staff_aim
+                    .after(first_person_waste_cleaning::refresh_first_person_staff_aim_and_use)
+                    .in_set(GameSet::Presentation)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
+                (
+                    first_person_waste_cleaning::publish_first_person_staff_action_delta
+                        .after(openzt2_world_state::simulation_time::simulation_clock_types::ZooClockAdvance),
+                    first_person_waste_cleaning::advance_first_person_staff_actions
+                        .after_ignore_deferred(first_person_waste_cleaning::publish_first_person_staff_action_delta),
+                )
+                    .in_set(FixedGameSet::Act)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                Update,
+                (
+                    first_person_waste_cleaning::hydrate_first_person_staff_actions,
+                    first_person_waste_cleaning::refresh_first_person_staff_aim_and_use
+                        .after(first_person_waste_cleaning::hydrate_first_person_staff_actions),
+                )
+                    .after(GameSet::Input)
+                    .run_if(in_state(GamePhase::InGame)),
+            );
 
         game_application
             .add_observer(authored_trash_level_application::apply_actor_trash_level_instructions)
@@ -146,7 +170,8 @@ mod tests;
 
 #[cfg(any(test, feature = "testing"))]
 pub fn add_animal_waste_cleanup_test_systems(app: &mut App) {
-    app.register_required_components::<maintenance_types::AnimalHabitatWaste, WasteConsumptionClaim>()
+    app.add_message::<openzt2_staff_requests::StaffControllerJobChange>()
+        .register_required_components::<maintenance_types::AnimalHabitatWaste, WasteConsumptionClaim>()
         .add_observer(activated_behavior_actor::<RunBehaviorTermination>.pipe(apply_staff_waste_termination))
         .add_systems(
         Update,

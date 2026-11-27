@@ -7,7 +7,7 @@ use bevy::{
         query::{Changed, Or, With, Without},
         system::{Commands, Query},
     },
-    log::{error, trace},
+    log::{error, trace, warn},
     prelude::{Component, Entity, ResMut, Resource},
     render::{
         render_resource::{
@@ -262,9 +262,23 @@ pub(crate) fn allocate_events(
 ) {
     event_cache.clear_previous_frame_resizes();
 
+    let maximum_events =
+        u32::try_from(event_cache.device.limits().max_storage_buffer_binding_size / 4)
+            .unwrap_or(u32::MAX);
     for (entity, child, cached) in &mut child_effects {
-        // The init pass can consume at most the number of slots in the child.
-        let capacity = child.capacity.max(1);
+        let requested = child
+            .incoming_event_capacity
+            .unwrap_or(child.capacity)
+            .max(1);
+        let capacity = requested.min(maximum_events);
+        if capacity < requested {
+            warn!(
+                ?entity,
+                requested,
+                capacity,
+                "Particle spawn events exceed the device storage binding limit"
+            );
+        }
         if let Some(mut cached) = cached {
             if cached.capacity() >= capacity {
                 continue;

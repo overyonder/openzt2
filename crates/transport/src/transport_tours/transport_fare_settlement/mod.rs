@@ -2,9 +2,11 @@ use bevy::prelude::*;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestMemoryKind;
 
 use openzt2_zoo_state::economy::account_transaction_types::Account;
-use openzt2_zoo_state::economy::account_transaction_types::TransactionCompleted;
 use openzt2_zoo_state::economy::account_transaction_types::TransactionKind;
 use openzt2_zoo_state::economy::account_transaction_types::TransactionRejected;
+use openzt2_zoo_state::economy::account_transaction_types::{
+    TransactionCompleted, TransactionDomain,
+};
 use openzt2_zoo_state::guests::guest_simulation_types::GuestReaction;
 
 use crate::transport_tours::transport_fare_types::{FareGuest, PendingTransportFare, QueuedFare};
@@ -24,6 +26,7 @@ pub(super) fn complete_paid_transport_trips_and_publish_guest_reactions(
             continue;
         };
         if queued_fare.settled
+            || completed_transaction.domain != TransactionDomain::Simulation
             || completed_transaction.debit != Account::Entity(guest.0)
             || completed_transaction.credit != Account::Zoo
             || completed_transaction.amount != queued_fare.amount
@@ -55,6 +58,7 @@ pub(super) fn discard_rejected_transport_fares(
             continue;
         };
         if queued_fare.settled
+            || rejected_transaction.domain != TransactionDomain::Simulation
             || rejected_transaction.debit != Account::Entity(guest.0)
             || rejected_transaction.credit != Account::Zoo
             || rejected_transaction.amount != queued_fare.amount

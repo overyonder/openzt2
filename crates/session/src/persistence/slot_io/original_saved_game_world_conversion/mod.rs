@@ -45,6 +45,7 @@ pub(super) fn read_original_saved_world(
             map_definition_identifier: map.id,
             starting_point_definition_identifier: start.id,
             session_mode: mode,
+            mode_document_path: None,
             last_saved_unix_timestamp_milliseconds,
             display_name: start.name.clone(),
             source_document: Some(scenario.capture_source_document(server)?),

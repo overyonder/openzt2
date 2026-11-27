@@ -9,6 +9,8 @@ use openzt2_zoo_state::{
     },
 };
 use bevy::{ecs::query::QueryData, prelude::*};
+use openzt2_transport::transport_tours::transport_rider_disembarkation::StationTourRatingHistory;
+use openzt2_zoo_state::transport_tours::tour_scoring_types::StationRatingPermille;
 use super::restored_component_values::restore_optional_component;
 
 use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
@@ -50,6 +52,20 @@ pub(super) fn spawn_missing_transport_identities(
     allocator: &mut PersistentIdAllocator,
 ) -> Result<(), WorldSnapshotPersistenceFailure> {
     let graph = &saved.graph;
+    for rating in &graph.station_ratings {
+        let station = saved
+            .circuit_member_records
+            .binary_search_by_key(&rating.station, |member| member.persistent_identifier.0)
+            .ok()
+            .map(|index| saved.circuit_member_records[index].transport_definition_identifier);
+        if !station.is_some_and(|definition| {
+            definitions
+                .stations()
+                .any(|station| station.id == definition || station.object == definition)
+        }) {
+            return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+        }
+    }
     let transport_entities = saved
         .circuit_records
         .iter()
@@ -128,6 +144,8 @@ pub(super) struct RestoredTransportComponents {
     running: Option<&'static mut CircuitRunning>,
     direction: Option<&'static mut CircuitDirection>,
     fare: Option<&'static mut Price>,
+    station_rating: Option<&'static mut StationRatingPermille>,
+    station_rating_history: Option<&'static mut StationTourRatingHistory>,
     crossing: Option<&'static mut openzt2_transport::transport_tours::SkyStationCrossing>,
     tower: Option<&'static mut SkyTowerHeight>,
     track_profile: Option<&'static mut TrackProfile>,
@@ -241,6 +259,27 @@ pub(super) fn restore_transport_sections(
             false,
         );
         member.insert(CircuitMember(resolve(circuit)?));
+        let saved_rating = graph
+            .station_ratings
+            .binary_search_by_key(&id.0, |rating| rating.station)
+            .ok()
+            .map(|index| &graph.station_ratings[index]);
+        if let Some(rating) = saved_rating {
+            restore_optional_component(
+                &mut member,
+                current.station_rating,
+                Some(StationRatingPermille(rating.permille)),
+                false,
+            );
+            restore_optional_component(
+                &mut member,
+                current.station_rating_history,
+                Some(StationTourRatingHistory(
+                    rating.samples.iter().copied().collect(),
+                )),
+                false,
+            );
+        }
     }
 
     for saved in graph.sky_station_crossings {

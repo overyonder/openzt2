@@ -158,7 +158,6 @@ impl AuthoredFameScript {
         views: Option<&ZooSpeciesFameViews>,
         old: Fame,
         award_points: u32,
-        scenario_points: u32,
         animals_released: u32,
         entities: &FameEntityFacts,
         members: Option<&WorldMembers>,
@@ -196,7 +195,7 @@ impl AuthoredFameScript {
             }
             .map_or_else(|| lua.create_table(), Ok)?;
             status.set("awardPoints", award_points)?;
-            status.set("scenarioPoints", scenario_points)?;
+            status.set("scenarioPoints", award_points)?;
             status.set("currentHalfStars", old.half_stars)?;
             status.set("fame", old.current_percent.unwrap_or_default())?;
             status.set(

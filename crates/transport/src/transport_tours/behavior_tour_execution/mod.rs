@@ -1,4 +1,7 @@
 use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
+use openzt2_game_assets::behavior::behavior_asset_types::{
+    BehaviorDocumentAsset, LoadedBehaviorDocumentCollection,
+};
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
@@ -10,11 +13,14 @@ use openzt2_world_state::{
 use openzt2_zoo_state::{
     behavior_task_execution_types::{
         running_actions::{
-            mark_behavior_task_for_failure_and_stop_navigation, AuthoredTourRide, GuestVisitedTourStations, RunBehaviorTour,
-            RunningBehaviorInstruction, WhenBehaviorAction,
+            mark_behavior_task_for_failure_and_stop_navigation, AuthoredTourRide,
+            BehaviorTaskReplaced, GuestVisitedTourStations, RunBehaviorTour,
+            RunningBehaviorInstruction, SelectedBehaviorSet, WhenBehaviorAction,
         },
-        BehaviorTaskExecutionState,
+        BehaviorTaskExecutionState, BehaviorTaskReturnFrame,
+        MAXIMUM_BEHAVIOR_TASK_RETURN_FRAME_COUNT,
     },
+    guests::guest_simulation_types::GuestArchetype,
     locomotion::locomotion_types::{
         Arrived, DockAt, NavAgent, NavigationFailed, NavigationRequestGeneration,
     },
@@ -32,11 +38,22 @@ enum TourProgress {
     BoardRequested(u64),
     Queued,
     Aboard,
+    Disembarked,
+}
+
+#[derive(Component)]
+struct SuspendedTourInstruction {
+    execution: u64,
+    depth: usize,
+    frame: BehaviorTaskReturnFrame,
+    target: Option<Entity>,
 }
 
 pub(super) fn register(app: &mut App) {
     app.add_observer(begin_tour)
-        .add_observer(clear_tour)
+        .add_observer(clear_finished_tour_instruction)
+        .add_observer(clear_replaced_tour)
+        .add_observer(clear_abandoned_tour)
         .add_systems(
             FixedUpdate,
             advance_tours
@@ -45,6 +62,14 @@ pub(super) fn register(app: &mut App) {
                 .run_if(in_state(
                     openzt2_game_assets::application_lifecycle::GamePhase::InGame,
                 )),
+        )
+        .add_systems(
+            FixedUpdate,
+            start_seated_tour_feedback
+                .after(advance_tours)
+                .after(super::tour_view_scoring::observe_visible_tour_subjects_and_accumulate_rider_scores)
+                .in_set(FixedGameSet::Act)
+                .run_if(in_state(openzt2_game_assets::application_lifecycle::GamePhase::InGame)),
         );
 }
 
@@ -52,11 +77,13 @@ fn begin_tour(
     activation: On<WhenBehaviorAction<RunBehaviorTour>>,
     mut guests: Query<(
         &RunningBehaviorInstruction,
-        &BehaviorTaskExecutionState,
+        &mut BehaviorTaskExecutionState,
         &WorldMember,
         &Transform,
         &NavAgent,
         &mut NavigationRequestGeneration,
+        Option<&SuspendedTourInstruction>,
+        Option<&TourProgress>,
     )>,
     stations: Query<(
         &TransportStation,
@@ -67,15 +94,31 @@ fn begin_tour(
     circuits: Query<(&TransportCircuit, &CircuitMembers)>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
+    clocks: Query<&ZooClock>,
     mut docks: MessageWriter<DockAt>,
     mut commands: Commands,
 ) {
     let actor = activation.entity;
-    let Ok((instruction, task, member, pose, agent, mut requests)) = guests.get_mut(actor) else {
+    let Ok((instruction, mut task, member, pose, agent, mut requests, suspended, progress)) =
+        guests.get_mut(actor)
+    else {
         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         return;
     };
-    if !instruction.is_current(task) {
+    if !instruction.is_current(&task) {
+        return;
+    }
+    if let Some(suspended) = suspended.filter(|suspended| {
+        suspended.execution == task.execution_id
+            && task.is_at_exact_frame(&suspended.frame, suspended.depth)
+    }) {
+        task.target = suspended.target;
+        commands.entity(actor).remove::<SuspendedTourInstruction>();
+        if matches!(progress, Some(TourProgress::Disembarked)) {
+            if let Ok(clock) = clocks.get(member.root) {
+                instruction.complete(actor, clock.tick, &mut commands);
+            }
+        }
         return;
     }
     let endpoints = (|| {
@@ -145,31 +188,28 @@ fn advance_tours(
     mut trips: MessageReader<TransportTripCompleted>,
     clocks: Query<&ZooClock>,
     stations: Query<(), With<TransportStation>>,
-    mut guests: Query<
-        (
-            Entity,
-            &RunningBehaviorInstruction,
-            &BehaviorTaskExecutionState,
-            &WorldMember,
-            &AuthoredTourRide,
-            &mut TourProgress,
-            Has<WaitingForTransport>,
-            Has<TransportRider>,
-        ),
-        With<RunBehaviorTour>,
-    >,
+    mut guests: Query<(
+        Entity,
+        Option<&RunningBehaviorInstruction>,
+        &BehaviorTaskExecutionState,
+        &WorldMember,
+        &AuthoredTourRide,
+        &mut TourProgress,
+        Has<WaitingForTransport>,
+        Has<TransportRider>,
+        Has<RunBehaviorTour>,
+    )>,
     mut visited_stations: Query<&mut GuestVisitedTourStations>,
     mut boarding: MessageWriter<BoardTransportRequest>,
     mut commands: Commands,
 ) {
     for trip in trips.read() {
-        let Ok((actor, step, task, world, ride, progress, _, aboard)) = guests.get(trip.guest)
+        let Ok((actor, step, task, world, ride, mut progress, _, aboard, in_ride)) =
+            guests.get_mut(trip.guest)
         else {
             continue;
         };
-        if trip.station == ride.destination
-            && (aboard || matches!(progress, TourProgress::Aboard))
-            && step.is_current(task)
+        if trip.station == ride.destination && (aboard || matches!(*progress, TourProgress::Aboard))
         {
             if let Ok(clock) = clocks.get(world.root) {
                 if let Ok(mut visited) = visited_stations.get_mut(actor) {
@@ -179,12 +219,17 @@ fn advance_tours(
                         }
                     }
                 }
-                step.complete(actor, clock.tick, &mut commands);
+                if let Some(step) = step.filter(|step| in_ride && step.is_current(task)) {
+                    step.complete(actor, clock.tick, &mut commands);
+                } else {
+                    *progress = TourProgress::Disembarked;
+                }
             }
         }
     }
     for failure in failures.read() {
-        let Ok((actor, step, task, _, _, progress, _, _)) = guests.get(failure.entity) else {
+        let Ok((actor, Some(step), task, _, _, progress, _, _, true)) = guests.get(failure.entity)
+        else {
             continue;
         };
         if step.is_current(task)
@@ -193,7 +238,10 @@ fn advance_tours(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         }
     }
-    for (actor, step, task, world, ride, mut progress, queued, aboard) in &mut guests {
+    for (actor, step, task, world, ride, mut progress, queued, aboard, in_ride) in &mut guests {
+        let Some(step) = step.filter(|_| in_ride) else {
+            continue;
+        };
         if !step.is_current(task) {
             continue;
         }
@@ -222,7 +270,7 @@ fn advance_tours(
         }
     }
     for arrival in arrivals.read() {
-        let Ok((actor, step, task, world, ride, mut progress, _, _)) =
+        let Ok((actor, Some(step), task, world, ride, mut progress, _, _, true)) =
             guests.get_mut(arrival.entity)
         else {
             continue;
@@ -243,8 +291,116 @@ fn advance_tours(
     }
 }
 
-fn clear_tour(removed: On<Remove<RunBehaviorTour>>, mut commands: Commands) {
-    commands
-        .entity(removed.entity)
-        .try_remove::<(AuthoredTourRide, TourProgress, WaitingForTransport)>();
+fn start_seated_tour_feedback(
+    mut requests: MessageReader<super::tour_view_scoring::TourSeatFeedbackRequested>,
+    guests: Query<
+        (
+            &WorldMember,
+            &GuestArchetype,
+            &RunningBehaviorInstruction,
+            &BehaviorTaskExecutionState,
+            &TourProgress,
+        ),
+        (
+            With<RunBehaviorTour>,
+            With<TransportRider>,
+            Without<SuspendedTourInstruction>,
+        ),
+    >,
+    subjects: Query<&WorldMember>,
+    clocks: Query<&ZooClock>,
+    definitions: Res<WorldDefinitions>,
+    world_assets: Res<Assets<WorldDefinitionAsset>>,
+    documents: Res<LoadedBehaviorDocumentCollection>,
+    behavior_assets: Res<Assets<BehaviorDocumentAsset>>,
+    mut commands: Commands,
+) {
+    let (Some(definitions), Some(declarations)) = (
+        definitions.get(&world_assets),
+        documents.create_declaration_index_view(&behavior_assets),
+    ) else {
+        requests.clear();
+        return;
+    };
+    let mut started = bevy::ecs::entity::EntityHashSet::default();
+    for request in requests.read() {
+        let Ok((world, archetype, step, task, progress)) = guests.get(request.rider) else {
+            continue;
+        };
+        if matches!(progress, TourProgress::Disembarked)
+            || !step.is_current(task)
+            || task.depth >= MAXIMUM_BEHAVIOR_TASK_RETURN_FRAME_COUNT
+            || !subjects
+                .get(request.subject)
+                .is_ok_and(|subject| subject.root == world.root)
+        {
+            continue;
+        }
+        let Ok(clock) = clocks.get(world.root) else {
+            continue;
+        };
+        let Some(guest) = definitions.find_guest(archetype.0) else {
+            continue;
+        };
+        let Some((document, declaration)) = declarations.find_behavior_set_location(
+            request.program,
+            std::iter::once(guest.id)
+                .chain(guest.behavior_subject_type_identifiers.iter().copied()),
+        ) else {
+            continue;
+        };
+        if !started.insert(request.rider) {
+            continue;
+        }
+        commands
+            .entity(request.rider)
+            .insert(SuspendedTourInstruction {
+                execution: task.execution_id,
+                depth: task.depth,
+                frame: task.create_return_frame_after_action(task.action),
+                target: task.target,
+            });
+        step.enter_set(
+            request.rider,
+            SelectedBehaviorSet {
+                program: request.program,
+                document,
+                declaration,
+                tick: clock.tick,
+                repeat: Some(task.repetitions),
+                target: Some(Some(request.subject)),
+            },
+            &mut commands,
+        );
+    }
+}
+
+fn clear_finished_tour_instruction(
+    removed: On<Remove<RunBehaviorTour>>,
+    suspended: Query<(&SuspendedTourInstruction, &BehaviorTaskExecutionState)>,
+    mut commands: Commands,
+) {
+    if suspended.get(removed.entity).is_ok_and(|(origin, task)| {
+        origin.execution == task.execution_id && task.depth > origin.depth
+    }) {
+        return;
+    }
+    clear_tour(removed.entity, &mut commands);
+}
+
+fn clear_replaced_tour(replaced: On<BehaviorTaskReplaced>, mut commands: Commands) {
+    clear_tour(replaced.actor, &mut commands);
+}
+
+fn clear_abandoned_tour(removed: On<Remove<BehaviorTaskExecutionState>>, mut commands: Commands) {
+    clear_tour(removed.entity, &mut commands);
+}
+
+fn clear_tour(actor: Entity, commands: &mut Commands) {
+    commands.entity(actor).try_remove::<(
+        AuthoredTourRide,
+        TourProgress,
+        SuspendedTourInstruction,
+        WaitingForTransport,
+    )>();
 }

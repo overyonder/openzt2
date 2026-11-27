@@ -142,7 +142,13 @@ pub(super) fn hydrate_detach_created_objects(
     {
         if let Some(prefab) = loading.prefab.as_ref() {
             if !loading.settled {
-                if !settled.contains(&prefab.id()) {
+                if !settled.contains(&prefab.id())
+                    && !assets.prefabs.contains(prefab.id())
+                    && !matches!(
+                        assets.server.get_load_state(prefab.id()),
+                        Some(LoadState::Failed(_))
+                    )
+                {
                     continue;
                 }
                 loading.settled = true;

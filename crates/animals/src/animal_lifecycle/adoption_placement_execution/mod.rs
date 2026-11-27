@@ -15,8 +15,9 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::SelectConstructionTool;
 use openzt2_zoo_state::economy::zoo_cash_types::UnlimitedZooCash;
 use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
+use openzt2_zoo_state::habitat::habitat_cell_ownership_changes::HabitatCellOwnershipChanged;
 use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
-use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
+use openzt2_zoo_state::habitat::habitat_types::{HabitatCellOf, HabitatIndex};
 use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewPrefabHydrated;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewRequest;
@@ -286,6 +287,10 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
         Ref<ObjectPlacementPreviewRequest>,
     )>,
     habitat_index: Single<Ref<HabitatIndex>>,
+    (cell_owners, mut habitat_changes): (
+        Query<&HabitatCellOf>,
+        Option<MessageReader<HabitatCellOwnershipChanged>>,
+    ),
     topology_grid: Single<Ref<TopologyGrid>>,
     adoption_policy: Query<
         (Entity, Option<Ref<AnimalAdoptionAvailabilityPolicy>>),
@@ -318,6 +323,11 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
     let Ok((world, availability)) = adoption_policy.single() else {
         return;
     };
+    let ownership_changed = habitat_changes.as_mut().is_some_and(|changes| {
+        let changed = changes.read().any(|change| change.root == world);
+        changes.clear();
+        changed
+    });
     let removed = terrain.removals.read();
     let inputs_changed = cursor.is_changed()
         || animal_placement.is_changed()
@@ -329,6 +339,7 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
         || availability.as_ref().is_some_and(DetectChanges::is_changed)
         || removed.contains(&world)
         || habitat_index.is_changed()
+        || ownership_changed
         || topology_grid.is_changed()
         || species_assets.is_changed()
         || species_index_changed
@@ -350,6 +361,7 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
                 world,
                 habitat: locate_habitat_at_world_position(
                     &habitat_index,
+                    &cell_owners,
                     translation.xz(),
                     *topology_grid,
                 ),
@@ -417,20 +429,18 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
             AnimalPlacementOperation::Relocation(_)
         ) {
             PlacementValidity::Valid {
-                cost: openzt2_zoo_state::economy::money_types::Money(0),
+                cost: openzt2_zoo_state::economy::money_types::Money::ZERO,
             }
         } else {
-            let Some(mut adoption_cost) =
-                resolve_nonnegative_animal_adoption_cost(world_definitions, species)
-            else {
+            let Some(adoption_cost) = resolve_nonnegative_animal_adoption_cost(
+                world_definitions,
+                species,
+                availability.multiplier_permille,
+            ) else {
                 continue;
             };
-            adoption_cost.0 = adoption_cost
-                .0
-                .saturating_mul(i64::from(availability.multiplier_permille))
-                / 1000;
             if unlimited_zoo_cash.as_ref().is_none_or(|policy| !policy.0)
-                && zoo_cash.0 .0 < adoption_cost.0
+                && zoo_cash.0 < adoption_cost
             {
                 PlacementValidity::Invalid(PlacementFailure::Unaffordable)
             } else {

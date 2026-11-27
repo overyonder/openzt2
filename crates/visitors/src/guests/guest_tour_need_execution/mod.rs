@@ -12,7 +12,10 @@ use openzt2_zoo_state::{
 pub(super) fn initialize_tour_need(
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
-    mut guests: Query<(Entity, Ref<GuestArchetype>, &mut GuestRng), Without<GuestTourDepartureGate>>,
+    mut guests: Query<
+        (Entity, Ref<GuestArchetype>, &mut GuestRng),
+        Without<GuestTourDepartureGate>,
+    >,
     mut commands: Commands,
 ) {
     let definitions_changed = definitions.is_changed() || assets.is_changed();

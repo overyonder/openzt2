@@ -25,13 +25,13 @@ use openzt2_zoo_state::{
     topology::topology_graph_types::{PathTile, TopologyGrid},
 };
 
-use crate::fossil_site_types::{DigPit, FossilSiteKind};
 use openzt2_game_assets::localization::{
     localization_asset_types::LocalizationAsset,
     localization_precedence_index::LocalizationPrecedenceIndex,
 };
 use openzt2_game_data::localization::LocalizationFormatArgument;
 use openzt2_interface_state::information::zoo_message_types::{ZooMessage, ZooMessages};
+use openzt2_zoo_state::extinct_animals::fossil_recovery_types::{DigPit, FossilSiteKind};
 
 #[derive(EntityEvent)]
 pub(super) struct DigAuthoredArtifact {

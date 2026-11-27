@@ -30,7 +30,6 @@ pub(crate) mod stomped_object_edit_preparation;
 use crate::placement::object_placement_edit_application::apply_prepared_object_placement_edits;
 use crate::placement::object_placement_or_relocation_edit_preparation::prepare_object_placement_or_relocation_edit;
 use crate::placement::object_placement_preview_lifecycle::animate_object_placement_preview_presentation_toward_authoritative_transform;
-use crate::placement::object_placement_preview_lifecycle::apply_authored_initial_animal_placement_preview_animation_repetition_policy;
 use crate::placement::object_placement_preview_lifecycle::attach_pending_animal_placement_preview_animations;
 use crate::placement::object_placement_preview_lifecycle::create_active_object_placement_preview;
 use crate::placement::object_placement_preview_lifecycle::hydrate_object_placement_preview_prefab_render_tree;
@@ -140,9 +139,13 @@ impl Plugin for ObjectPlacementPlugin {
                 .in_set(FixedGameSet::Cleanup)
                 .run_if(in_state(GamePhase::InGame)),
         );
+        app.add_systems(
+            Update,
+            cancel_all_active_object_relocations
+                .in_set(openzt2_zoo_state::construction::ConstructionPreviewCancellationSet),
+        );
         app.register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, PlacedObjectFootprintOccupancyIndex>()
             .register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, BiomeAutomaticPlacementRanges>()
-            .add_observer(apply_authored_initial_animal_placement_preview_animation_repetition_policy)
             .add_message::<openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprintChanged>()
             .add_message::<CommitObjectPlacementPreviewRequest>()
             .add_message::<RemovePlacedObjectRequest>()
@@ -158,7 +161,6 @@ impl Plugin for ObjectPlacementPlugin {
                 Update,
                 (
                     route_placed_object_removal_requests_to_construction,
-                    cancel_all_active_object_relocations,
                     create_active_object_placement_preview
                         .after(crate::construction::construction_tool_and_action_routing::select_construction_tool),
                     biome_automatic_object_placement_edit_preparation::hydrate_biome_automatic_placement_state_onto_world_and_terrain_brush_previews

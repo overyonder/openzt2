@@ -3,9 +3,24 @@ use openzt2_game_data::AssetId;
 
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FossilRecoverySite {
-    pub fossil_set_definition_identifier: AssetId,
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FossilSiteKind {
+    #[default]
+    Puzzle,
+    PlaceableObject,
+    Cash,
+}
+
+#[derive(Component)]
+pub struct DigPit;
+
+#[derive(Component, PartialEq, Eq)]
+pub struct RequestedFossilPuzzle(pub AssetId);
+
+#[derive(Message)]
+pub struct SetFossilPuzzleToFind {
+    pub root: Entity,
+    pub puzzle: Option<AssetId>,
 }
 
 /// The world zoo's highest fossil search tier opened so far.

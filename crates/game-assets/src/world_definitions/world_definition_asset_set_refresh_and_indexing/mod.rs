@@ -10,25 +10,25 @@ use bevy::{
     asset::{AssetLoadFailedEvent, LoadState},
     prelude::*,
 };
-use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
+use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
 
 use crate::asset_source::{
-    ArchiveOverlayChanged, AssetArchives,
     archive_entry_asset_path::{
         archive_entry_asset_path, archive_entry_asset_source_path,
         definition_archive_entry_asset_path,
     },
+    ArchiveOverlayChanged, AssetArchives,
 };
 
 use super::{
     ground_path_surface_images::GROUND_PATH_SURFACE_IMAGE_EXTENSION,
     world_definition_asset_set_state_and_borrowing_queries::{
-        DefinitionKind, DefinitionRow, SingletonKind, WorldDefinitions, kind_range,
+        kind_range, DefinitionKind, DefinitionRow, SingletonKind, WorldDefinitions,
     },
     world_definition_document_asset_and_demand_loaded_dependency_paths::{
-        AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS, WorldDefinitionAsset,
+        WorldDefinitionAsset, AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS,
     },
-    world_definition_load_queue::{WorldDefinitionLoadCompletion, request_world_definition_loads},
+    world_definition_load_queue::{request_world_definition_loads, WorldDefinitionLoadCompletion},
 };
 
 pub(crate) fn world_definition_source_path(
@@ -107,6 +107,7 @@ pub(crate) fn world_definition_source_path(
             | "config/adoption.xml"
             | "config/diseasemgr.xml"
             | "config/timekeeper.xml"
+            | "config/influence.xml"
             | "config/puzzlemgr.xml"
             | "config/showmixer.xml"
             | "config/status.xml"
@@ -384,6 +385,9 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
             &mut records,
             &mut singletons,
         );
+        if asset.metadata.guest_influence_policy.is_some() {
+            singletons.insert(SingletonKind::GuestInfluence, handle.clone());
+        }
     }
     let mut animation_binder_rigs = BTreeMap::new();
     for handle in &definitions.handles {
@@ -446,6 +450,16 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
                     },
                 );
             }
+        }
+        for &id in asset.bound_scenes.keys() {
+            records.insert(
+                (DefinitionKind::SceneDependency, id),
+                DefinitionRow {
+                    handle: handle.clone(),
+                    first: 0,
+                    end: 1,
+                },
+            );
         }
     }
     let mut unlock_definition_identifiers_by_target = BTreeMap::<AssetId, Vec<AssetId>>::new();

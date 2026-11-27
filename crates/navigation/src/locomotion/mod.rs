@@ -52,29 +52,6 @@ use openzt2_zoo_state::locomotion::NavigationRequestAcceptance;
 
 use fence_navigation_crossing_types::FenceNavigationCrossingIndex;
 
-fn authored_caffeine_factors(
-    object: Option<&openzt2_game_data::world_definitions::world_objects::WorldObjectDefinition>,
-) -> openzt2_zoo_state::locomotion::locomotion_types::CaffeineFactors {
-    use openzt2_game_data::AssetId;
-    let factor = |key| {
-        object
-            .and_then(|object| {
-                let key = AssetId::from_key(key);
-                object
-                    .authored_runtime
-                    .numeric_behavior_properties
-                    .iter()
-                    .find_map(|&(property, value)| (property == key).then_some(value))
-            })
-            .filter(|value| value.is_finite() && *value > 0.0)
-            .unwrap_or(1.0)
-    };
-    openzt2_zoo_state::locomotion::locomotion_types::CaffeineFactors {
-        caffeinated: factor("f_caffeinemodefactor"),
-        decaffeinated: factor("f_decaffeinemodefactor"),
-    }
-}
-
 fn fixed_interval_timer(seconds: f32) -> Timer {
     let duration = if seconds <= 0.0 {
         std::time::Duration::ZERO
@@ -176,7 +153,13 @@ impl Plugin for LocomotionPlugin {
                 FixedUpdate,
                 (
                     animal_water_contact::project_animal_water_contact.in_set(FixedGameSet::Clock),
-                    spatial_index_and_docking_operations::project_agent_spatial_membership,
+                    animal_navigation_policy::project_obstacle_priorities.in_set(FixedGameSet::Clock),
+                    animal_navigation_policy::project_animal_floating_fact
+                        .after(animal_water_contact::project_animal_water_contact)
+                        .in_set(FixedGameSet::Clock),
+                    spatial_index_and_docking_operations::project_agent_spatial_membership
+                        .in_set(openzt2_zoo_state::locomotion::AgentSpatialMembershipProjection)
+                        .in_set(FixedGameSet::Clock),
                     spatial_index_and_docking_operations::order_changed_spatial_cell_members
                         .after(spatial_index_and_docking_operations::project_agent_spatial_membership)
                         .before(FixedGameSet::Think),

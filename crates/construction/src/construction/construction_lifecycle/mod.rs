@@ -130,21 +130,20 @@ fn finalize_preparation(
     mut edits: Query<(Entity, &mut EditTransaction, Domains), With<Preparing>>,
     mut settlement: Settlement,
 ) {
-    for (entity, mut edit, domains) in &mut edits {
+    for (entity, edit, domains) in &mut edits {
         let facts = settlement_facts(domains);
-        let cost = facts.iter().try_fold(0_i64, |total, domain| {
-            total.checked_add(domain.cost.map_or(0, |cost| cost.0))
-        });
+        let cost = facts
+            .iter()
+            .filter_map(|domain| domain.cost)
+            .try_fold(Money::ZERO, Money::checked_add);
         let failure = facts
             .iter()
             .find_map(|domain| domain.rejection)
             .map(ConstructionCommitFailure::Preparation)
             .or_else(|| {
-                cost.filter(|cost| cost.checked_abs().is_some())
-                    .is_none()
-                    .then_some(ConstructionCommitFailure::Economy(
-                        TransactionRejection::Overflow,
-                    ))
+                cost.is_none().then_some(ConstructionCommitFailure::Economy(
+                    TransactionRejection::Overflow,
+                ))
             })
             .or_else(|| {
                 facts
@@ -160,7 +159,7 @@ fn finalize_preparation(
                 reason,
             );
         } else if let Some(cost) = cost {
-            edit.cost = Money(cost);
+            edit.map_unchanged(|edit| &mut edit.cost).set_if_neq(cost);
             commands
                 .entity(entity)
                 .remove::<Preparing>()
@@ -181,32 +180,25 @@ fn initiate_transfers(
         With<InitialTransfer>,
     >,
     mut payments: MessageWriter<TransactionRequest>,
-    mut settlement: Settlement,
 ) {
     for (entity, edit, member, general) in &edits {
         commands.entity(entity).remove::<InitialTransfer>();
-        if edit.cost.0 == 0 {
+        if edit.cost == Money::ZERO {
             commands
                 .entity(entity)
                 .insert(ApplyEdit(EditApplication::InitialCommit));
-        } else if let Some(request) = create_construction_payment_request(
-            &mut commands,
-            entity,
-            *member,
-            edit.cost,
-            ConstructionPaymentPurpose::InitialTransfer,
-            false,
-            general.copied(),
-        ) {
-            commands.entity(entity).insert(AwaitPayment);
-            payments.write(request);
         } else {
-            settlement.failure(
+            let request = create_construction_payment_request(
                 &mut commands,
                 entity,
-                EditApplication::InitialCommit,
-                ConstructionCommitFailure::Economy(TransactionRejection::Overflow),
+                *member,
+                edit.cost,
+                ConstructionPaymentPurpose::InitialTransfer,
+                false,
+                general.copied(),
             );
+            commands.entity(entity).insert(AwaitPayment);
+            payments.write(request);
         }
     }
 }
@@ -222,7 +214,6 @@ fn begin_history_application(
         Option<&GeneralEconomyTransaction>,
     )>,
     mut payments: MessageWriter<TransactionRequest>,
-    mut settlement: Settlement,
 ) {
     if !busy.is_empty() {
         requests.clear();
@@ -240,30 +231,24 @@ fn begin_history_application(
             ConstructionEditDirection::Undo => EditApplication::Undo,
             ConstructionEditDirection::Redo => EditApplication::Redo,
         };
-        if application == EditApplication::Undo || edit.cost.0 == 0 {
+        if application == EditApplication::Undo || edit.cost == Money::ZERO {
             commands
                 .entity(entity)
                 .insert((ConstructionActive, ApplyEdit(application)));
-        } else if let Some(payment) = create_construction_payment_request(
-            &mut commands,
-            entity,
-            *member,
-            edit.cost,
-            ConstructionPaymentPurpose::RedoTransfer,
-            false,
-            general.copied(),
-        ) {
+        } else {
+            let payment = create_construction_payment_request(
+                &mut commands,
+                entity,
+                *member,
+                edit.cost,
+                ConstructionPaymentPurpose::RedoTransfer,
+                false,
+                general.copied(),
+            );
             commands
                 .entity(entity)
                 .insert((ConstructionActive, AwaitPayment));
             payments.write(payment);
-        } else {
-            settlement.failure(
-                &mut commands,
-                entity,
-                application,
-                ConstructionCommitFailure::Economy(TransactionRejection::Overflow),
-            );
         }
         break;
     }
@@ -336,7 +321,7 @@ fn settle_domain_rollbacks(
                 "a construction domain could not restore its prior state"
             );
         }
-        if rollback.failed_application == EditApplication::Undo || edit.cost.0 == 0 {
+        if rollback.failed_application == EditApplication::Undo || edit.cost == Money::ZERO {
             settlement.failure(
                 &mut commands,
                 entity,
@@ -371,26 +356,20 @@ fn request_compensation(
         } else {
             ConstructionPaymentPurpose::UndoCompensation
         };
-        if edit.cost.0 == 0 {
+        if edit.cost == Money::ZERO {
             settlement.success(&mut commands, entity, EditApplication::Undo, edit.cost);
-        } else if let Some(request) = create_construction_payment_request(
-            &mut commands,
-            entity,
-            *member,
-            edit.cost,
-            purpose,
-            true,
-            general.copied(),
-        ) {
+        } else {
+            let request = create_construction_payment_request(
+                &mut commands,
+                entity,
+                *member,
+                edit.cost,
+                purpose,
+                true,
+                general.copied(),
+            );
             commands.entity(entity).insert(AwaitPayment);
             payments.write(request);
-        } else {
-            let reason = ConstructionCommitFailure::Compensation(TransactionRejection::Overflow);
-            if let Some(rollback) = rollback {
-                settlement.failure(&mut commands, entity, rollback.failed_application, reason);
-            } else {
-                start_rollback(&mut commands, entity, EditApplication::Undo, reason);
-            }
         }
     }
 }

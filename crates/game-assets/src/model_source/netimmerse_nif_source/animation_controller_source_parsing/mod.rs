@@ -128,36 +128,62 @@ pub(super) fn parse_controller_sequence(
         source_path,
         "NiControllerSequence text keys",
     )?;
-    let controlled_block_count = read_u32_little_endian(
-        source_bytes,
-        cursor,
-        source_path,
-        "NiControllerSequence controlled block count",
-    )?;
-    let controlled_blocks = (0..controlled_block_count)
-        .map(|_| {
-            Ok(NetImmerseControlledBlock {
-                target_name: read_sized_string(
-                    source_bytes,
-                    cursor,
-                    source_path,
-                    "NiControllerSequence target name",
-                )?,
-                controller_ref: read_i32_little_endian(
-                    source_bytes,
-                    cursor,
-                    source_path,
-                    "NiControllerSequence controller",
-                )?,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let controlled_blocks = parse_sequence_controlled_blocks(source_bytes, cursor, source_path)?;
     Ok(NetImmerseNiControllerSequence {
         name,
         accum_root_name,
         text_keys_ref,
         controlled_blocks,
     })
+}
+
+pub(super) fn parse_sequence(
+    source_bytes: &[u8],
+    cursor: &mut usize,
+    source_path: &str,
+) -> Result<NetImmerseNiControllerSequence> {
+    let name = read_sized_string(source_bytes, cursor, source_path, "NiSequence name")?;
+    read_u32_little_endian(source_bytes, cursor, source_path, "NiSequence flags")?;
+    let text_keys_ref =
+        read_i32_little_endian(source_bytes, cursor, source_path, "NiSequence text keys")?;
+    let controlled_blocks = parse_sequence_controlled_blocks(source_bytes, cursor, source_path)?;
+    Ok(NetImmerseNiControllerSequence {
+        name,
+        accum_root_name: String::new(),
+        text_keys_ref,
+        controlled_blocks,
+    })
+}
+
+fn parse_sequence_controlled_blocks(
+    source_bytes: &[u8],
+    cursor: &mut usize,
+    source_path: &str,
+) -> Result<Vec<NetImmerseControlledBlock>> {
+    let controlled_block_count = read_u32_little_endian(
+        source_bytes,
+        cursor,
+        source_path,
+        "sequence controlled block count",
+    )?;
+    (0..controlled_block_count)
+        .map(|_| {
+            Ok(NetImmerseControlledBlock {
+                target_name: read_sized_string(
+                    source_bytes,
+                    cursor,
+                    source_path,
+                    "sequence target name",
+                )?,
+                controller_ref: read_i32_little_endian(
+                    source_bytes,
+                    cursor,
+                    source_path,
+                    "sequence controller",
+                )?,
+            })
+        })
+        .collect()
 }
 
 pub(super) fn parse_material_colour_controller(

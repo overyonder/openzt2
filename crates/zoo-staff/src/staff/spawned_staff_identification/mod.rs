@@ -94,7 +94,7 @@ pub(crate) fn identify_spawned_staff_from_world_definition(
         staff_commands
             .insert((Staff, StaffRole(role_identifier)))
             .insert_if_new(Employment {
-                wage: Money(i64::from(role.wage_cents_per_month)),
+                wage: Money::from_cents(i64::from(role.wage_cents_per_month)),
                 hired_tick: clock.tick,
                 hired_month_ordinal: u32::from(calendar.year)
                     .saturating_mul(12)

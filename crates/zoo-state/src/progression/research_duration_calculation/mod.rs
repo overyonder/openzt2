@@ -1,25 +1,25 @@
+use std::time::Duration;
+
 use openzt2_game_data::world_definitions::catalogue_and_progression::research_and_unlock_definition_types::ResearchDuration;
-use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
-use openzt2_world_state::simulation_time::deterministic_random_stream::RngDomain;
-use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
+use openzt2_world_state::simulation_time::deterministic_random_stream::{DeterministicRng, RngDomain, ZooSeed};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 
-pub fn resolve_research_duration_to_simulation_ticks(
+use super::research_types::fixed_tick_duration;
+
+pub fn resolve_research_duration(
     duration: ResearchDuration,
-    fixed_hz: u16,
+    fixed_step: Duration,
     seed: ZooSeed,
     identifier: PersistentId,
-) -> u64 {
+) -> Duration {
     match duration {
-        ResearchDuration::Ticks(ticks) => ticks.max(1),
+        ResearchDuration::Ticks(ticks) => fixed_tick_duration(fixed_step, ticks.max(1)),
         ResearchDuration::Nanoseconds(nanoseconds) => {
-            u64::try_from((u128::from(nanoseconds) * u128::from(fixed_hz)).div_ceil(1_000_000_000))
-                .unwrap_or(u64::MAX)
-                .max(1)
+            Duration::from_nanos(nanoseconds).max(fixed_step)
         }
         ResearchDuration::RandomDefault => {
             let mut random = DeterministicRng::from_entity(seed, identifier, RngDomain::Research);
-            (u64::from(25 + random.next_u32() % 30) * u64::from(fixed_hz)).max(1)
+            Duration::from_secs(u64::from(25 + random.next_u32() % 30)).max(fixed_step)
         }
     }
 }

@@ -222,3 +222,45 @@ pub(super) fn project_award_program_suspension(
         }
     }
 }
+
+pub(super) fn bind_active_photo_challenge_scope(
+    offers: Query<(
+        Entity,
+        Ref<ScenarioChallengeOffer>,
+        Option<&openzt2_interface_state::ui::ui_document_lifecycle_contracts::UiRoleScope>,
+    )>,
+    roots: Query<(
+        Ref<openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot>,
+        &ChildOf,
+    )>,
+    assets: Res<Assets<openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset>>,
+    mut requests: MessageWriter<
+        openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRoleInScope,
+    >,
+) {
+    use openzt2_game_data::ui_document::document::UiDocumentRole;
+    use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRoleInScope;
+    let Ok((owner, offer, scope)) = offers.single() else {
+        return;
+    };
+    if offer.state == ScenarioChallengeOfferState::Declined {
+        return;
+    }
+    let Some((root, parent)) = roots.iter().find(|(root, _)| {
+        assets
+            .get(&root.document)
+            .is_some_and(|asset| asset.canonical_ui_document().role == UiDocumentRole::PhotoMode)
+    }) else {
+        return;
+    };
+    let host = parent.parent();
+    if (root.is_added() || offer.is_changed() || scope.is_none())
+        && scope.is_none_or(|scope| scope.host != host || scope.role != UiDocumentRole::PhotoMode)
+    {
+        requests.write(ShowUiRoleInScope {
+            role: UiDocumentRole::PhotoMode,
+            owner,
+            host,
+        });
+    }
+}

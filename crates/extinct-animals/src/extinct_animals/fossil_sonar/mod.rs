@@ -21,8 +21,8 @@ use openzt2_zoo_state::extinct_animals::fossil_recovery_types::{
 };
 
 use super::fossil_sonar_scoring::select_highest_scoring_fossil_sonar_candidate;
-use crate::fossil_site_types::FossilSiteKind;
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
+use openzt2_zoo_state::extinct_animals::fossil_recovery_types::FossilSiteKind;
 use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
 
 #[derive(Component)]

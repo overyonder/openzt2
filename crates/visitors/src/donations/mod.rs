@@ -13,6 +13,7 @@ mod donation_state_hydration;
 mod zoo_donation_summary_presentation;
 
 use bevy::prelude::*;
+use openzt2_zoo_state::donations::donation_guest_decision_types::SpeciesDonationCandidateLifetimes;
 
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
@@ -24,9 +25,7 @@ use self::{
         reconcile_donation_phase_relationships,
         reject_donation_candidates_after_navigation_failure,
     },
-    donation_opportunity_observation::{
-        accumulate_signed_species_donation_scores, SpeciesDonationCandidateLifetimes,
-    },
+    donation_opportunity_observation::accumulate_signed_species_donation_scores,
     donation_payment_settlement::{
         settle_completed_donation_transactions_and_update_acceptor_totals,
         settle_rejected_donation_transactions_and_clear_guest_payment_state,
@@ -85,6 +84,11 @@ impl Plugin for GuestDonationDecisionAndPaymentPlugin {
             )
             .add_systems(
                 FixedUpdate,
+                donation_opportunity_observation::decay_live_species_donation_candidates
+                    .in_set(FixedGameSet::Clock),
+            )
+            .add_systems(
+                FixedUpdate,
                 accumulate_signed_species_donation_scores
                     .after(
                         crate::guests::view_event_execution::apply_guest_reactions,
@@ -104,7 +108,8 @@ impl Plugin for GuestDonationDecisionAndPaymentPlugin {
                 FixedUpdate,
                 (
                     claim_authorized_direct_donation_requests_before_transfer_submission,
-                    submit_validated_donation_requests_to_economy_transfers,
+                    submit_validated_donation_requests_to_economy_transfers
+                        .in_set(openzt2_zoo_state::economy::SubmitSimulationAccountRequests),
                 )
                     .chain()
                     .in_set(FixedGameSet::Economy),

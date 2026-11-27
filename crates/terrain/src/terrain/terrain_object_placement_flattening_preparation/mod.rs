@@ -154,7 +154,7 @@ pub(super) fn prepare_authored_object_placement_terrain_flattening(
         });
         prepared.write(TerrainEditPrepared {
             transaction: request.transaction,
-            cost: Money(0),
+            cost: Money::ZERO,
         });
     }
 }

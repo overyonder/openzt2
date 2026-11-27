@@ -270,8 +270,8 @@ pub(super) fn execute_explicit_animation_clip_playback_requests<const RENDER: bo
             let mut replacement_animation_graph_playback_state =
                 AnimationGraphPlaybackState::default();
             let milliseconds = animation_clip_request.blend_duration_milliseconds;
-            replacement_animation_graph_playback_state.active_animation_graph_blend =
-                openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphBlend::from_duration_milliseconds(milliseconds);
+            replacement_animation_graph_playback_state.requested_blend_duration_milliseconds =
+                (milliseconds != 0).then_some(milliseconds);
             if let Some(containing_graph_node_index) = animation_set_asset
                 .animation_graph_nodes
                 .iter()

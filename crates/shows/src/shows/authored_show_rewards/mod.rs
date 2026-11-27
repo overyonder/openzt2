@@ -3,7 +3,7 @@ use std::{io, sync::Arc};
 use openzt2_game_data::behavior::action::feedback::BehaviorFeedbackEntry;
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
 use openzt2_game_assets::source_document::{
@@ -13,7 +13,6 @@ use openzt2_game_assets::source_document::{
 };
 
 const SHOW_POLICY_SOURCE: &str = "AI/ZTAI.xml";
-const GUEST_BINDER_SOURCE: &str = "entities/units/guests/ai/guest.xml";
 
 #[derive(Asset, TypePath)]
 pub(super) struct AuthoredShowRewards {
@@ -24,17 +23,9 @@ pub(super) struct AuthoredShowRewards {
     pub(super) trick_token_timeout_seconds: f32,
     pub(super) score_fraction: f32,
     pub(super) popularity: TrickPopularityPolicy,
-    pub(super) audience_need: Option<ShowAudienceNeedPolicy>,
     default: Vec<DonationFeedback>,
     cancelled: Vec<DonationFeedback>,
     bands: Vec<DonationBand>,
-}
-
-pub(super) struct ShowAudienceNeedPolicy {
-    pub(super) initial: [f32; 2],
-    pub(super) trigger: f32,
-    pub(super) cessation: f32,
-    pub(super) adjustment: f32,
 }
 
 pub(super) struct TrickPopularityPolicy {
@@ -158,17 +149,7 @@ impl AssetLoader for AuthoredShowRewardsLoader {
         };
         let popularity = child(&source.root, "ZTAITrickPopularityMgr").ok();
         let maximum = optional_number(popularity, "MaxPopularity", 100.0);
-        let audience_need = match context.read_asset_bytes(GUEST_BINDER_SOURCE).await {
-            Ok(bytes) => {
-                let binder =
-                    parse_blue_fang_source_document(AssetPath::new(GUEST_BINDER_SOURCE), &bytes)
-                        .map_err(io::Error::other)?;
-                show_audience_need(&binder.root)?
-            }
-            Err(_) => None,
-        };
         Ok(AuthoredShowRewards {
-            audience_need,
             score_fraction: optional_number(
                 child(show, "General").ok(),
                 "PercentTricksToScore",
@@ -198,58 +179,6 @@ impl AssetLoader for AuthoredShowRewardsLoader {
             bands,
         })
     }
-}
-
-fn show_audience_need(
-    root: &OrderedSourceDocumentNode,
-) -> io::Result<Option<ShowAudienceNeedPolicy>> {
-    fn find<'a>(
-        node: &'a OrderedSourceDocumentNode,
-        matches: &impl Fn(&OrderedSourceDocumentNode) -> bool,
-    ) -> Option<&'a OrderedSourceDocumentNode> {
-        if matches(node) {
-            return Some(node);
-        }
-        node.element_children()
-            .find_map(|child| find(child, matches))
-    }
-    let Some(state) = find(root, &|node| {
-        node.name.eq_ignore_ascii_case("bfaistatevar")
-            && node
-                .attribute_named_any(&["Name"])
-                .is_some_and(|name| name.eq_ignore_ascii_case("show"))
-    }) else {
-        return Ok(None);
-    };
-    let adjustment = find(root, &|node| {
-        node.name.eq_ignore_ascii_case("bfaineedadjusts")
-            && node.attribute_named_any(&["Name"]).is_none()
-    })
-    .and_then(|node| node.attribute_named_any(&["show"]))
-    .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
-    .unwrap_or_default();
-    let initial = [
-        value::<f32>(state, "ValueMin")?,
-        value::<f32>(state, "ValueMax")?,
-    ];
-    let trigger = value::<f32>(state, "TriggerThreshold")?;
-    let cessation = value::<f32>(state, "CessationThreshold")?;
-    if ![initial[0], initial[1], trigger, cessation, adjustment]
-        .into_iter()
-        .all(f32::is_finite)
-        || initial[0] > initial[1]
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid show audience need",
-        ));
-    }
-    Ok(Some(ShowAudienceNeedPolicy {
-        initial,
-        trigger,
-        cessation,
-        adjustment,
-    }))
 }
 
 fn child<'a>(

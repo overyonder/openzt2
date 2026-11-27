@@ -10,6 +10,7 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunningBehaviorEconomyTransaction, RunningBehaviorInstruction,
 };
 
+use super::behavior_transaction_execution::{AuthoredDonationCategory, AuthoredDonationClaims};
 use super::{
     account_transaction_types::{
         Account, RecordedAccountMovement, TransactionCompleted, TransactionDomain,
@@ -17,6 +18,7 @@ use super::{
     },
     behavior_transaction_state::BehaviorTransactionPayment,
     facility_economy_types::Wallet,
+    guest_admission_payment::AdmissionSettlement,
     keeper_refill_settlement::{KeeperRefillPayment, KeeperRefillSettlement},
     money_types::Money,
     zoo_cash_types::{UnlimitedZooCash, ZooCash},
@@ -161,6 +163,7 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
             Entity,
             &mut TransactionSettlement,
             Option<&BehaviorTransactionPayment>,
+            Option<&AuthoredDonationCategory>,
             Option<&KeeperRefillPayment>,
             Option<&GeneralEconomyTransaction>,
         ),
@@ -178,6 +181,8 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
         Without<PendingBehaviorTaskFailure>,
     >,
     keeper_refills: KeeperRefillSettlement,
+    donation_claims: AuthoredDonationClaims,
+    admission: AdmissionSettlement,
 ) {
     let mut pending = transaction_operations
         .iter()
@@ -188,7 +193,7 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
         .collect::<Vec<_>>();
     pending.sort_unstable();
     for (_, operation) in pending {
-        let Ok((_, mut state, behavior_payment, refill, provenance)) =
+        let Ok((_, mut state, behavior_payment, donation, refill, provenance)) =
             transaction_operations.get_mut(operation)
         else {
             continue;
@@ -203,6 +208,9 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
         };
 
         let settlement = (|| {
+            if !admission.can_transfer(request) {
+                return Err(TransactionRejection::Cancelled);
+            }
             // Authored payments are valid only while the originating instruction
             // still owns the request. Act -> Economy may cross a failure/restart.
             // Other producers retain their existing settlement contracts.
@@ -216,6 +224,11 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
                     || !pending.owns(task, instruction)
                 {
                     return Err(TransactionRejection::Cancelled);
+                }
+                if let Some(donation) = donation {
+                    if !donation_claims.can_transfer(owner.actor, task, owner.facility, donation) {
+                        return Err(TransactionRejection::Cancelled);
+                    }
                 }
                 if let Some(refill) = refill {
                     keeper_refills
@@ -248,6 +261,9 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
             let (_, mut zoo_cash, unlimited_zoo_cash, mut general_ledger) = roots
                 .get_mut(root)
                 .map_err(|_| TransactionRejection::MissingAccount)?;
+            if refill.is_some() && request.amount == Money::ZERO {
+                return Ok(root);
+            }
             let debit_account_balance = read_account_balance_for_transaction(
                 request.debit,
                 zoo_cash.0,

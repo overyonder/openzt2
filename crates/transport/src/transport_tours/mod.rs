@@ -23,7 +23,7 @@ mod transport_fare_types;
 mod transport_guest_arrival;
 mod transport_relationship_cleanup;
 mod transport_rider_boarding;
-mod transport_rider_disembarkation;
+pub mod transport_rider_disembarkation;
 mod transport_road_cut;
 mod transport_route_position_calculations;
 mod transport_track_construction_preview;
@@ -78,7 +78,7 @@ impl Plugin for TransportToursPlugin {
         }
         transport_relationship_cleanup::install(app);
         behavior_tour_execution::register(app);
-        app.add_systems(Startup, ground_track_policy::load_ground_track_policy);
+        app.add_systems(Startup, ground_track_policy::load_ground_track_paint);
         app.init_resource::<transport_definition_hydration::TourViewCatalogue>()
             .add_systems(
                 PreUpdate,
@@ -98,19 +98,23 @@ impl Plugin for TransportToursPlugin {
                 .before(FixedConstructionSet::Apply),
         );
 
+        app.register_required_components::<
+            openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation,
+            transport_rider_disembarkation::StationTourRatingHistory,
+        >();
         app.add_observer(behavior_rider_view_animation::animate_rider_for_authored_view);
         app.register_required_components_with::<
             TransportCircuit,
             openzt2_zoo_state::donations::donation_opportunity_types::DonationOpportunity,
         >(tour_donation::tour_donation_opportunity)
-            .init_asset::<sky_station_travel::SkyStationStopNodes>()
-            .init_asset_loader::<sky_station_travel::SkyStationStopNodesLoader>()
-            .init_resource::<sky_station_travel::SkyStationStopSource>()
             .add_message::<sky_station_travel::DiscardedStationCableNode>()
             .add_observer(sky_station_travel::notify_discarded_station_cable_node)
             .add_systems(PostUpdate, sky_station_travel::project_sky_station_travel
                 .after(bevy::transform::TransformSystems::Propagate)
                 .run_if(in_state(GamePhase::InGame)))
+            .init_asset::<tour_view_scoring::SkyTourViewRange>()
+            .init_asset_loader::<tour_view_scoring::SkyTourViewRangeLoader>()
+            .init_resource::<tour_view_scoring::SkyTourViewRangeSource>()
             .init_asset::<tour_donation::TourDonationPolicy>()
             .init_asset_loader::<tour_donation::TourDonationPolicyLoader>()
             .add_systems(
@@ -141,8 +145,8 @@ impl Plugin for TransportToursPlugin {
             .add_message::<topology::TransportEdgesDisconnected>()
             .add_message::<TransportTrackConnectionRejected>()
             .add_message::<TransportTrackConnectionApplied>()
-            .init_asset::<ground_track_policy::GroundTrackPolicy>()
-            .init_asset_loader::<ground_track_policy::GroundTrackPolicyLoader>()
+            .init_asset::<ground_track_policy::GroundTrackPaint>()
+            .init_asset_loader::<ground_track_policy::GroundTrackPaintLoader>()
             .add_message::<TransportTrackDisconnectionApplied>()
             .add_message::<TransportStationAssignmentRejected>()
             .add_message::<TransportTrackConstructionEditPrepared>()
@@ -154,6 +158,7 @@ impl Plugin for TransportToursPlugin {
             .add_message::<BoardTransportRequest>()
             .add_message::<SkyTowerTransitionRequest>()
             .add_message::<TransportTripCompleted>()
+            .add_message::<tour_view_scoring::TourSeatFeedbackRequested>()
             .add_message::<transport_track_piece_presentation::DiscardedTrackJointEndpoints>()
             .add_message::<transport_track_piece_presentation::TransportTrackJointChanged>()
             .add_message::<transport_track_piece_presentation::DiscardedSkyCableAnchor>()
@@ -330,8 +335,7 @@ impl Plugin for TransportToursPlugin {
                 FixedUpdate,
                 (
                     crate::transport_tours::transport_fare_settlement::complete_paid_transport_trips_and_publish_guest_reactions,
-                    crate::transport_tours::transport_fare_settlement::discard_rejected_transport_fares
-                        .after(crate::transport_tours::transport_fare_settlement::complete_paid_transport_trips_and_publish_guest_reactions),
+                    crate::transport_tours::transport_fare_settlement::discard_rejected_transport_fares,
                     crate::transport_tours::transport_circuit_validation::close_changed_transport_circuits_and_apply_open_requests,
                 )
                     .in_set(FixedGameSet::Cleanup)

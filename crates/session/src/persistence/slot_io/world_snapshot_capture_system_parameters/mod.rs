@@ -94,6 +94,10 @@ pub(super) struct TransportCaptureQueries<'w, 's> {
     pub(super) sky_station_crossings: Query<'w, 's, &'static openzt2_transport::transport_tours::SkyStationCrossing>,
     pub(super) transport_entity_poses: Query<'w, 's, &'static Transform>,
     pub(super) transport_fares: Query<'w, 's, &'static openzt2_zoo_state::economy::facility_economy_types::Price>,
+    pub(super) station_tour_ratings: Query<'w, 's, (
+        &'static openzt2_zoo_state::transport_tours::tour_scoring_types::StationRatingPermille,
+        &'static openzt2_transport::transport_tours::transport_rider_disembarkation::StationTourRatingHistory,
+    ), With<openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation>>,
     pub(super) transport_track_routes: Query<'w, 's, (
         &'static PersistentId,
         openzt2_zoo_state::transport_tours::transport_topology_types::TrackRoute,

@@ -13,6 +13,7 @@ use openzt2_game_assets::{
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
     texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image,
 };
+use openzt2_game_data::world_definitions::transportation_and_tours::GroundTrackPhysicsPolicy;
 use openzt2_zoo_state::terrain::{
     terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex},
     terrain_world_sampling::{sample_terrain, terrain_chunk_at},
@@ -21,10 +22,7 @@ use openzt2_zoo_state::terrain::{
 const GROUND_TRACK_SOURCE: &str = "entities/transportation/track/ai/groundtrack.xml";
 
 #[derive(Asset, TypePath)]
-pub(super) struct GroundTrackPolicy {
-    maximum_across_grade: f32,
-    pub(super) collision_radius: f32,
-    pub(super) minimum_obstruction_speed_squared: f32,
+pub(super) struct GroundTrackPaint {
     paints: Vec<GroundTrackPaintRow>,
 }
 
@@ -43,7 +41,7 @@ struct GroundTrackPaintRow {
     low: Option<GroundTrackPaintSource>,
 }
 
-impl GroundTrackPolicy {
+impl GroundTrackPaint {
     pub(super) fn uses_image(&self, image: bevy::asset::AssetId<Image>) -> bool {
         self.paints.iter().any(|row| {
             std::iter::once(&row.normal)
@@ -74,10 +72,10 @@ impl GroundTrackPolicy {
 }
 
 #[derive(Default, TypePath)]
-pub(super) struct GroundTrackPolicyLoader;
+pub(super) struct GroundTrackPaintLoader;
 
-impl AssetLoader for GroundTrackPolicyLoader {
-    type Asset = GroundTrackPolicy;
+impl AssetLoader for GroundTrackPaintLoader {
+    type Asset = GroundTrackPaint;
     type Settings = ();
     type Error = io::Error;
 
@@ -91,31 +89,6 @@ impl AssetLoader for GroundTrackPolicyLoader {
         reader.read_to_end(&mut bytes).await?;
         let path = AssetPath::new(context.path().path().to_string_lossy());
         let source = parse_blue_fang_source_document(path, &bytes).map_err(io::Error::other)?;
-        let data = source
-            .root
-            .element_children()
-            .find(|node| node.name.eq_ignore_ascii_case("shared"))
-            .and_then(|node| {
-                node.element_children()
-                    .find(|node| node.name.eq_ignore_ascii_case("BFAIEntityDataShared"))
-            })
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "missing ground track shared data",
-                )
-            })?;
-        let read = |name| {
-            data.attribute_named_any(&[name])
-                .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
-                .filter(|value| value.is_finite() && *value >= 0.0)
-                .ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("invalid ground track field {name}"),
-                    )
-                })
-        };
         let mut paints = Vec::new();
         let texture_rows = source
             .root
@@ -190,33 +163,26 @@ impl AssetLoader for GroundTrackPolicyLoader {
                 });
             }
         }
-        Ok(GroundTrackPolicy {
-            paints,
-            maximum_across_grade: read("f_MaximumAcrossSlope")?,
-            collision_radius: read("f_CollisionDetectionRadius")?,
-            minimum_obstruction_speed_squared: read("f_MinVelocityForObstruction")?,
-        })
-    }
-
-    fn extensions(&self) -> &[&str] {
-        &["xml"]
+        Ok(GroundTrackPaint { paints })
     }
 }
 
 #[derive(Resource)]
-pub(super) struct GroundTrackPolicySource(Handle<GroundTrackPolicy>);
+pub(super) struct GroundTrackPaintAssetHandle(Handle<GroundTrackPaint>);
 
-pub(super) fn load_ground_track_policy(mut commands: Commands, assets: Res<AssetServer>) {
-    commands.insert_resource(GroundTrackPolicySource(assets.load(GROUND_TRACK_SOURCE)));
+pub(super) fn load_ground_track_paint(mut commands: Commands, assets: Res<AssetServer>) {
+    commands.insert_resource(GroundTrackPaintAssetHandle(
+        assets.load(GROUND_TRACK_SOURCE),
+    ));
 }
 
 #[derive(SystemParam)]
-pub(super) struct GroundTrackPolicyAsset<'w> {
-    source: Option<Res<'w, GroundTrackPolicySource>>,
-    assets: Res<'w, Assets<GroundTrackPolicy>>,
+pub(super) struct GroundTrackPaintAsset<'w> {
+    source: Option<Res<'w, GroundTrackPaintAssetHandle>>,
+    assets: Res<'w, Assets<GroundTrackPaint>>,
 }
 
-impl GroundTrackPolicyAsset<'_> {
+impl GroundTrackPaintAsset<'_> {
     pub(super) fn is_changed(&self) -> bool {
         self.assets.is_changed()
             || self
@@ -225,7 +191,7 @@ impl GroundTrackPolicyAsset<'_> {
                 .is_some_and(|source| source.is_changed())
     }
 
-    pub(super) fn get(&self) -> Option<&GroundTrackPolicy> {
+    pub(super) fn get(&self) -> Option<&GroundTrackPaint> {
         self.assets.get(&self.source.as_ref()?.0)
     }
 }
@@ -257,7 +223,7 @@ impl TrackTerrain<'_, '_> {
         root: Entity,
         path: &[Vec3],
         station_ends: [bool; 2],
-        policy: &GroundTrackPolicy,
+        policy: &GroundTrackPhysicsPolicy,
     ) -> bool {
         path.windows(2).enumerate().all(|(index, points)| {
             if (index == 0 && station_ends[0]) || (index + 2 == path.len() && station_ends[1]) {

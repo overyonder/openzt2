@@ -7,10 +7,10 @@ pub fn find_authored_object_or_placeable_price(
 ) -> Option<Money> {
     world_definitions
         .find_object(definition)
-        .map(|object| Money(object.price_cents))
+        .map(|object| Money::from_cents(object.price_cents))
         .or_else(|| {
             world_definitions
                 .find_placeable(definition)
-                .map(|placeable| Money(placeable.price_cents))
+                .map(|placeable| Money::from_cents(placeable.price_cents))
         })
 }

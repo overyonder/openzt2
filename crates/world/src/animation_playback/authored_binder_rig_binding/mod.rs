@@ -93,6 +93,9 @@ pub(super) fn bind_authored_animation_binder_rigs<Lane: Component>(
         else {
             continue;
         };
+        commands
+            .entity(owner.gameplay_entity)
+            .insert_if_new(crate::world_spawn::prefab_socket_index::PrefabSocketIndexRoot);
         let binder = binder.map_or(main_object, |binder| binder.0);
         let source = definitions
             .and_then(|definitions| definitions.animation_binder_rig_source(definition, binder))

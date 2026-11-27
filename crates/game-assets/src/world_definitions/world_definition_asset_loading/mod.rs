@@ -3,14 +3,13 @@ use super::{
     world_definition_source_document_lowering::lower_resolved_world_definition_source_document_closure_to_canonical_document,
 };
 use crate::asset_source::{
-    AssetArchives,
-    archive_entry_asset_path::{ARCHIVE_ENTRY_ASSET_EXTENSION, archive_entry_asset_source_path},
+    archive_entry_asset_path::archive_entry_asset_source_path, AssetArchives,
 };
 use crate::source_document::{
     blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
 };
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
 use std::{io, path::Path, sync::Arc};
@@ -112,6 +111,13 @@ impl AssetLoader for WorldDefinitionAssetLoader {
                 metadata.tank_material_paths,
             )?;
         asset.metadata = metadata.runtime;
+        presentation_dependencies::bind_world_definition_physical_actors(
+            context,
+            &mut asset,
+            &actor_manifest_resolution_index,
+            metadata.physical_actors,
+        )
+        .await?;
         for source in &asset.tank_water_material_sources {
             context
                 .read_asset_bytes(source.path.to_string())
@@ -135,18 +141,6 @@ impl AssetLoader for WorldDefinitionAssetLoader {
             asset.authored_binder_sources = Some(binder_sources);
         }
         Ok(asset)
-    }
-
-    fn extensions(&self) -> &[&str] {
-        &[
-            "xml",
-            "dl",
-            "maxml",
-            "zt2",
-            "trk",
-            "old",
-            ARCHIVE_ENTRY_ASSET_EXTENSION,
-        ]
     }
 }
 

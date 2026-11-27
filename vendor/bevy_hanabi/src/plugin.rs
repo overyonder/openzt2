@@ -40,13 +40,13 @@ use crate::{
         prepare_property_buffers, propagate_ready_state, publish_render_ready_state, queue_effects,
         queue_init_fill_dispatch_ops, queue_init_indirect_workgroup_update,
         queue_sort_fill_dispatch_ops, start_stop_gpu_debug_capture, update_mesh_locations, Batcher,
-        DebugSettings, DispatchIndirectPipeline, DrawEffects, EffectAssetEvents, EffectBindGroups,
-        EffectCache, EffectsMeta, EventCache, GpuBatchInfo, GpuBufferOperations, GpuSpawnerParams,
+        DebugSettings, DispatchIndirectPipeline, DrawEffects, EffectBindGroups, EffectCache,
+        EffectsMeta, EventCache, GpuBatchInfo, GpuBufferOperations, GpuSpawnerParams,
         HanabiRenderPlugin, InitFillDispatchQueue, ParticleDrawIndirectBuffer,
-        ParticleEffectMetadataBuffer, ParticlesInitPipeline, ParticlesRenderPipeline,
-        ParticlesUpdatePipeline, PrefixSumPipeline, PropertyBindGroups, PropertyCache,
-        RenderDebugSettings, ShaderCache, SimParams, SortBindGroups, SortFillDispatchQueue,
-        StorageType as _, UtilsPipeline,
+        ParticleEffectMetadataBuffer, ParticleImageChanged, ParticlesInitPipeline,
+        ParticlesRenderPipeline, ParticlesUpdatePipeline, PrefixSumPipeline, PropertyBindGroups,
+        PropertyCache, RenderDebugSettings, ShaderCache, SimParams, SortBindGroups,
+        SortFillDispatchQueue, StorageType as _, UtilsPipeline,
     },
     render_feedback::{particle_render_feedback_channel, receive_particle_render_feedback},
     spawn::{self, Random},
@@ -252,8 +252,10 @@ impl Plugin for HanabiPlugin {
     }
 
     fn finish(&self, app: &mut App) {
-        let render_device = app
-            .sub_app(RenderApp)
+        let Some(render_app) = app.get_sub_app(RenderApp) else {
+            return;
+        };
+        let render_device = render_app
             .world()
             .resource::<RenderDevice>()
             .clone();
@@ -395,7 +397,7 @@ impl Plugin for HanabiPlugin {
             .init_resource::<ParticlesRenderPipeline>()
             .init_resource::<crate::render::distance_sort::ParticleDistanceSortPipeline>()
             .init_resource::<SpecializedRenderPipelines<ParticlesRenderPipeline>>()
-            .init_resource::<EffectAssetEvents>()
+            .add_message::<ParticleImageChanged>()
             .init_resource::<SimParams>()
             .init_resource::<Batcher>()
             .configure_sets(

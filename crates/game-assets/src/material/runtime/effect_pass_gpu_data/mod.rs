@@ -187,6 +187,7 @@ pub struct EffectPassMaterial {
     pub(super) dirty_transform_inputs: bool,
     pub(super) dirty_float_register_stages: u8,
     pub(super) dynamic_texture_semantics: [Option<String>; 8],
+    pub(super) texture_parameter_names: [Option<String>; 8],
 }
 
 #[derive(Clone, Debug, VisitAssetDependencies)]

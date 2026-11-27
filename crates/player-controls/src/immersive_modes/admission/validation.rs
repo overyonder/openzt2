@@ -5,9 +5,11 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
     WorldDefinitions, WorldDefinitionsView,
 };
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_data::AssetId;
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
 use openzt2_interface_state::information::entity_selection_types::{InfoPanel, WorldUiSelection};
 use openzt2_interface_state::photos::photo_capture_types::AlbumPhotoReadbacks;
+use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
 use openzt2_zoo_state::animal_health::types::Dead;
@@ -47,27 +49,37 @@ fn camera(cameras: &Query<Entity, With<ZooCamera>>) -> Result<Entity, ModeEntryF
 
 pub(in crate::immersive_modes) fn validate_guest(
     requests: Query<(Entity, &PendingMode<GuestViewControl>), With<ModeReservation>>,
-    guests: Query<(), With<Guest>>,
+    guests: Query<&WorldMember, With<Guest>>,
     definitions: ModeDefinitions,
-    cameras: Query<Entity, With<ZooCamera>>,
+    cameras: Query<(Entity, &WorldMember, &CameraMode), With<ZooCamera>>,
     output: ModeAdmission,
 ) {
     let Ok((session, request)) = requests.single() else {
         return;
     };
     let result = (|| {
-        let subject = subject(request.subject)?;
-        let definitions = definitions.get()?;
-        guests
-            .get(subject)
-            .map_err(|_| ModeEntryFailure::WrongSubject)?;
-        Admission::from_authored(definitions, ImmersiveMode::GuestView, camera(&cameras)?)
+        let (camera, world, mode) = cameras.single().map_err(|_| ModeEntryFailure::RuleDenied)?;
+        if *mode != CameraMode::Overhead {
+            return Err(ModeEntryFailure::RuleDenied);
+        }
+        let subject = request.subject.filter(|subject| {
+            guests
+                .get(*subject)
+                .is_ok_and(|guest| guest.root == world.root)
+        });
+        let admission =
+            Admission::from_authored(definitions.get()?, ImmersiveMode::GuestView, camera)?;
+        Ok((admission, subject))
     })();
+    let (admission, subject) = match result {
+        Ok((admission, subject)) => (Ok(admission), subject),
+        Err(reason) => (Err(reason), None),
+    };
     commit_admitted_mode::<GuestViewControl>(
         session,
         ImmersiveMode::GuestView,
-        request.subject,
-        result,
+        subject,
+        admission,
         &definitions,
         output,
     );
@@ -121,6 +133,8 @@ pub(in crate::immersive_modes) fn validate_search(
     cameras: Query<(Entity, &WorldMember, &Transform), With<ZooCamera>>,
     scenes: Res<Assets<ScenePrefabAsset>>,
     server: Res<AssetServer>,
+    world_bounds: Query<&WorldTerrainHorizontalBounds>,
+    start_surface: SuperStaffAvatarStartSurface,
     mut output: ModeAdmission,
 ) {
     let Ok((session, request, pending_dock)) = requests.single() else {
@@ -160,7 +174,7 @@ pub(in crate::immersive_modes) fn validate_search(
             pending.0.clone()
         } else {
             definitions
-                .find_object(AssetId::from_key("digpit"))
+                .find_object(openzt2_game_data::AssetId::from_key("digpit"))
                 .and_then(|pit| definitions.scene(pit.prefab))
                 .ok_or(ModeEntryFailure::MissingTool)?
         };
@@ -183,6 +197,17 @@ pub(in crate::immersive_modes) fn validate_search(
             .prefab_attachment_transform(fossil_finding_dock_id())
             .ok_or(ModeEntryFailure::MissingTool)?;
         admission.fossil_finding_dock = Some(Transform::from_matrix(dock));
+        let bounds = world_bounds
+            .get(world.root)
+            .map_err(|_| ModeEntryFailure::RuleDenied)?;
+        attach_walking_avatar(
+            &mut admission,
+            definitions,
+            *world,
+            camera_pose,
+            bounds,
+            &start_surface,
+        )?;
         Ok::<_, ModeEntryFailure>(Some((admission, subject)))
     })();
     let (admission, subject) = match result {
@@ -201,28 +226,107 @@ pub(in crate::immersive_modes) fn validate_search(
 }
 
 pub(in crate::immersive_modes) fn validate_assembly(
-    requests: Query<(Entity, &PendingMode<FossilAssemblyControl>), With<ModeReservation>>,
-    assemblies: Query<&FossilPlacementSurface, With<FossilAssemblyTable>>,
+    requests: Query<
+        (
+            Entity,
+            &PendingMode<FossilAssemblyControl>,
+            Option<&PendingFossilAssemblyLab>,
+        ),
+        With<ModeReservation>,
+    >,
+    mut assemblies: Query<(
+        &FossilAssemblyTable,
+        &FossilPlacementSurface,
+        &WorldMember,
+        Option<&mut FossilAssemblyView>,
+    )>,
     definitions: ModeDefinitions,
-    cameras: Query<Entity, With<ZooCamera>>,
-    output: ModeAdmission,
+    cameras: Query<(Entity, &WorldMember), With<ZooCamera>>,
+    prefabs: Res<Assets<ScenePrefabAsset>>,
+    server: Res<AssetServer>,
+    mut output: ModeAdmission,
 ) {
-    let Ok((session, request)) = requests.single() else {
+    let Ok((session, request, pending_lab)) = requests.single() else {
         return;
     };
     let result = (|| {
-        if !assemblies
-            .get(subject(request.subject)?)
-            .is_ok_and(|surface| surface.accepts_fossil_pieces)
-        {
+        let (camera, world) = cameras.single().map_err(|_| ModeEntryFailure::RuleDenied)?;
+        let entity = subject(request.subject)?;
+        let (table, surface, member, current) = assemblies
+            .get_mut(entity)
+            .map_err(|_| ModeEntryFailure::WrongSubject)?;
+        if !surface.accepts_fossil_pieces || member.root != world.root {
             return Err(ModeEntryFailure::WrongSubject);
         }
-        Admission::from_authored(
-            definitions.get()?,
-            ImmersiveMode::FossilAssembly,
-            camera(&cameras)?,
+        let definitions = definitions.get()?;
+        let admission =
+            Admission::from_authored(definitions, ImmersiveMode::FossilAssembly, camera)?;
+        let object = definitions
+            .find_object(table.object_definition_identifier)
+            .ok_or(ModeEntryFailure::MissingTool)?;
+        let lab = object
+            .named_physical_presentations
+            .iter()
+            .find(|presentation| presentation.name == AssetId::from_key("puzzleinteriorobj"));
+        let lab = if let Some(lab) = lab {
+            let handle = pending_lab
+                .map(|pending| pending.0.clone())
+                .or_else(|| definitions.scene(lab.prefab))
+                .ok_or(ModeEntryFailure::MissingTool)?;
+            let Some(prefab) = prefabs.get(&handle) else {
+                if matches!(
+                    server.load_state(handle.id()),
+                    bevy::asset::LoadState::Failed(_)
+                ) {
+                    return Err(ModeEntryFailure::MissingTool);
+                }
+                if pending_lab.is_none() {
+                    output
+                        .commands
+                        .entity(session)
+                        .insert(PendingFossilAssemblyLab(handle));
+                }
+                return Ok(None);
+            };
+            Some((handle, prefab, lab.scale))
+        } else {
+            None
+        };
+        let next = resolve_fossil_assembly_view(
+            definitions,
+            object,
+            lab.as_ref().map(|(_, prefab, scale)| (*prefab, *scale)),
+            admission.definition,
         )
+        .ok_or(ModeEntryFailure::MissingTool)?;
+        if let Some(mut current) = current {
+            current.set_if_neq(next);
+        } else {
+            output.commands.entity(entity).insert(next);
+        }
+        if let Some((handle, _, scale)) = lab {
+            output.commands.spawn((
+                OwnedImmersiveEntity(session),
+                ChildOf(entity),
+                PrefabPresentation::new(handle),
+                Transform::from_scale(Vec3::splat(scale)),
+                Visibility::Inherited,
+                *member,
+            ));
+        }
+        if pending_lab.is_some() {
+            output
+                .commands
+                .entity(session)
+                .remove::<PendingFossilAssemblyLab>();
+        }
+        Ok(Some(admission))
     })();
+    let result = match result {
+        Ok(None) => return,
+        Ok(Some(admission)) => Ok(admission),
+        Err(reason) => Err(reason),
+    };
     commit_admitted_mode::<FossilAssemblyControl>(
         session,
         ImmersiveMode::FossilAssembly,
@@ -231,6 +335,48 @@ pub(in crate::immersive_modes) fn validate_assembly(
         &definitions,
         output,
     );
+}
+
+fn resolve_fossil_assembly_view(
+    definitions: WorldDefinitionsView<'_>,
+    object: &openzt2_game_data::world_definitions::world_objects::WorldObjectDefinition,
+    lab: Option<(&ScenePrefabAsset, f32)>,
+    camera: AssetId,
+) -> Option<FossilAssemblyView> {
+    let policy = find_authored_immersive_mode_policy(definitions, ImmersiveMode::FossilAssembly)?;
+    let piece_rotation_radians = policy.fossil_piece_rotation_radians?;
+    let camera = definitions.find_camera(camera)?;
+    let table_relative_camera = if let Some((prefab, scale)) = lab {
+        let attachment = |name| {
+            let local = prefab.prefab_attachment_transform(AssetId::from_key(name))?;
+            Some(local.transform_point3(Vec3::ZERO) * scale)
+        };
+        let focus = attachment("puzzlenode")?;
+        let [a, b, c] = [
+            attachment("cornernodea")?,
+            attachment("cornernodeb")?,
+            attachment("cornernodec")?,
+        ];
+        let normal = (b - a).cross(c - a).try_normalize()?;
+        let distance = object
+            .authored_runtime
+            .numeric_behavior_properties
+            .iter()
+            .find_map(|&(key, value)| {
+                (key == AssetId::from_key("f_puzzlecameradistancefromfocalpoint") && value > 0.0)
+                    .then_some(value)
+            })?;
+        let up = Vec3::Y.reject_from_normalized(normal);
+        let up = up.try_normalize().unwrap_or((c - a).normalize());
+        Transform::from_translation(focus + normal * distance).looking_at(focus, up)
+    } else {
+        Transform::from_translation(Vec3::from_array(camera.offset_m))
+            .with_rotation(Quat::from_rotation_x(camera.initial_pitch_radians))
+    };
+    Some(FossilAssemblyView {
+        table_relative_camera,
+        piece_rotation_radians,
+    })
 }
 
 pub(in crate::immersive_modes) fn validate_photo(
@@ -320,28 +466,17 @@ pub(in crate::immersive_modes) fn validate_staff(
             .map_err(|_| ModeEntryFailure::MissingTool)?;
         let mut admission =
             Admission::from_authored(definitions, ImmersiveMode::SuperStaff, camera)?;
-        let walking = definitions
-            .find_camera(admission.definition)
-            .ok_or(ModeEntryFailure::MissingTool)?;
         let bounds = world_bounds
             .get(world.root)
             .map_err(|_| ModeEntryFailure::RuleDenied)?;
-        if walking.first_person_motion.is_none() {
-            return Err(ModeEntryFailure::MissingTool);
-        }
-        let (heading, _, _) = overhead.rotation.to_euler(EulerRot::YXZ);
-        let position = start_surface.find_avatar_start_position(
-            world.root,
-            overhead.translation,
-            heading,
+        attach_walking_avatar(
+            &mut admission,
+            definitions,
+            *world,
+            overhead,
             bounds,
-        );
-        admission.avatar = Some(StaffAvatar {
-            transform: Transform::from_translation(position)
-                .with_rotation(Quat::from_rotation_y(heading)),
-            world: *world,
-        });
-        admission.lock_subject = true;
+            &start_surface,
+        )?;
         Ok(admission)
     })();
     commit_admitted_mode::<StaffControl>(
@@ -352,4 +487,30 @@ pub(in crate::immersive_modes) fn validate_staff(
         &definitions,
         output,
     );
+}
+
+fn attach_walking_avatar(
+    admission: &mut Admission,
+    definitions: WorldDefinitionsView<'_>,
+    world: WorldMember,
+    camera: &Transform,
+    bounds: &WorldTerrainHorizontalBounds,
+    surface: &SuperStaffAvatarStartSurface,
+) -> Result<(), ModeEntryFailure> {
+    if !definitions
+        .find_camera(admission.definition)
+        .is_some_and(|camera| camera.first_person_motion.is_some())
+    {
+        return Err(ModeEntryFailure::MissingTool);
+    }
+    let (heading, _, _) = camera.rotation.to_euler(EulerRot::YXZ);
+    let position =
+        surface.find_avatar_start_position(world.root, camera.translation, heading, bounds);
+    admission.avatar = Some(StaffAvatar {
+        transform: Transform::from_translation(position)
+            .with_rotation(Quat::from_rotation_y(heading)),
+        world,
+    });
+    admission.lock_subject = true;
+    Ok(())
 }

@@ -20,7 +20,7 @@ pub(super) mod selected_animal_summary_projection;
 pub(super) mod selected_entity_identity_projection;
 pub(super) mod show_status_projection;
 pub(super) mod staff_status_projection;
-pub(super) mod text_replacement_operations;
+pub(crate) mod text_replacement_operations;
 pub(super) mod transport_status_projection;
 pub(super) mod zoo_status_projection;
 

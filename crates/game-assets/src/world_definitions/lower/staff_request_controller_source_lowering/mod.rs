@@ -8,11 +8,11 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::staff_management::{
     StaffRequestControllerDefinition, StaffRequestData, StaffRequestThresholdComparison,
     StaffRequestThresholdValue,
 };
+use openzt2_game_data::AssetId;
 use std::collections::BTreeSet;
 
 const CONTROLLER_COMPONENT: &str = "ZTAIStaffRequestController";
@@ -213,17 +213,23 @@ fn lower_authored_staff_request_controller_instance(
     // An empty tracked attribute keeps the default comparisons and values.
     let threshold_comparison = parse_test_type(record, test_type, 4)?;
     let cancel_comparison = parse_test_type(record, cancel_test_type, 1)?;
+    let threshold = lower_authored_staff_request_threshold_value(
+        record,
+        "thresholdValue",
+        attribute_key,
+        threshold_value,
+        CONSTRUCTED_NUMBER_THRESHOLD_DEFAULT,
+    )?;
+    use openzt2_game_data::world_definitions::staff_management::StaffRequestProperty;
     Ok(StaffRequestControllerDefinition {
         id: id(record.key),
         binder,
         attribute_key: attribute_key_id,
-        threshold: lower_authored_staff_request_threshold_value(
-            record,
-            "thresholdValue",
-            attribute_key,
-            threshold_value,
-            CONSTRUCTED_NUMBER_THRESHOLD_DEFAULT,
-        )?,
+        property_binding: attribute_key_id.map(|key| match threshold {
+            StaffRequestThresholdValue::Boolean(_) => StaffRequestProperty::Boolean(key),
+            StaffRequestThresholdValue::Number(_) => StaffRequestProperty::Number(key),
+        }),
+        threshold,
         threshold_comparison,
         cancel_threshold: lower_authored_staff_request_threshold_value(
             record,
@@ -398,8 +404,8 @@ pub(super) fn lower_authored_staff_request_data(
 #[cfg(test)]
 mod tests {
     use super::{
-        StaffRequestThresholdComparison, StaffRequestThresholdValue,
-        canonicalize_source_document_record_key, id,
+        canonicalize_source_document_record_key, id, StaffRequestThresholdComparison,
+        StaffRequestThresholdValue,
     };
     use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
 
@@ -452,8 +458,8 @@ mod tests {
     </BFTypedBinder>"#;
 
     #[test]
-    fn food_dish_threshold_request_lowers_with_authored_values()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn food_dish_threshold_request_lowers_with_authored_values(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let document = lower_fixture(
             &[(
                 "entities/objects/food/ai/FoodDish.xml",
@@ -491,8 +497,8 @@ mod tests {
     }
 
     #[test]
-    fn animal_family_requests_lower_through_inherited_binders()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn animal_family_requests_lower_through_inherited_binders(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let animal = r#"<BFTypedBinder binderType="animal" abstract="true">
             <types><entity><actor><animal/></actor></entity></types>
             <binder>
@@ -554,8 +560,8 @@ mod tests {
     }
 
     #[test]
-    fn named_health_binders_merge_when_authored_names_differ()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn named_health_binders_merge_when_authored_names_differ(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let animal = r#"<BFTypedBinder binderType="animal" abstract="true">
             <types><entity><actor><animal/></actor></entity></types>
             <binder><BFNamedBinder binderName="sick"><instance>
@@ -596,8 +602,8 @@ mod tests {
     }
 
     #[test]
-    fn inherited_variant_request_is_retained_and_suppressed_records_drop_it()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn inherited_variant_request_is_retained_and_suppressed_records_drop_it(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let parent = r#"<BFTypedBinder binderType="FoodDish">
             <types><entity><food><FoodDish/></food></entity></types>
             <binder>
@@ -654,8 +660,8 @@ mod tests {
     }
 
     #[test]
-    fn recycling_bin_archive_variants_retain_distinct_worker_tokens()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn recycling_bin_archive_variants_retain_distinct_worker_tokens(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         fn source(token: &str) -> String {
             format!(
                 r#"<BFTypedBinder binderType="RecyclingBin_df">
@@ -691,8 +697,8 @@ mod tests {
     }
 
     #[test]
-    fn creation_only_controller_keeps_constructed_threshold_defaults()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn creation_only_controller_keeps_constructed_threshold_defaults(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let poop = r#"<BFTypedBinder binderType="Poop" abstract="true">
             <types><entity><item><Poop/></item></entity></types>
             <binder><BFBinder required="1"><instance>
@@ -728,8 +734,8 @@ mod tests {
     }
 
     #[test]
-    fn waste_type_and_inherited_cleanup_request_reach_the_same_object_definition()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn waste_type_and_inherited_cleanup_request_reach_the_same_object_definition(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let base = r#"<BFTypedBinder binderType="Poop" abstract="true">
             <types><entity><item><Poop/></item></entity></types>
             <binder><BFBinder required="1"><instance>
@@ -761,14 +767,12 @@ mod tests {
         assert!(object.properties.contains_all(
             openzt2_game_data::world_definitions::world_objects::WorldObjectPropertyFlags::ANIMAL_WASTE
         ));
-        assert!(
-            document
-                .staff_requests
-                .iter()
-                .any(|request| request.id == object.id
-                    && request.trigger_on_creation
-                    && request.request.token == Some(id("t_RakePoo")))
-        );
+        assert!(document
+            .staff_requests
+            .iter()
+            .any(|request| request.id == object.id
+                && request.trigger_on_creation
+                && request.request.token == Some(id("t_RakePoo"))));
         Ok(())
     }
 }

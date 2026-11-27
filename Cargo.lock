@@ -739,7 +739,6 @@ dependencies = [
 [[package]]
 name = "bevy_audio"
 version = "0.20.0-dev"
-source = "git+https://github.com/bevyengine/bevy?rev=2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2#2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -5245,6 +5244,7 @@ dependencies = [
  "openzt2_game_assets",
  "openzt2_game_data",
  "openzt2_interface_state",
+ "openzt2_progression",
  "openzt2_ui",
  "openzt2_world",
  "openzt2_world_state",
@@ -5256,11 +5256,13 @@ dependencies = [
 name = "openzt2_aquatic"
 version = "1.2.1-beta"
 dependencies = [
+ "avian3d",
  "bevy",
  "openzt2_construction",
  "openzt2_game_assets",
  "openzt2_game_data",
  "openzt2_interface_state",
+ "openzt2_navigation",
  "openzt2_world_state",
  "openzt2_zoo_state",
 ]
@@ -5270,6 +5272,7 @@ name = "openzt2_audio"
 version = "1.2.1-beta"
 dependencies = [
  "bevy",
+ "openzt2_animals",
  "openzt2_game_assets",
  "openzt2_game_data",
  "openzt2_interface_state",
@@ -5286,6 +5289,7 @@ dependencies = [
  "openzt2_game_assets",
  "openzt2_game_data",
  "openzt2_interface_state",
+ "openzt2_progression",
  "openzt2_ui",
  "openzt2_world",
  "openzt2_world_state",
@@ -5326,6 +5330,7 @@ dependencies = [
  "openzt2_game_assets",
  "openzt2_game_data",
  "openzt2_interface_state",
+ "openzt2_progression",
  "openzt2_world_state",
  "openzt2_zoo_state",
 ]
@@ -5457,6 +5462,7 @@ dependencies = [
  "openzt2_game_assets",
  "openzt2_game_data",
  "openzt2_interface_state",
+ "openzt2_progression",
  "openzt2_world_state",
  "openzt2_zoo_state",
 ]
@@ -5482,12 +5488,14 @@ version = "1.2.1-beta"
 dependencies = [
  "avian3d",
  "bevy",
+ "openzt2_extinct_animals",
  "openzt2_game_assets",
  "openzt2_game_data",
  "openzt2_interface_state",
  "openzt2_ui",
  "openzt2_world",
  "openzt2_world_state",
+ "openzt2_zoo_staff",
  "openzt2_zoo_state",
 ]
 
@@ -5518,16 +5526,21 @@ dependencies = [
  "image",
  "mlua",
  "openzt2_animals",
+ "openzt2_aquatic",
  "openzt2_construction",
  "openzt2_economy",
  "openzt2_environment",
+ "openzt2_extinct_animals",
  "openzt2_game_assets",
  "openzt2_game_data",
  "openzt2_interface_state",
  "openzt2_navigation",
  "openzt2_photos",
  "openzt2_player_controls",
+ "openzt2_progression",
+ "openzt2_shows",
  "openzt2_simulation_time",
+ "openzt2_transport",
  "openzt2_ui",
  "openzt2_visitors",
  "openzt2_world",
@@ -5602,6 +5615,8 @@ version = "1.2.1-beta"
 dependencies = [
  "avian3d",
  "bevy",
+ "bevy_hanabi",
+ "openzt2_construction",
  "openzt2_game_assets",
  "openzt2_game_data",
  "openzt2_interface_state",
@@ -5653,6 +5668,8 @@ dependencies = [
  "openzt2_game_assets",
  "openzt2_game_data",
  "openzt2_interface_state",
+ "openzt2_shows",
+ "openzt2_transport",
  "openzt2_ui",
  "openzt2_world_state",
  "openzt2_zoo_state",
@@ -5692,6 +5709,8 @@ dependencies = [
  "openzt2_game_assets",
  "openzt2_game_data",
  "openzt2_interface_state",
+ "openzt2_shows",
+ "openzt2_staff_requests",
  "openzt2_world",
  "openzt2_world_state",
  "openzt2_zoo_state",

@@ -13,9 +13,9 @@ use openzt2_zoo_state::{
     animal_lifecycle::types::Animal,
     shows::{
         running_show_types::{
-            AnimalPerformingShowTrick, BeginScheduledShowTrick, RunningShow, RunningShowFromRow,
-            RunningShowOnStage, RunningShowTrick, ShowPhase, ShowRunFinished,
-            ShowTrickBeingPerformedBy, StageRunningShow,
+            AnimalPerformingShowTrick, RunningShow, RunningShowFromRow, RunningShowOnStage,
+            RunningShowTrick, ShowPhase, ShowRunFinished, ShowTrickBeingPerformedBy,
+            StageRunningShow,
         },
         show_schedule_types::{
             ScheduledShowBreakRow, ScheduledShowRowActivationState, ScheduledShowTrickPerformance,
@@ -26,9 +26,12 @@ use openzt2_zoo_state::{
 };
 
 use super::show_timing_operations::{
-    RunningShowPhaseTimer, convert_authored_nanoseconds_to_fixed_simulation_ticks,
+    convert_authored_nanoseconds_to_fixed_simulation_ticks, RunningShowPhaseTimer,
 };
-use super::{ShowMixerTimeSlot, ShowMixerWait, scheduled_trick_execution::ShowTrickTokens};
+use super::{
+    scheduled_trick_execution::{PendingShowTrickToken, ShowTrickTokens},
+    ShowMixerTimeSlot, ShowMixerWait,
+};
 
 #[derive(Component)]
 pub struct ShowRunSlotOrder(pub Vec<Vec<Entity>>);
@@ -81,6 +84,7 @@ pub(super) struct ShowPhaseStarted {
     pub(super) show: Entity,
     pub(super) stage: Entity,
     pub(super) phase: ShowPhase,
+    pub(super) initial: bool,
 }
 
 #[derive(Message)]
@@ -142,6 +146,22 @@ pub(super) fn hydrate_restored_show_columns(
     }
 }
 
+pub(super) fn publish_initial_running_show_phases(
+    added: Query<(Entity, &RunningShowOnStage, &RunningShow), Added<RunningShow>>,
+    mut phases: MessageWriter<ShowPhaseStarted>,
+) {
+    for (show, stage, run) in &added {
+        if run.phase != ShowPhase::BetweenShows {
+            phases.write(ShowPhaseStarted {
+                show,
+                stage: stage.0,
+                phase: run.phase,
+                initial: true,
+            });
+        }
+    }
+}
+
 pub(super) fn start_next_stage_show_or_break(
     mut stages: Query<
         (
@@ -163,7 +183,6 @@ pub(super) fn start_next_stage_show_or_break(
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     time: Res<Time<Fixed>>,
-    mut phases: MessageWriter<ShowPhaseStarted>,
     mut commands: Commands,
 ) {
     let Some(definitions) = definitions.get(&assets) else {
@@ -206,27 +225,22 @@ pub(super) fn start_next_stage_show_or_break(
             },
             |interval| (ShowPhase::BetweenShows, interval.duration_ticks),
         );
-        let show = commands
-            .spawn((
-                *world,
-                RunningShowOnStage(stage),
-                RunningShowFromRow(row),
-                ShowRunSlotOrder::from_plan(slots, &time_slots),
-                RunningShowPhaseTimer::new(time.timestep(), remaining_ticks),
-                ShowColumnWait::from_remaining(Duration::ZERO),
-                RunningShow {
-                    phase,
-                    current_slot: 0,
-                    trick_score: 0.0,
-                    stars: 0.0,
-                    completed_tricks: 0,
-                    failed_tricks: 0,
-                },
-            ))
-            .id();
-        if phase == ShowPhase::Preshow {
-            phases.write(ShowPhaseStarted { show, stage, phase });
-        }
+        commands.spawn((
+            *world,
+            RunningShowOnStage(stage),
+            RunningShowFromRow(row),
+            ShowRunSlotOrder::from_plan(slots, &time_slots),
+            RunningShowPhaseTimer::new(time.timestep(), remaining_ticks),
+            ShowColumnWait::from_remaining(Duration::ZERO),
+            RunningShow {
+                phase,
+                current_slot: 0,
+                trick_score: 0.0,
+                stars: 0.0,
+                completed_tricks: 0,
+                failed_tricks: 0,
+            },
+        ));
     }
 }
 
@@ -243,13 +257,12 @@ pub(super) fn advance_running_stage_shows(
     stages: Query<(Option<&ShowStageOpenState>, Option<&PersistentId>), With<ShowStage>>,
     slots: Query<(&ScheduledShowTrickPerformance, &ScheduledTrickPerformer)>,
     waits: Query<&ShowMixerWait>,
-    tokens: Query<&ShowTrickTokens>,
+    tokens: Query<(Has<PendingShowTrickToken>, Option<&ShowTrickTokens>), With<RunningShowTrick>>,
     animals: Query<Option<&AnimalPerformingShowTrick>, (With<Animal>, Without<Dead>)>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     mut finished: MessageWriter<ShowRunFinished>,
     mut cancelled: MessageWriter<ShowRunCancelled>,
-    mut started: MessageWriter<BeginScheduledShowTrick>,
     time: Res<Time<Fixed>>,
     mut phases: MessageWriter<ShowPhaseStarted>,
     mut commands: Commands,
@@ -283,7 +296,9 @@ pub(super) fn advance_running_stage_shows(
             && !tokens
                 .iter_many(active.into_iter().flat_map(RelationshipTarget::iter))
                 .flatten()
-                .any(|tokens| !tokens.is_empty());
+                .any(|(pending, tokens)| {
+                    pending || tokens.is_some_and(|tokens| !tokens.is_empty())
+                });
         if !expired && !column_finished {
             continue;
         }
@@ -301,6 +316,7 @@ pub(super) fn advance_running_stage_shows(
                 show: entity,
                 stage: stage.0,
                 phase: show.phase,
+                initial: false,
             });
             *timer = RunningShowPhaseTimer::new(
                 time.timestep(),
@@ -360,6 +376,7 @@ pub(super) fn advance_running_stage_shows(
                     show: entity,
                     stage,
                     phase: show.phase,
+                    initial: false,
                 });
             }
             let mut duration = wait.unwrap_or_default();
@@ -373,20 +390,13 @@ pub(super) fn advance_running_stage_shows(
                 commands.spawn((
                     ActiveShowTrickOf(entity),
                     ShowTrickBeingPerformedBy(performer),
+                    PendingShowTrickToken(duration_ticks),
                     RunningShowTrick {
                         definition: trick.trick,
                         slot,
                         scored: false,
                     },
                 ));
-                started.write(BeginScheduledShowTrick {
-                    show: entity,
-                    stage,
-                    performer,
-                    slot,
-                    trick: trick.trick,
-                    duration_ticks,
-                });
             }
             *timer = RunningShowPhaseTimer::new(time.timestep(), duration);
             claimed = true;
@@ -398,6 +408,7 @@ pub(super) fn advance_running_stage_shows(
                 show: entity,
                 stage,
                 phase: show.phase,
+                initial: false,
             });
             *timer = RunningShowPhaseTimer::new(
                 time.timestep(),

@@ -69,6 +69,8 @@ pub struct Species {
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct AnimalDonationPolicy {
+    #[serde(default)]
+    pub token: Option<AssetId>,
     pub base_amount_cents: i32,
     pub maximum_species_factor: f32,
 }

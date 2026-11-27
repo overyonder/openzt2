@@ -232,25 +232,28 @@ pub(super) fn restore_behavior_actor_snapshots(
                     available_at,
                     expires_at,
                     retain_on_failure,
+                    payload,
+                    context,
                 } => {
                     let recipient =
                         identities[&BehaviorSnapshotEntityReference::Persistent(*recipient)];
-                    commands
-                        .spawn((
-                            BehaviorSelfToken {
-                                name: *name,
-                                available_at: *available_at,
-                                expires_at: *expires_at,
-                                // The claiming task already holds its target.
-                                payload: None,
-                                retain_on_failure: *retain_on_failure,
-                            },
-                            ClaimedBehaviorSelfToken {
-                                execution_id: record.task.execution_id,
-                            },
-                            ChildOf(recipient),
-                        ))
-                        .id()
+                    let mut token = commands.spawn((
+                        BehaviorSelfToken {
+                            name: *name,
+                            available_at: *available_at,
+                            expires_at: *expires_at,
+                            payload: payload.as_deref().map(|payload| identities[payload]),
+                            retain_on_failure: *retain_on_failure,
+                        },
+                        ClaimedBehaviorSelfToken {
+                            execution_id: record.task.execution_id,
+                        },
+                        ChildOf(recipient),
+                    ));
+                    if let Some(context) = context {
+                        context.restore(&mut token);
+                    }
+                    token.id()
                 }
                 BehaviorSnapshotEntityReference::TankCleaningSite { tank, position } => {
                     let tank = identities[&BehaviorSnapshotEntityReference::Habitat(*tank)];
@@ -303,7 +306,7 @@ pub(super) fn restore_behavior_actor_snapshots(
         }
     }
     for (record, prepared) in records.iter().zip(prepared) {
-        apply_prepared_behavior_actor(commands, root, record, prepared, &identities, application);
+        apply_prepared_behavior_actor(commands, record, prepared, &identities, application);
     }
     Ok(true)
 }

@@ -43,6 +43,7 @@ pub(super) fn request_embedded_model_animation_sets(
             PendingModelAnimationAssets {
                 pending_model_animation_set_asset_handles: Box::new([handle]),
                 requested_initial_animation_clip_asset_key: None,
+                requested_initial_repetition_policy: None,
             },
         ));
     }
@@ -125,6 +126,7 @@ pub(super) fn refresh_embedded_model_animation_bindings(
                 .try_insert(PendingModelAnimationAssets {
                     pending_model_animation_set_asset_handles: Box::new([embedded.0.clone()]),
                     requested_initial_animation_clip_asset_key: None,
+                    requested_initial_repetition_policy: None,
                 });
         }
     }

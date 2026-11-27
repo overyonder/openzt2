@@ -6,7 +6,7 @@ use openzt2_game_data::{
 };
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use crate::topology::topology_graph_types::{
-    PathTile, TopologyGrid, TopologyIndex, TopologyProtected,
+    PathTile, TileSurface, TopologyGrid, TopologyIndex, TopologyProtected,
 };
 use crate::topology::topology_edit_types::TopologySnapshot;
 
@@ -20,6 +20,7 @@ pub struct GroundPathPlacementStomp<'w, 's> {
         's,
         (
             &'static PathTile,
+            &'static TileSurface,
             Option<&'static PersistentId>,
             Has<TopologyProtected>,
         ),
@@ -93,7 +94,7 @@ impl GroundPathFootprintOverlaps<'_, '_, '_> {
             })
             .filter_map(move |(grid, topology, cell)| {
                 let entity = *topology.paths.get(&cell)?;
-                let (tile, id, protected) = self.paths.paths.get(entity).ok()?;
+                let (tile, surface, id, protected) = self.paths.paths.get(entity).ok()?;
                 let path = self.catalogue.find_path(tile.definition)?;
                 let half_width =
                     f32::from(path.width_cm).mul_add(0.005, -PATH_TILE_EDGE_CONTACT_TOLERANCE_M);
@@ -125,6 +126,7 @@ impl GroundPathFootprintOverlaps<'_, '_, '_> {
                                 id: *id,
                                 definition: tile.definition,
                                 cell: tile.cell,
+                                height_cm: surface.height_cm,
                             },
                         )
                     }

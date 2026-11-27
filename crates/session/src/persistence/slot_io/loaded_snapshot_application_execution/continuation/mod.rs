@@ -47,6 +47,155 @@ pub(super) fn restore_runtime_continuation(
     }
 }
 
+pub(super) fn restore_staff_jobs(
+    mut commands: Commands,
+    operations: Query<(Entity, &RestoreRuntimeContinuation), Without<SnapshotRestoreFailed>>,
+    identities: Res<PersistentIdIndex>,
+) {
+    let Ok((operation, stage)) = operations.single() else {
+        return;
+    };
+    let Some(domain) = stage
+        .record
+        .as_ref()
+        .and_then(|record| record.domain_continuation.as_ref())
+    else {
+        return;
+    };
+    let root = stage.actors.root;
+    let mut sites = std::collections::BTreeMap::new();
+    for job in &domain.staff_jobs {
+        if let Err(reason) = job.restore(&mut commands, root, &identities, &mut sites) {
+            commands
+                .entity(operation)
+                .insert(SnapshotRestoreFailed::DuringReplacement {
+                    reason,
+                    root_to_unload: Some(root),
+                });
+            return;
+        }
+    }
+}
+
+pub(super) fn restore_staff_continuation(
+    mut commands: Commands,
+    operations: Query<(Entity, &RestoreRuntimeContinuation), Without<SnapshotRestoreFailed>>,
+    mut staff: super::super::staff_continuation_snapshot::RestoreStaffContinuation,
+) {
+    let Ok((operation, stage)) = operations.single() else {
+        return;
+    };
+    let Some(domain) = stage
+        .record
+        .as_ref()
+        .and_then(|record| record.domain_continuation.as_ref())
+    else {
+        return;
+    };
+    let root = stage.actors.root;
+    if let Err(reason) = staff.apply(&mut commands, root, &domain.staff) {
+        commands
+            .entity(operation)
+            .insert(SnapshotRestoreFailed::DuringReplacement {
+                reason,
+                root_to_unload: Some(root),
+            });
+    }
+}
+
+pub(super) fn restore_authored_float_attributes(
+    mut commands: Commands,
+    operations: Query<(Entity, &RestoreRuntimeContinuation), Without<SnapshotRestoreFailed>>,
+    identities: Res<PersistentIdIndex>,
+    mut attributes: Query<
+        Option<&mut openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes>,
+        With<openzt2_world_state::world_spawn::world_membership_types::WorldMember>,
+    >,
+) {
+    use super::super::restored_component_values::restore_optional_component;
+    use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
+
+    let Ok((operation, stage)) = operations.single() else {
+        return;
+    };
+    let Some(domain) = stage
+        .record
+        .as_ref()
+        .and_then(|record| record.domain_continuation.as_ref())
+    else {
+        return;
+    };
+    let root = stage.actors.root;
+    for (id, values) in &domain.authored_float_attributes {
+        let Some((entity, current)) = identities
+            .get(root, PersistentId(*id))
+            .and_then(|entity| Some((entity, attributes.get_mut(entity).ok()?)))
+        else {
+            commands
+                .entity(operation)
+                .insert(SnapshotRestoreFailed::DuringReplacement {
+                    reason: Failure::BrokenPersistentEntityReference,
+                    root_to_unload: Some(root),
+                });
+            return;
+        };
+        let mut restored = AuthoredFloatAttributes::default();
+        for &(attribute, value) in values {
+            restored.set(attribute, value);
+        }
+        restore_optional_component(&mut commands.entity(entity), current, Some(restored), false);
+    }
+}
+
+pub(super) fn restore_cloning_center_occupancy(
+    mut commands: Commands,
+    operations: Query<(Entity, &RestoreRuntimeContinuation), Without<SnapshotRestoreFailed>>,
+    identities: Res<PersistentIdIndex>,
+    definitions: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    centers: Query<&DefinitionId>,
+) {
+    use openzt2_extinct_animals::extinct_animals::CloningCenterOccupantOf;
+
+    let Ok((operation, stage)) = operations.single() else {
+        return;
+    };
+    let Some(domain) = stage
+        .record
+        .as_ref()
+        .and_then(|record| record.domain_continuation.as_ref())
+    else {
+        return;
+    };
+    let root = stage.actors.root;
+    for &(product, center) in &domain.cloning_center_occupancy {
+        let pair = identities.get(root, PersistentId(product)).zip(
+            identities
+                .get(root, PersistentId(center))
+                .filter(|&entity| {
+                    let Some(definition) = centers.get(entity).ok() else {
+                        return false;
+                    };
+                    definitions.get(&assets).is_some_and(|definitions| {
+                        definitions.find_cloning_center(definition.0).is_some()
+                    })
+                }),
+        );
+        let Some((product, center)) = pair else {
+            commands
+                .entity(operation)
+                .insert(SnapshotRestoreFailed::DuringReplacement {
+                    reason: Failure::BrokenPersistentEntityReference,
+                    root_to_unload: Some(root),
+                });
+            return;
+        };
+        commands
+            .entity(product)
+            .insert(CloningCenterOccupantOf(center));
+    }
+}
+
 pub(super) fn restore_snapshot_names(
     mut commands: Commands,
     operations: Query<&RestoreRuntimeContinuation, Without<SnapshotRestoreFailed>>,

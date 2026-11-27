@@ -4,6 +4,7 @@ use openzt2_animals::{
     animal_behavior::BreedingCenterEndangeredBirths,
     animal_lifecycle::egg_incubation_types::EggIncubationState,
 };
+use openzt2_extinct_animals::extinct_animals::CloningCenterOccupantOf;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::{
     persistent_id_types::{PersistentId, PersistentIdAllocator},
@@ -13,6 +14,7 @@ use openzt2_zoo_state::animal_behavior::disease_exposure_state::{
     ActiveZooDisease, AssignedDiseaseTarget, AssignedDiseaseTargets, DiseaseExposureDeadline,
     DiseaseResearchFunding,
 };
+use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
 use openzt2_zoo_state::guests::guest_favourite_animal_trend_types::GuestFavouriteAnimalTrend;
 use openzt2_zoo_state::shows::running_show_types::WorldTrickPopularity;
 use openzt2_zoo_state::{
@@ -134,8 +136,20 @@ pub(in crate::persistence) struct RuntimeContinuationSnapshotCapture<'w, 's> {
             &'static openzt2_aquatic::aquatic::water_filter_timing::FilterCleanupInterval,
         ),
     >,
+    authored_floats: Query<'w, 's, (&'static PersistentId, &'static AuthoredFloatAttributes)>,
     fossils: super::fossil_continuation_snapshot::CaptureFossilContinuation<'w, 's>,
     guests: super::guest_continuation_snapshot::GuestContinuationCapture<'w, 's>,
+    staff_jobs: super::staff_job_continuation_snapshot::CaptureStaffJobs<'w, 's>,
+    staff: super::staff_continuation_snapshot::CaptureStaffContinuation<'w, 's>,
+    cloning_products: Query<
+        'w,
+        's,
+        (
+            Option<&'static PersistentId>,
+            &'static CloningCenterOccupantOf,
+        ),
+    >,
+    cloning_centers: Query<'w, 's, (&'static PersistentId, &'static WorldMember)>,
 }
 
 impl RuntimeContinuationSnapshotCapture<'_, '_> {
@@ -214,8 +228,38 @@ impl RuntimeContinuationSnapshotCapture<'_, '_> {
             })
             .collect::<Result<Vec<_>, Failure>>()?;
         water_filter_cleanup.sort_unstable_by_key(|(id, _)| *id);
+        let mut authored_float_attributes = self
+            .authored_floats
+            .iter_many(members.into_iter().flat_map(RelationshipTarget::iter))
+            .flatten()
+            .filter_map(|(id, attributes)| {
+                let mut values = attributes.iter().collect::<Vec<_>>();
+                values.sort_unstable_by_key(|(key, _)| *key);
+                (!values.is_empty()).then_some((id.0, values))
+            })
+            .collect::<Vec<_>>();
+        authored_float_attributes.sort_unstable_by_key(|(id, _)| *id);
         let fossils = self.fossils.capture(world_root, members)?;
         let guests = self.guests.capture(members)?;
+        let staff_jobs = self.staff_jobs.capture(world_root, members)?;
+        let staff = self.staff.capture(world_root, members)?;
+        let mut cloning_center_occupancy = self
+            .cloning_products
+            .iter_many(members.into_iter().flat_map(RelationshipTarget::iter))
+            .flatten()
+            .map(|(product, relation)| {
+                let product = product.ok_or(Failure::BrokenPersistentEntityReference)?;
+                let (center, member) = self
+                    .cloning_centers
+                    .get(relation.0)
+                    .map_err(|_| Failure::BrokenPersistentEntityReference)?;
+                if member.root != world_root {
+                    return Err(Failure::BrokenPersistentEntityReference);
+                }
+                Ok((product.0, center.0))
+            })
+            .collect::<Result<Vec<_>, Failure>>()?;
+        cloning_center_occupancy.sort_unstable();
         let domain_continuation = (funding.is_some()
             || exposure_deadline.is_some()
             || active.is_some()
@@ -224,6 +268,10 @@ impl RuntimeContinuationSnapshotCapture<'_, '_> {
             || !breeding_center_births.is_empty()
             || !water_filter_cleanup.is_empty()
             || !guests.is_empty()
+            || !staff_jobs.is_empty()
+            || !staff.is_empty()
+            || !cloning_center_occupancy.is_empty()
+            || !authored_float_attributes.is_empty()
             || fossils.is_some()
             || popularity.is_some_and(|popularity| !popularity.0.is_empty()))
         .then(|| RuntimeDomainContinuation {
@@ -237,6 +285,10 @@ impl RuntimeContinuationSnapshotCapture<'_, '_> {
             breeding_center_births,
             water_filter_cleanup,
             guests,
+            staff_jobs,
+            staff,
+            cloning_center_occupancy,
+            authored_float_attributes,
             fossils,
             trick_popularity: popularity.map(|popularity| {
                 popularity

@@ -11,7 +11,8 @@ use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentat
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::TankWallTopHeight;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::{FenceSegmentPrefab, FenceTerrainEndpointPresentationCells};
-use openzt2_zoo_state::topology::gate_operation_types::Gate;
+use openzt2_zoo_state::topology::gate_operation_types::{AuthoredGateVariant, Gate};
+use super::topology_prefab_presentation::authored_gate_definition;
 use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, TopologyGrid, TopologyNode};
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge_world_transform;
 
@@ -71,6 +72,7 @@ pub(super) fn present_changed_tank_wall_rails(
         Ref<TankWallTopHeight>,
         Option<&FenceTerrainEndpointPresentationCells>,
         Has<Gate>,
+        Option<Ref<AuthoredGateVariant>>,
         &WorldMember,
         Option<&TankWallRails>,
     )>,
@@ -81,9 +83,13 @@ pub(super) fn present_changed_tank_wall_rails(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (wall, edge, segment, top, endpoint_cells, gate, member, rails) in &walls {
+    for (wall, edge, segment, top, endpoint_cells, gate, variant, member, rails) in &walls {
         if let Some(rails) = rails.filter(|rails| !rails.is_empty()) {
-            if !definitions_changed && !segment.is_changed() && !top.is_changed() {
+            if !definitions_changed
+                && !segment.is_changed()
+                && !top.is_changed()
+                && !variant.as_ref().is_some_and(|variant| variant.is_changed())
+            {
                 continue;
             }
             for rail in rails.iter() {
@@ -91,7 +97,7 @@ pub(super) fn present_changed_tank_wall_rails(
             }
         }
         let fence = if gate {
-            definitions.find_gate_fence(edge.definition)
+            authored_gate_definition(definitions, edge.definition, variant.as_deref())
         } else {
             definitions.find_fence(edge.definition)
         };

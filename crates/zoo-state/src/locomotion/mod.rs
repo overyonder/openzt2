@@ -6,6 +6,9 @@ pub mod terrain_derived_navigation_graph_types;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AnimalAnimationNavigationProjection;
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AgentSpatialMembershipProjection;
+
 /// Locomotion accepts this step's destination, docking and pursuit requests.
 /// Requesters ordered after it read the outcome from the agent's destination.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]

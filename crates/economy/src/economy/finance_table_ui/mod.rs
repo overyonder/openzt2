@@ -11,13 +11,13 @@ use openzt2_game_assets::{
     ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
 };
 use openzt2_game_data::{
-    AssetId,
     localization::LocalizationFormatArgument,
     ui_document::{
         finance_table::{UiFinanceTableCategoryDefinition, UiFinanceTableValueSource},
         node_property_binding::UiTextPropertyBindingSource,
         widget_live_collection::UiWidgetLiveCollectionSource,
     },
+    AssetId,
 };
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::RequestedUiListRowCount;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
@@ -321,7 +321,7 @@ pub(super) fn project_monthly_finance_values_into_native_balance_sheet_lists(
                 let (amount, currency) =
                     select_monthly_finance_category_value(month, &category.value_source);
                 if currency {
-                    write_whole_dollar_currency_with_thousands_separators(&mut next, amount);
+                    let _ = localization.write_localized_currency_amount(amount, false, &mut next);
                 } else {
                     let _ = write!(next, "{amount}");
                 }
@@ -453,9 +453,10 @@ pub(super) fn project_monthly_finance_values_into_authored_table_rows(
                         })
                         .is_some_and(|result| result.is_ok());
                     if !formatted {
-                        write_whole_dollar_currency_with_thousands_separators(
-                            &mut projected_text,
+                        let _ = localization.write_localized_currency_amount(
                             amount,
+                            false,
+                            &mut projected_text,
                         );
                     }
                 } else {
@@ -546,8 +547,6 @@ mod tests {
         assert_eq!(month.animal_adoption, Money::from_cents(100_000));
     }
 }
-
-use super::currency_formatting::write_whole_dollar_currency_with_thousands_separators;
 
 fn replace_text_on_entity_and_descendants(
     entity: Entity,

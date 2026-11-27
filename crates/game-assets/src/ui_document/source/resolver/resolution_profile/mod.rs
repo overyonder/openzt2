@@ -38,6 +38,7 @@ pub(in crate::ui_document::source) struct SelectedUiSourceResolutionProfile {
 
 impl SelectedUiSourceResolutionProfile {
     fn core() -> Self {
+        const CHALLENGE_WON_SURFACE: &str = "Challenge Won Layout";
         Self {
             role_paths: crate::ui_document::ui_document_role_source_path_declarations::UI_DOCUMENT_ROLE_AND_SOURCE_PATH_DECLARATIONS
                 .iter()
@@ -80,6 +81,7 @@ impl SelectedUiSourceResolutionProfile {
                 (UiDocumentRole::Tutorial, "tutorial layout".into()),
                 (UiDocumentRole::TutorialComplete, "tutorial complete".into()),
                 (UiDocumentRole::ChallengeOffer, "challenge layout".into()),
+                (UiDocumentRole::ChallengeWon, CHALLENGE_WON_SURFACE.into()),
                 (
                     UiDocumentRole::InstantChallengeOffer,
                     "instant challenge layout".into(),
@@ -92,6 +94,7 @@ impl SelectedUiSourceResolutionProfile {
             // confirmations in confirm.xml. The recommendations panel's close
             // button releases the toggles that opened it.
             role_addressed_nodes: vec![
+                (UiDocumentRole::ChallengeWon, CHALLENGE_WON_SURFACE.into()),
                 // The goal panel pauses the game while it's open.
                 (UiDocumentRole::InGameHud, "pause".into()),
                 (UiDocumentRole::Modal, "delete_object_confirmation".into()),

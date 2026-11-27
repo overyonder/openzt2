@@ -11,11 +11,11 @@ use crate::source_document::resolved_source_record_index::BindError;
 use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::species::LifeStage;
 use openzt2_game_data::species::Sex;
 use openzt2_game_data::species::SpeciesVariant;
 use openzt2_game_data::species::SpeciesVariantFlags;
+use openzt2_game_data::AssetId;
 
 pub(super) fn lower_species_root_actor_to_fallback_canonical_variant(
     species: &RecordView<'_, '_>,

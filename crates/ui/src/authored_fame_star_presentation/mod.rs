@@ -187,11 +187,7 @@ pub(super) fn present_fame_stars(
             if filling != well.filling {
                 let steady = steady_model.and_then(|model| {
                     let prefab = prefabs.get(&model.model)?;
-                    Some((
-                        model,
-                        prefab,
-                        resolve_fame_star_effects(model, &prefabs, &effects)?,
-                    ))
+                    Some((model, prefab, resolve_fame_star_effects(model, &effects)?))
                 });
                 if steady_model.is_some() && steady.is_none() {
                     continue;
@@ -205,8 +201,7 @@ pub(super) fn present_fame_stars(
                     let Some(model) = prefabs.get(&transition.model) else {
                         continue;
                     };
-                    let Some(cues) = resolve_fame_star_effects(transition, &prefabs, &effects)
-                    else {
+                    let Some(cues) = resolve_fame_star_effects(transition, &effects) else {
                         continue;
                     };
                     Some((model, cues))
@@ -305,24 +300,21 @@ fn spawn_fame_star_model(
 
 fn resolve_fame_star_effects(
     model: &FameStarModel,
-    prefabs: &Assets<ScenePrefabAsset>,
     effects: &Assets<ParticleEffectDocumentAsset>,
 ) -> Option<Vec<(Handle<ParticleEffectDocumentAsset>, Option<f32>)>> {
-    use openzt2_game_data::scene_prefab::ScenePrefabAssetDependencyKind;
-
-    let mut ready = Vec::new();
-    for cue in &model.effects {
-        let prefab = prefabs.get(&cue.prefab)?;
-        for dependency in &prefab.canonical_scene_prefab_document().dependencies {
-            if dependency.asset_kind != ScenePrefabAssetDependencyKind::Effect {
-                continue;
-            }
-            let handle = prefab.loaded_particle_effect_asset_handle(dependency.asset_id)?;
-            effects.get(handle)?;
-            ready.push((handle.clone(), cue.duration_seconds));
-        }
-    }
-    Some(ready)
+    model
+        .effects
+        .iter()
+        .map(|cue| {
+            effects.get(&cue.effect)?;
+            Some((
+                cue.effect.clone(),
+                cue.duration_seconds
+                    .is_finite()
+                    .then_some(cue.duration_seconds),
+            ))
+        })
+        .collect()
 }
 
 fn spawn_fame_star_effects(

@@ -106,7 +106,7 @@ pub(super) fn apply_scripted_tank_wall_heights(
                 ConstructionPreview {
                     definition: tank.definition,
                     transform: Transform::default(),
-                    validity: PlacementValidity::Valid { cost: Money(0) },
+                    validity: PlacementValidity::Valid { cost: Money::ZERO },
                 },
                 ScriptedTankGeometryEdit,
                 *member,

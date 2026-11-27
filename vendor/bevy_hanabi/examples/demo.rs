@@ -32,7 +32,7 @@ use bevy::{
         ScrollbarThumb, TextInput,
     },
 };
-use bevy_hanabi::prelude::*;
+use bevy_hanabi::{prelude::*, ParticleEffectGpuReady};
 
 mod utils;
 use utils::AppExitIntoResult;
@@ -681,7 +681,7 @@ impl Bootstrap {
 fn bootstrap_demo(
     mut bootstrap: ResMut<Bootstrap>,
     state: Res<State<DemoState>>,
-    effects: Query<Option<&CompiledParticleEffect>, With<ParticleEffect>>,
+    effects: Query<Option<&ParticleEffectGpuReady>, With<ParticleEffect>>,
     demo_names: Query<&DemoName>,
     mut next_demo: ResMut<NextDemoSelection>,
     mut next_state: ResMut<NextState<DemoState>>,
@@ -693,9 +693,9 @@ fn bootstrap_demo(
 
     let mut effect_count = 0;
     let mut effects_ready = true;
-    for compiled in effects.iter() {
+    for ready in effects.iter() {
         effect_count += 1;
-        effects_ready &= compiled.is_some_and(CompiledParticleEffect::is_ready);
+        effects_ready &= ready.is_some_and(ParticleEffectGpuReady::is_ready);
     }
     effects_ready &= effect_count > 0;
     let was_timed_out = bootstrap.timed_out;

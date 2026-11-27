@@ -50,7 +50,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::world_unloading::UnloadWorld;
 
 fn recovery_app() -> (App, Entity) {
-    let (mut app, root) = loading_app();
+    let (mut app, root) = loading_app(|_| {});
     app.add_systems(
         Update,
         (

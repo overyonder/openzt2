@@ -21,14 +21,6 @@ pub(super) enum ScenarioObjectiveStatusFilter {
     Neutral,
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-#[relationship(relationship_target = ScenarioGoalRows)]
-pub(super) struct ScenarioGoalRowOf(pub(super) Entity);
-
-#[derive(Component)]
-#[relationship_target(relationship = ScenarioGoalRowOf)]
-pub(super) struct ScenarioGoalRows(Vec<Entity>);
-
 #[derive(SystemParam)]
 pub(super) struct ScenarioShellMessageWriters<'w> {
     pub(super) continue_campaign:

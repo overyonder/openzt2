@@ -1,11 +1,14 @@
 //! Rail-camera source-document lowering into the scene-prefab document.
 
-use std::{collections::BTreeSet, io};
+use std::{collections::BTreeSet, io, path::Path};
 
+use crate::asset_source::AssetArchives;
+use crate::source_document::blue_fang_source_dependency_reference_discovery::source_scene_component_prefers_available_blue_fang_model;
 use crate::source_document::ordered_source_document_types::{
     OrderedSourceDocument, OrderedSourceDocumentNode,
 };
 use crate::source_document::path::AssetPath;
+use crate::ui_document::ui_document_role_asset_path_selection::ui_document_loader_path;
 use openzt2_game_data::{
     scene_prefab::{
         PrefabDirectionalLightKey, PrefabEntity, PrefabEnvironmentKey, PrefabRailCamera,
@@ -31,9 +34,13 @@ use super::source_value_reading::{
 
 const RAIL_CAMERA_SCENE_LABEL: &str = "railcamera";
 
+#[cfg(test)]
+mod tests;
+
 pub(in crate::ui_document::source) fn lower_rail_camera_documents_to_scene_prefab_documents(
     documents: &[OrderedSourceDocument],
     primary_source_path: &str,
+    archives: &AssetArchives,
 ) -> io::Result<Vec<(String, ScenePrefabDocument)>> {
     let primary_source_key = AssetPath::new(primary_source_path).key();
     documents
@@ -45,6 +52,7 @@ pub(in crate::ui_document::source) fn lower_rail_camera_documents_to_scene_prefa
                     lower_one_rail_camera_document_to_scene_prefab_document(
                         document,
                         rail_camera_node,
+                        archives,
                     )
                 },
             )
@@ -57,13 +65,14 @@ pub(in crate::ui_document::source) fn rail_camera_scene_asset_path(
 ) -> String {
     format!(
         "{}#{RAIL_CAMERA_SCENE_LABEL}",
-        AssetPath::new(source_document_path).key()
+        ui_document_loader_path(&AssetPath::new(source_document_path).key())
     )
 }
 
 fn lower_one_rail_camera_document_to_scene_prefab_document(
     document: &OrderedSourceDocument,
     rail: &OrderedSourceDocumentNode,
+    archives: &AssetArchives,
 ) -> io::Result<(String, ScenePrefabDocument)> {
     let path = rail_camera_scene_asset_path(document.path.as_str());
     let mut root = create_rail_camera_scene_prefab_entity(
@@ -101,9 +110,24 @@ fn lower_one_rail_camera_document_to_scene_prefab_document(
                         object.name
                     ))
                 })?;
-            let source_model =
-                required_source_attribute(component, "modelfile")?.replace('\\', "/");
-            let model_path = source_model;
+            let source_model = required_source_attribute(component, "modelfile")?;
+            let model_path = archives
+                .resolve_model_reference_with_blue_fang_bfb_preference(
+                    Path::new(document.path.as_str()),
+                    source_model,
+                    source_scene_component_prefers_available_blue_fang_model(
+                        &component.name,
+                        component.attribute("isBFR"),
+                    ),
+                )
+                .ok_or_else(|| {
+                    invalid_source_data(format!(
+                        "{} references missing rail-camera model {source_model}",
+                        document.path.as_str()
+                    ))
+                })?
+                .to_string_lossy()
+                .replace('\\', "/");
             let model = AssetId::from_virtual_path(&model_path);
             if dependencies
                 .iter()

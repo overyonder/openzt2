@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use openzt2_game_data::{
-    AssetId, world_definitions::world_objects::WorldObjectPresentationCausticPolicy,
+    world_definitions::world_objects::WorldObjectPresentationCausticPolicy, AssetId,
 };
 
 use openzt2_game_data::world_definitions::world_objects::AuthoredTraversalAnimationManifest;
@@ -31,16 +31,21 @@ pub(super) fn lower_authored_environment_map_swap(
     let swap = authored_type_family_elements_named(record, "BFEnvMapSwapComponent")
         .into_iter()
         .next()?;
-    let effect = swap.attribute_named_any(&["effect", "effectFile", "effectName"])?;
+    let effect = swap
+        .attribute_named_any(&["effect", "effectFile", "effectName"])?
+        .trim();
     let texture_parameter = swap
         .attribute_named_any(&["textureParameter", "parameter"])?
         .trim();
-    let effect = crate::source_document::path::AssetPath::new(effect).key();
     if effect.is_empty() || texture_parameter.is_empty() {
         return None;
     }
+    let effect =
+        crate::material::d3d9_effect_program_evaluation::resolve_blue_fang_d3d9_effect_source_path(
+            effect,
+        );
     Some(WorldObjectEnvironmentMapSwap {
-        effect: AssetId::from_virtual_path(&effect),
+        effect: AssetId::from_virtual_path(&effect.to_string_lossy()),
         texture_parameter: texture_parameter.to_owned(),
     })
 }

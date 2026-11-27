@@ -73,9 +73,13 @@ impl Plugin for HabitatPlugin {
                         .after(habitat_fence_inputs::project_changed_habitat_fence_inputs),
                     habitat_membership_and_containment::resolve_changed_habitat_membership_and_containment
                         .after(habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain),
+                    habitat_region_rebuilding::publish_animal_award_traversable_area
+                        .after(habitat_membership_and_containment::resolve_changed_habitat_membership_and_containment),
                 )
-                    .in_set(FixedGameSet::Cleanup)
-                    .in_set(HabitatTopologyPublication),
+                    .after(FixedGameSet::Act)
+                    .before(FixedGameSet::Cleanup)
+                    .in_set(HabitatTopologyPublication)
+                    .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 Update,

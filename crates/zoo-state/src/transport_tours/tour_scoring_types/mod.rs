@@ -74,8 +74,3 @@ impl TourObservationMemory {
         true
     }
 }
-
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TourObservationCadence {
-    pub ticks_until_next: u32,
-}

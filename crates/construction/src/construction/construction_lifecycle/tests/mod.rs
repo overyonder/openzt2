@@ -52,9 +52,9 @@ fn applying(app: &mut App) -> Entity {
             WorldMember { root },
             ConstructionActive,
             ApplyEdit(EditApplication::InitialCommit),
-            edit(Money(500)),
-            PreparedDomain::<TerrainEdit>::new(Money(400)),
-            PreparedDomain::<TopologyEdit>::new(Money(100)),
+            edit(Money::from_cents(500)),
+            PreparedDomain::<TerrainEdit>::new(Money::from_cents(400)),
+            PreparedDomain::<TopologyEdit>::new(Money::from_cents(100)),
             ConstructionFeedbackOrigin(Vec2::new(480.0, 270.0)),
         ))
         .id()
@@ -63,14 +63,14 @@ fn applying(app: &mut App) -> Entity {
 #[test]
 fn multi_domain_cost_overflow_rejects_before_economy() {
     let mut app = fixture();
-    let transaction = app.world_mut().spawn((Preparing, edit(Money(0)))).id();
+    let transaction = app.world_mut().spawn((Preparing, edit(Money::ZERO))).id();
     app.world_mut().write_message(TerrainEditPrepared {
         transaction,
-        cost: Money(i64::MAX),
+        cost: Money::from_dollars(f32::MAX).unwrap(),
     });
     app.world_mut().write_message(TopologyEditPrepared {
         transaction,
-        cost: Money(1),
+        cost: Money::from_dollars(f32::MAX).unwrap(),
     });
     step(&mut app);
     assert!(app.world().get_entity(transaction).is_err());
@@ -132,7 +132,7 @@ fn commit_waits_for_each_domain_and_reports_the_confirming_pointer_once() {
     let events = cursor.read(committed).collect::<Vec<_>>();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].transaction, transaction);
-    assert_eq!(events[0].cost, Money(500));
+    assert_eq!(events[0].cost, Money::from_cents(500));
     assert_eq!(events[0].screen_position, Vec2::new(480.0, 270.0));
 }
 
@@ -222,7 +222,7 @@ fn a_partial_commit_restores_the_applied_domain_and_refunds_the_charge() {
     let refund = payment_cursor.read(payments).next().copied().unwrap();
     assert_eq!(
         (refund.debit, refund.credit, refund.amount),
-        (Account::External, Account::Zoo, Money(500))
+        (Account::External, Account::Zoo, Money::from_cents(500))
     );
     app.world_mut().write_message(TransactionCompleted {
         domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Player,

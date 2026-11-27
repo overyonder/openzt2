@@ -16,7 +16,6 @@ use openzt2_game_data::{
 use super::{
     staff_assignment_types::{StaffAssignmentArea, StaffAssignmentTarget},
     staff_employment_types::Staff,
-    staff_job_claim_ranking::RankedStaffJobClaimCandidate,
     staff_job_completion_and_cancellation::{
         cancel_requested_jobs_and_jobs_with_invalid_world_relations,
         release_staff_and_despawn_completed_jobs,
@@ -26,7 +25,7 @@ use super::{
         CompatibleStaffBehaviorTask, StaffCandidateEligibilityFacts,
     },
     staff_job_request_creation::create_or_raise_priority_of_requested_staff_jobs,
-    staff_job_types::{CurrentJob, JobClaim, StaffJob, StaffJobRouting},
+    staff_job_types::{CurrentJob, JobClaim, StaffJob, StaffJobRouting, StaffJobTarget},
     staff_lifecycle_messages::{
         CancelStaffJobRequest, StaffJobCancelled, StaffJobCompleted, StaffJobRequest,
     },
@@ -34,35 +33,6 @@ use super::{
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-
-#[test]
-fn claim_order_is_urgency_priority_distance_then_entity() {
-    let staff = Entity::from_bits(11);
-    let low = RankedStaffJobClaimCandidate {
-        job: Entity::from_bits(2),
-        staff,
-        urgency: 10,
-        authored_priority: 3.0,
-        distance_squared: 1.0,
-    };
-    let urgent = RankedStaffJobClaimCandidate {
-        job: Entity::from_bits(3),
-        staff,
-        urgency: 11,
-        authored_priority: -20.0,
-        distance_squared: 100.0,
-    };
-    let priority = RankedStaffJobClaimCandidate {
-        job: Entity::from_bits(4),
-        staff,
-        urgency: 10,
-        authored_priority: 4.0,
-        distance_squared: 100.0,
-    };
-    let mut candidates = [low, urgent, priority];
-    candidates.sort_unstable_by(RankedStaffJobClaimCandidate::claim_order);
-    assert_eq!(candidates, [urgent, priority, low]);
-}
 
 #[test]
 fn duplicate_requests_create_one_job_per_routing() {
@@ -73,17 +43,23 @@ fn duplicate_requests_create_one_job_per_routing() {
         .entity_mut(root)
         .insert(PersistentIdAllocator::default());
     app.add_message::<StaffJobRequest>()
+        .add_message::<openzt2_staff_requests::StaffControllerJobChange>()
         .add_systems(Update, create_or_raise_priority_of_requested_staff_jobs);
     let request = StaffJobRequest {
+        root,
         kind: Some(StaffJobKind::EmptyBin),
-        target,
-        urgency: 50,
+        target: Some(target),
+        point: None,
+        priority: 50.0,
+        issued_at_seconds: 0.0,
+        remaining_wait_seconds: 0.0,
         token: None,
         routing: Default::default(),
     };
     app.world_mut().write_message(request);
     app.world_mut().write_message(request);
     app.world_mut().write_message(StaffJobRequest {
+        token: Some(AssetId::from_key("t_emptytrash")),
         routing: StaffJobRouting {
             subject_type: Some(AssetId::from_key("worker")),
             recipient: None,
@@ -97,6 +73,81 @@ fn duplicate_requests_create_one_job_per_routing() {
         jobs.iter(world).count()
     };
     assert_eq!(count, 2);
+}
+
+#[test]
+fn authored_request_receipt_keeps_duplicate_identity_rows() {
+    let mut app = App::new();
+    let root = app.world_mut().spawn(PersistentIdAllocator::default()).id();
+    let target = app.world_mut().spawn(WorldMember { root }).id();
+    app.add_message::<StaffJobRequest>()
+        .add_message::<openzt2_staff_requests::StaffControllerJobChange>()
+        .add_systems(Update, create_or_raise_priority_of_requested_staff_jobs);
+    let request = StaffJobRequest {
+        root,
+        kind: Some(StaffJobKind::EmptyBin),
+        target: Some(target),
+        point: None,
+        priority: 50.0,
+        issued_at_seconds: 0.0,
+        remaining_wait_seconds: 0.0,
+        token: Some(AssetId::from_key("t_emptytrash")),
+        routing: StaffJobRouting {
+            subject_type: Some(AssetId::from_key("maintenance")),
+            recipient: None,
+        },
+    };
+    app.world_mut().write_message(request);
+    app.world_mut().write_message(request);
+    app.update();
+    let world = app.world_mut();
+    assert_eq!(world.query::<&StaffJob>().iter(world).count(), 2);
+}
+
+#[test]
+fn controller_cancellation_preserves_later_requests_in_the_same_update() {
+    use super::staff_job_types::StaffJobCancellationPending;
+    use openzt2_staff_requests::StaffControllerJobChange;
+
+    let mut app = App::new();
+    let root = app.world_mut().spawn(PersistentIdAllocator::default()).id();
+    let target = app.world_mut().spawn(WorldMember { root }).id();
+    let token = AssetId::from_key("t_emptytrash");
+    app.add_message::<StaffJobRequest>()
+        .add_message::<StaffControllerJobChange>()
+        .add_systems(Update, create_or_raise_priority_of_requested_staff_jobs);
+    let before_cancel = StaffJobRequest {
+        root,
+        kind: Some(StaffJobKind::EmptyBin),
+        target: Some(target),
+        point: None,
+        priority: 50.0,
+        issued_at_seconds: 1.0,
+        remaining_wait_seconds: 0.0,
+        token: Some(token),
+        routing: StaffJobRouting {
+            subject_type: Some(AssetId::from_key("maintenance")),
+            recipient: None,
+        },
+    };
+    let after_cancel = StaffJobRequest {
+        issued_at_seconds: 2.0,
+        ..before_cancel
+    };
+    let world = app.world_mut();
+    world.write_message(StaffControllerJobChange::Raise(before_cancel));
+    world.write_message(StaffControllerJobChange::Cancel { target, token });
+    world.write_message(StaffControllerJobChange::Raise(after_cancel));
+    app.update();
+
+    let world = app.world_mut();
+    let mut jobs = world.query::<(&StaffJob, Has<StaffJobCancellationPending>)>();
+    let mut results: Vec<_> = jobs
+        .iter(world)
+        .map(|(job, cancelled)| (job.issued_at_seconds, cancelled))
+        .collect();
+    results.sort_by(|first, second| first.0.total_cmp(&second.0));
+    assert_eq!(results, [(1.0, true), (2.0, false)]);
 }
 
 #[test]
@@ -137,10 +188,15 @@ fn completion_clears_reciprocal_facts_and_releases_staff() {
         .spawn((
             StaffJob {
                 kind: Some(StaffJobKind::Feed),
-                target,
-                urgency: 1,
+                target: Some(target),
+                point: None,
+                priority: 1.0,
+                issued_at_seconds: 0.0,
+                remaining_wait_seconds: 0.0,
+                first_attempt: true,
                 token: None,
             },
+            StaffJobTarget(target),
             JobClaim { staff },
         ))
         .id();
@@ -172,10 +228,15 @@ fn missing_staff_releases_assignment_and_preserves_live_request() {
         .spawn((
             StaffJob {
                 kind: Some(StaffJobKind::EmptyBin),
-                target,
-                urgency: 1,
+                target: Some(target),
+                point: None,
+                priority: 1.0,
+                issued_at_seconds: 0.0,
+                remaining_wait_seconds: 0.0,
+                first_attempt: true,
                 token: None,
             },
+            StaffJobTarget(target),
             JobClaim { staff },
         ))
         .id();
@@ -417,25 +478,32 @@ fn distinct_tokens_and_tokenless_requests_dedupe_separately() {
         .entity_mut(root)
         .insert(PersistentIdAllocator::default());
     app.add_message::<StaffJobRequest>()
+        .add_message::<openzt2_staff_requests::StaffControllerJobChange>()
         .add_systems(Update, create_or_raise_priority_of_requested_staff_jobs);
     let fill_food_token = AssetId::from_key("t_fillfoodcontainer");
     let feed_animal_token = AssetId::from_key("t_feedanimal");
     for token in [Some(fill_food_token), Some(feed_animal_token), None] {
         app.world_mut().write_message(StaffJobRequest {
+            root,
             kind: Some(StaffJobKind::Feed),
-            target,
-            urgency: 10,
+            target: Some(target),
+            point: None,
+            priority: 10.0,
+            issued_at_seconds: 0.0,
+            remaining_wait_seconds: 0.0,
             token,
             routing: Default::default(),
         });
     }
-    // Same-batch duplicates coalesce to the maximum urgency before the
-    // deferred spawn, so this request raises the dish job to 20 instead of
-    // being discarded.
+    // Same-batch duplicates keep the highest priority before the deferred spawn.
     app.world_mut().write_message(StaffJobRequest {
+        root,
         kind: Some(StaffJobKind::Feed),
-        target,
-        urgency: 20,
+        target: Some(target),
+        point: None,
+        priority: 2.0,
+        issued_at_seconds: 0.0,
+        remaining_wait_seconds: 0.0,
         token: Some(fill_food_token),
         routing: Default::default(),
     });
@@ -444,17 +512,25 @@ fn distinct_tokens_and_tokenless_requests_dedupe_separately() {
         let world = app.world_mut();
         let mut jobs = world.query::<(&StaffJob, Option<&JobClaim>)>();
         jobs.iter(world)
-            .map(|(job, claim)| (job.kind, job.token, job.urgency, claim.is_some()))
+            .map(|(job, claim)| (job.kind, job.token, job.priority, claim.is_some()))
             .collect::<Vec<_>>()
     };
-    jobs.sort_by_key(|(kind, token, urgency, _)| (kind.map(|kind| kind as u8), *token, *urgency));
+    jobs.sort_by_key(|(kind, token, priority, _)| {
+        (kind.map(|kind| kind as u8), *token, priority.to_bits())
+    });
     let mut expected = vec![
-        (Some(StaffJobKind::Feed), None, 10, false),
-        (Some(StaffJobKind::Feed), Some(fill_food_token), 20, false),
-        (Some(StaffJobKind::Feed), Some(feed_animal_token), 10, false),
+        (Some(StaffJobKind::Feed), None, 10.0_f32, false),
+        (Some(StaffJobKind::Feed), Some(fill_food_token), 2.0, false),
+        (
+            Some(StaffJobKind::Feed),
+            Some(feed_animal_token),
+            10.0,
+            false,
+        ),
     ];
-    expected
-        .sort_by_key(|(kind, token, urgency, _)| (kind.map(|kind| kind as u8), *token, *urgency));
+    expected.sort_by_key(|(kind, token, priority, _)| {
+        (kind.map(|kind| kind as u8), *token, priority.to_bits())
+    });
     assert_eq!(jobs, expected);
 }
 
@@ -468,28 +544,41 @@ fn same_batch_jobs_spawn_in_first_seen_message_order() {
         .entity_mut(root)
         .insert(PersistentIdAllocator::default());
     app.add_message::<StaffJobRequest>()
+        .add_message::<openzt2_staff_requests::StaffControllerJobChange>()
         .add_systems(Update, create_or_raise_priority_of_requested_staff_jobs);
     // Write the animal feed request first, interleave its duplicate, then the
-    // dish request. The duplicate raises urgency without changing the first
+    // dish request. The duplicate raises priority without changing the first
     // occurrence's PersistentId order.
     app.world_mut().write_message(StaffJobRequest {
+        root,
         kind: Some(StaffJobKind::Feed),
-        target: animal_target,
-        urgency: 10,
+        target: Some(animal_target),
+        point: None,
+        priority: 10.0,
+        issued_at_seconds: 0.0,
+        remaining_wait_seconds: 0.0,
         token: Some(AssetId::from_key("t_feedanimal")),
         routing: Default::default(),
     });
     app.world_mut().write_message(StaffJobRequest {
+        root,
         kind: Some(StaffJobKind::Feed),
-        target: dish_target,
-        urgency: 10,
+        target: Some(dish_target),
+        point: None,
+        priority: 10.0,
+        issued_at_seconds: 0.0,
+        remaining_wait_seconds: 0.0,
         token: Some(AssetId::from_key("t_fillfoodcontainer")),
         routing: Default::default(),
     });
     app.world_mut().write_message(StaffJobRequest {
+        root,
         kind: Some(StaffJobKind::Feed),
-        target: animal_target,
-        urgency: 25,
+        target: Some(animal_target),
+        point: None,
+        priority: 2.5,
+        issued_at_seconds: 0.0,
+        remaining_wait_seconds: 0.0,
         token: Some(AssetId::from_key("t_feedanimal")),
         routing: Default::default(),
     });
@@ -498,13 +587,13 @@ fn same_batch_jobs_spawn_in_first_seen_message_order() {
         let world = app.world_mut();
         let mut jobs = world.query::<(&StaffJob, &PersistentId)>();
         jobs.iter(world)
-            .map(|(job, persistent_id)| (persistent_id.0, job.target, job.urgency))
+            .map(|(job, persistent_id)| (persistent_id.0, job.target, job.priority))
             .collect::<Vec<_>>()
     };
     spawned_jobs.sort_by_key(|(persistent_id, _, _)| *persistent_id);
     assert_eq!(spawned_jobs.len(), 2);
     assert_eq!(
         spawned_jobs,
-        vec![(1, animal_target, 25), (2, dish_target, 10),]
+        vec![(1, Some(animal_target), 2.5), (2, Some(dish_target), 10.0),]
     );
 }

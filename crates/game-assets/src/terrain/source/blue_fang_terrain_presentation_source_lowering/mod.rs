@@ -361,6 +361,19 @@ fn lower_authored_terrain_biome_water_presentation(
     source_documents: &[OrderedSourceDocument],
     water_source_node: &OrderedSourceDocumentNode,
 ) -> io::Result<TerrainBiomeWaterPresentation> {
+    lower_water_presentation(
+        water_source_node,
+        lower_authored_terrain_water_surface_material_presentation(
+            source_documents,
+            water_source_node,
+        )?,
+    )
+}
+
+pub(in crate::terrain) fn lower_water_presentation(
+    water_source_node: &OrderedSourceDocumentNode,
+    surface_material: TerrainWaterSurfaceMaterialPresentation,
+) -> io::Result<TerrainBiomeWaterPresentation> {
     let texture_animations = water_source_node
         .element_children()
         .filter(|source_node| source_node.name.eq_ignore_ascii_case("texture"))
@@ -385,10 +398,7 @@ fn lower_authored_terrain_biome_water_presentation(
         )?)?,
         gloss_map: required_source_node_attribute(water_source_node, "glossMap")?.to_owned(),
         texture_animations,
-        surface_material: lower_authored_terrain_water_surface_material_presentation(
-            source_documents,
-            water_source_node,
-        )?,
+        surface_material,
         shoreline: super::water_configuration::lower_biome_shoreline(water_source_node)?,
     })
 }
@@ -408,6 +418,13 @@ fn lower_authored_terrain_water_surface_material_presentation(
         .ok_or_else(|| {
             invalid_terrain_source("BFGBiome water material source document is missing")
         })?;
+    lower_authored_water_material_document(material_source_document, source_documents)
+}
+
+pub(in crate::terrain) fn lower_authored_water_material_document(
+    material_source_document: &OrderedSourceDocument,
+    source_documents: &[OrderedSourceDocument],
+) -> io::Result<TerrainWaterSurfaceMaterialPresentation> {
     if !material_source_document
         .root
         .name

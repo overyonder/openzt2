@@ -11,10 +11,7 @@ use bevy::{
 };
 
 use crate::{
-    asset_source::{
-        archive_entry_asset_path::{archive_entry_asset_path, ARCHIVE_ENTRY_ASSET_EXTENSION},
-        AssetArchives,
-    },
+    asset_source::{archive_entry_asset_path::archive_entry_asset_path, AssetArchives},
     graphics_settings_types::{
         EnvironmentalDetailObjectDensity, FourLevelGraphicsDetail, GraphicsEffectQuality,
         GraphicsSettings, ShadowDetail, ThreeLevelGraphicsDetail,
@@ -28,6 +25,7 @@ use crate::{
 
 const SETTINGS_SOURCE_PATH: &str = "ui/options/settings.xml";
 const RENDERER_SOURCE_PATH: &str = "config/graphics.xml";
+const OBJECT_LOD_SCALES_SOURCE_PATH: &str = "world/lodscales.xml";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphicsDetailPreset {
@@ -104,11 +102,15 @@ impl AssetLoader for GraphicsSettingsPresetLoader {
             Err(ReadAssetBytesError::AssetReaderError(AssetReaderError::NotFound(_))) => (),
             Err(error) => return Err(io::Error::other(error)),
         }
+        match load_context
+            .read_asset_bytes(OBJECT_LOD_SCALES_SOURCE_PATH)
+            .await
+        {
+            Ok(bytes) => apply_initial_object_lod_scales(&mut presets, &bytes)?,
+            Err(ReadAssetBytesError::AssetReaderError(AssetReaderError::NotFound(_))) => (),
+            Err(error) => return Err(io::Error::other(error)),
+        }
         Ok(presets)
-    }
-
-    fn extensions(&self) -> &[&str] {
-        &["xml", ARCHIVE_ENTRY_ASSET_EXTENSION]
     }
 }
 
@@ -145,6 +147,41 @@ fn apply_particle_budgets(presets: &mut GraphicsSettingsPresets, bytes: &[u8]) -
                 })
             })
             .transpose()?;
+    }
+    Ok(())
+}
+
+fn apply_initial_object_lod_scales(
+    presets: &mut GraphicsSettingsPresets,
+    bytes: &[u8],
+) -> io::Result<()> {
+    let document =
+        parse_blue_fang_source_document(AssetPath::new(OBJECT_LOD_SCALES_SOURCE_PATH), bytes)
+            .map_err(io::Error::other)?;
+    let Some(level) = document
+        .root
+        .element_children()
+        .find(|row| row.name.eq_ignore_ascii_case("level"))
+    else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "LOD scale table has no levels",
+        ));
+    };
+    let mut scales = GraphicsSettings::default().object_lod_distance_scales;
+    for (scale, field) in scales.iter_mut().zip(["zero", "one", "two", "three"]) {
+        if let Some(value) = level.attribute_named_any(&[field]) {
+            *scale = value
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .ok_or_else(|| invalid_setting(level, field))?
+                .to_bits();
+        }
+    }
+    for preset in &mut presets.settings {
+        preset.object_lod_distance_scales = scales;
     }
     Ok(())
 }
@@ -425,8 +462,42 @@ impl Plugin for GraphicsSettingsPresetAssetPlugin {
                     resource_added::<AssetArchives>
                         .or_eager(on_message::<crate::asset_source::ArchiveOverlayChanged>),
                 ),
-            );
+            )
+            .add_systems(PreUpdate, project_initial_object_lod_scales);
     }
+}
+
+fn project_initial_object_lod_scales(
+    source: Res<GraphicsSettingsPresetSource>,
+    assets: Res<Assets<GraphicsSettingsPresets>>,
+    mut events: MessageReader<AssetEvent<GraphicsSettingsPresets>>,
+    settings: Option<ResMut<GraphicsSettings>>,
+) {
+    let current_id = source.0.as_ref().map(Handle::id);
+    let changed = events
+        .read()
+        .filter(|event| match **event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+                Some(id) == current_id
+            }
+            _ => false,
+        })
+        .count()
+        != 0;
+    let Some(mut settings) = settings else {
+        return;
+    };
+    if !changed && !source.is_changed() && !settings.is_changed() {
+        return;
+    }
+    let Some(presets) = source.get(&assets) else {
+        return;
+    };
+    let next = GraphicsSettings {
+        object_lod_distance_scales: presets.settings[0].object_lod_distance_scales,
+        ..*settings
+    };
+    settings.set_if_neq(next);
 }
 
 fn resolve_graphics_settings_preset_source(
@@ -442,6 +513,7 @@ fn resolve_graphics_settings_preset_source(
         .any(|change| {
             change.normalized_asset_path == path
                 || change.normalized_asset_path == Path::new(RENDERER_SOURCE_PATH)
+                || change.normalized_asset_path == Path::new(OBJECT_LOD_SCALES_SOURCE_PATH)
         });
     changes.clear();
     let selected_path = archives

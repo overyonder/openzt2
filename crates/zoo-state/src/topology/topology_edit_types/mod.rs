@@ -48,6 +48,7 @@ pub enum TopologySnapshot {
         id: PersistentId,
         definition: AssetId,
         cell: IVec3,
+        height_cm: [i16; 5],
     },
     Portal {
         id: PersistentId,

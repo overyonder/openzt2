@@ -1,4 +1,3 @@
-use super::elevated_path_layout::ElevatedPathSurfaceEdits;
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::TankWallTopHeight;
@@ -29,7 +28,7 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyProtected;
 fn calculate_topology_snapshot_deletion_refund(
     snapshots: &[TopologySnapshot],
     definitions: WorldDefinitionsView<'_>,
-) -> Option<i64> {
+) -> Option<Money> {
     snapshots
         .iter()
         .filter_map(|snapshot| match *snapshot {
@@ -37,7 +36,7 @@ fn calculate_topology_snapshot_deletion_refund(
             TopologySnapshot::Path { definition, .. } => Some((definition, false)),
             TopologySnapshot::Node { .. } | TopologySnapshot::Portal { .. } => None,
         })
-        .try_fold(0_i64, |total, (definition, fence)| {
+        .try_fold(Money::ZERO, |total, (definition, fence)| {
             let object = if fence {
                 &definitions.find_fence(definition)?.object
             } else {
@@ -49,9 +48,9 @@ fn calculate_topology_snapshot_deletion_refund(
                 openzt2_zoo_state::economy::object_sale_refund::calculate_authored_object_sale_refund(
                     object,
                 )?;
-            total.checked_add(refund.0)
-        })?
-        .checked_neg()
+            total.checked_add(refund)
+        })
+        .map(std::ops::Neg::neg)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -134,10 +133,29 @@ pub(super) fn prepare_topology_deletion_transaction(
             });
         }
         if let Some(path) = path {
+            let surface = surfaces
+                .get(request.target)
+                .ok()
+                .map(|surface| surface.height_cm)
+                .or_else(|| {
+                    definitions
+                        .find_path(path.definition)
+                        .filter(|definition| !definition.elevated)
+                        .map(|definition| definition.surface.height_cm)
+                });
+            let Some(height_cm) = surface else {
+                write_topology_edit_preparation_rejection(
+                    request.transaction,
+                    PlacementFailure::InvalidTopology,
+                    &mut rejected,
+                );
+                continue;
+            };
             removed.push(TopologySnapshot::Path {
                 id: *id,
                 definition: path.definition,
                 cell: path.cell,
+                height_cm,
             });
         }
         if let Some(portal) = portal {
@@ -248,30 +266,13 @@ pub(super) fn prepare_topology_deletion_transaction(
             );
             continue;
         };
-        if path.is_some_and(|path| {
-            definitions
-                .find_path(path.definition)
-                .is_some_and(|definition| definition.elevated)
-        }) {
-            let Ok(surface) = surfaces.get(request.target) else {
-                write_topology_edit_preparation_rejection(
-                    request.transaction,
-                    PlacementFailure::InvalidTopology,
-                    &mut rejected,
-                );
-                continue;
-            };
-            commands
-                .entity(request.transaction)
-                .insert(ElevatedPathSurfaceEdits(vec![(*id, *surface)]));
-        }
         commands.entity(request.transaction).insert(TopologyEdit {
             created: Box::new([]),
             removed: removed.into_boxed_slice(),
         });
         prepared.write(TopologyEditPrepared {
             transaction: request.transaction,
-            cost: Money(refund),
+            cost: refund,
         });
     }
 }

@@ -12,9 +12,10 @@ use super::{
         decode_and_validate_progression_snapshot_section,
     },
     progression_snapshot_types::{
-        EarnedProgressionAwardSnapshotRecord, ProgressionAwardDurationSnapshotRecord,
-        ProgressionSnapshotRecords, ResearchAvailabilitySnapshotRecord,
-        ResearchProjectSnapshotRecord, SpeciesAdoptionChanceSnapshotRecord,
+        EarnedProgressionAwardSnapshotRecord, FossilSkeletonRewardSnapshot,
+        ProgressionAwardDurationSnapshotRecord, ProgressionSnapshotRecords,
+        ResearchAvailabilitySnapshotRecord, ResearchProjectSnapshotRecord,
+        SpeciesAdoptionChanceSnapshotRecord,
     },
 };
 
@@ -41,6 +42,9 @@ fn progression_snapshot_section_round_trips_bounded_native_facts() {
         unlocked_catalogue_definition_count: 65,
         unlocked_catalogue_definition_bit_words: vec![u64::MAX, 1],
         scenario_award_points: 12,
+        award_history: None,
+        fossil_education: Default::default(),
+        fossil_skeleton_rewards: Default::default(),
         award_globals: Default::default(),
         award_presentation: Default::default(),
         endangered_animal_birth_count: 7,
@@ -61,6 +65,7 @@ fn progression_snapshot_section_round_trips_bounded_native_facts() {
             elapsed_simulation_ticks: 10,
             required_simulation_ticks: 20,
             paused: true,
+            timer_ns: None,
         }],
         earned_progression_awards: vec![EarnedProgressionAwardSnapshotRecord {
             persistent_identifier: PersistentId(3),
@@ -78,6 +83,7 @@ fn progression_snapshot_section_round_trips_bounded_native_facts() {
             catalogue_item_identifier: AssetId([5; 16]),
             available: false,
             remaining_unlock_ticks: Some(30),
+            unlock_timer_ns: None,
         }],
         species_adoption_chances: vec![SpeciesAdoptionChanceSnapshotRecord {
             persistent_identifier: PersistentId(6),
@@ -175,5 +181,34 @@ fn progression_snapshot_section_round_trips_bounded_native_facts() {
             .species_adoption_chances
             .len(),
         1
+    );
+    let mut exact = original_progression_snapshot_records;
+    exact.research_projects[0].timer_ns = Some((19_500_000, 10_000_000));
+    exact.research_project_availability[0].unlock_timer_ns = Some((32_700_000, 3_000_000));
+    exact.fossil_education.insert(7, 3.0);
+    exact.fossil_skeleton_rewards.insert(
+        7,
+        FossilSkeletonRewardSnapshot {
+            remaining_ns: 5_000_001,
+            reward: AssetId::from_key("reward"),
+            message: Some(AssetId::from_key("notice")),
+        },
+    );
+    let mut bytes = Vec::new();
+    append_encoded_progression_snapshot_section(&mut bytes, &exact);
+    let decoded =
+        decode_and_validate_progression_snapshot_section(&bytes, exact.snapshot_record_count())
+            .unwrap();
+    assert_eq!(
+        decoded.research_projects[0].timer_ns,
+        exact.research_projects[0].timer_ns
+    );
+    assert_eq!(
+        decoded.research_project_availability[0].unlock_timer_ns,
+        exact.research_project_availability[0].unlock_timer_ns
+    );
+    assert_eq!(
+        decoded.fossil_skeleton_rewards,
+        exact.fossil_skeleton_rewards
     );
 }

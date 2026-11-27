@@ -1,7 +1,8 @@
 use crate::animation_playback::player_clock_lanes::PrefabRealTimeAnimation;
-use bevy::{animation::AnimatedBy, prelude::*};
+use crate::model_render::prefab_motion_projection::PrefabMorphWeightsOwner;
+use bevy::{animation::AnimatedBy, app::Propagate, mesh::morph::MorphWeights, prelude::*};
 use openzt2_game_assets::scene_prefab::transform_animation_lowering::{
-    PrefabMotion, PrefabMotionRotation, PrefabTransformClocks,
+    PrefabMotion, PrefabMotionRotation, PrefabMotionVisibility, PrefabTransformClocks,
 };
 
 pub(super) fn insert_prefab_motion(
@@ -18,6 +19,20 @@ pub(super) fn insert_prefab_motion(
     if let Some(node) = motion.spin {
         player.start(node).repeat().pause();
         entity.insert(PrefabRealTimeAnimation(node));
+    }
+    if motion.has_visibility {
+        entity.insert(PrefabMotionVisibility { sample: 1.0 });
+    }
+    if motion.morph_target_count > 0 {
+        let weights = MorphWeights::new(vec![0.0; motion.morph_target_count], None)
+            .expect("validated prefab morph target count fits Bevy");
+        entity.insert((
+            weights,
+            Propagate(PrefabMorphWeightsOwner {
+                entity: target,
+                refresh_bound: motion.refresh_morph_bound,
+            }),
+        ));
     }
     if motion.has_rotation {
         entity.insert(PrefabMotionRotation {

@@ -685,7 +685,7 @@ impl<'w, 's> BehaviorScriptWorldAccess<'w, 's> {
         self.animals
             .get(entity)
             .ok()
-            .map(|animal| animal.0.0 == openzt2_game_data::species::Sex::Male)
+            .map(|animal| animal.0 .0 == openzt2_game_data::species::Sex::Male)
     }
 
     /// `BFG_GET_ATTR_STRING` `s_Endangerment` and `s_name` of an animal.

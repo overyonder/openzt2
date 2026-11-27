@@ -79,6 +79,11 @@ pub struct Route {
 }
 
 impl Route {
+    pub fn from_saved(points: Vec<Vec3>, cursor: usize) -> Option<Self> {
+        (cursor <= points.len() && points.iter().all(|point| point.is_finite()))
+            .then_some(Self { points, cursor })
+    }
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             points: Vec::with_capacity(capacity),
@@ -158,6 +163,10 @@ pub enum SwimLayer {
     Surface,
     Submerged,
 }
+
+/// Surface fallback for an animal without a usable swimming gait.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AnimalFloatingFallback;
 
 #[derive(Component, Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AnimalTerrainWaterContact {
@@ -288,39 +297,83 @@ pub struct ActiveTerrainDerivedNavigationGraph {
 }
 
 impl ActiveTerrainDerivedNavigationGraph {
-    pub fn guest_view_marker_positions<'a>(
-        &'a self,
+    pub fn guest_view_marker_positions(
+        &self,
         position_cm: [i32; 3],
-        tank_water: Option<&'a crate::aquatic::tank_navigation_water::TankNavigationWater>,
-    ) -> impl Iterator<Item = [i32; 3]> + 'a {
+        tank_water: Option<&crate::aquatic::tank_navigation_water::TankNavigationWater>,
+    ) -> impl Iterator<Item = [i32; 3]> {
+        use crate::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraphEdgeFlags;
+        use std::collections::{BTreeMap, BTreeSet};
+
         let graph = self.terrain_derived_navigation_graph();
         let position = IVec3::from_array(position_cm).as_vec3() * 0.01;
-        let node = graph
+        let cells_per_tile = u32::from(graph.terrain_cells_per_tile).max(1);
+        let tile = |[x, z]: [u32; 2]| [x / cells_per_tile, z / cells_per_tile];
+        let source_tile = graph.terrain_cell_at_world_position(position).map(tile);
+        let node_position = |node| graph.calculate_navigation_node_world_position_centimetres(node);
+        let node_tile = |node| {
+            let position = IVec3::from_array(node_position(node)?).as_vec3() * 0.01;
+            graph.terrain_cell_at_world_position(position).map(tile)
+        };
+        let usable = |node| {
+            graph
+                .effective_navigation_node(node, tank_water)
+                .is_some_and(|node| {
+                    node.eligibility_flags.contains(NavFlags::GUEST)
+                        && node.eligibility_flags.0
+                            & (NavFlags::WATER.0 | NavFlags::DISABLED_BY_DEFAULT.0)
+                            == 0
+                })
+        };
+        let mut connected = BTreeSet::new();
+        let mut pending: Vec<_> = graph
             .navigation_surface_at_world_position(position)
-            .filter(|node| {
-                graph
-                    .effective_navigation_node(*node, tank_water)
-                    .is_some_and(|node| {
-                        node.eligibility_flags.contains(NavFlags::GUEST)
-                            && !node
-                                .eligibility_flags
-                                .contains(NavFlags::DISABLED_BY_DEFAULT)
-                    })
-            });
-        node.into_iter().flat_map(move |node| {
-            graph.iterate_outgoing_navigation_graph_edges(node, tank_water).filter_map(move |edge| {
-                use crate::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraphEdgeFlags;
-                if edge.edge_flags.0 & TerrainDerivedNavigationGraphEdgeFlags::DISABLED_BY_DEFAULT.0 != 0 {
-                    return None;
+            .filter(|&node| usable(node))
+            .into_iter()
+            .collect();
+        let mut sides = BTreeMap::new();
+        while let Some(node) = pending.pop() {
+            if !connected.insert(node) {
+                continue;
+            }
+            let Some(from) = node_position(node) else {
+                continue;
+            };
+            for edge in graph.iterate_outgoing_navigation_graph_edges(node, tank_water) {
+                let target = edge.destination_node;
+                if edge.edge_flags.0 & TerrainDerivedNavigationGraphEdgeFlags::DISABLED_BY_DEFAULT.0
+                    != 0
+                    || !usable(target)
+                {
+                    continue;
                 }
-                let from = graph.calculate_navigation_node_world_position_centimetres(node)?;
-                let to = graph.calculate_navigation_node_world_position_centimetres(edge.destination_node)?;
-                let destination = graph.effective_navigation_node(edge.destination_node, tank_water)?;
-                (destination.eligibility_flags.contains(NavFlags::GUEST)
-                    && !destination.eligibility_flags.contains(NavFlags::WATER))
-                    .then(|| std::array::from_fn(|axis| from[axis].midpoint(to[axis])))
-            })
-        })
+                let Some(to) = node_position(target) else {
+                    continue;
+                };
+                if source_tile.is_some() && node_tile(target) == source_tile {
+                    pending.push(target);
+                }
+                let delta =
+                    IVec2::new(to[0].saturating_sub(from[0]), to[2].saturating_sub(from[2]));
+                let direction = if delta.y.unsigned_abs() >= delta.x.unsigned_abs() {
+                    if delta.y > 0 {
+                        2
+                    } else {
+                        0
+                    }
+                } else if delta.x > 0 {
+                    1
+                } else {
+                    3
+                };
+                let side = std::array::from_fn(|axis| from[axis].midpoint(to[axis]));
+                sides
+                    .entry((from[2], from[0], direction, from[1], target))
+                    .or_insert(side);
+            }
+        }
+        let mut seen = BTreeSet::new();
+        sides.into_values().filter(move |side| seen.insert(*side))
     }
 
     /// Eligible dry node centres sampled from a habitat's topology cells,
@@ -578,24 +631,9 @@ pub struct CaffeineFlags {
     pub decaffeinated: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CaffeineFactors {
-    pub caffeinated: f32,
-    pub decaffeinated: f32,
-}
-
-impl Default for CaffeineFactors {
-    fn default() -> Self {
-        Self {
-            caffeinated: 1.0,
-            decaffeinated: 1.0,
-        }
-    }
-}
-
 impl CaffeineFlags {
     #[must_use]
-    pub fn apply_to_rate(self, mut rate: f32, factors: CaffeineFactors) -> f32 {
+    pub fn apply_to_rate(self, mut rate: f32, factors: openzt2_game_data::CaffeineFactors) -> f32 {
         if self.caffeinated {
             rate *= factors.caffeinated;
         }

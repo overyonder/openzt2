@@ -1,9 +1,15 @@
-use bevy::prelude::{Commands, Entity, MessageWriter, Query, With};
+use bevy::prelude::*;
 use openzt2_shows::shows::{
-    show_timing_operations::RunningShowPhaseTimer, ShowMixerTimeSlot, ShowMixerWait,
+    show_timing_operations::RunningShowPhaseTimer, ActiveShowTrickOf, ScheduledTrickToken,
+    ShowColumnWait, ShowMixerTimeSlot, ShowMixerWait, ShowRunSlotOrder, ShowScoreSamples,
+    TrickTokenForShow,
+};
+use openzt2_zoo_state::animal_behavior::behavior_token_types::{
+    BehaviorSelfToken, BehaviorTrickDestination, ClaimedBehaviorSelfToken,
 };
 use openzt2_zoo_state::shows::running_show_types::{
-    RunningShow, RunningShowFromRow, RunningShowOnStage,
+    RunningShow, RunningShowFromRow, RunningShowOnStage, RunningShowTrick,
+    ShowTrickBeingPerformedBy,
 };
 
 use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
@@ -167,10 +173,7 @@ pub(super) fn apply_show_snapshot_records_to_live_show_stages_and_schedule(
                 },
             ))
             .id();
-        if let Some(saved) = running.remove(&scheduled_show_snapshot_record.persistent_identifier.0)
-        {
-            restore_show_phase(commands, row, show_stage_entity, world_root_entity, saved)?;
-        }
+        let mut slots = Vec::with_capacity(scheduled_trick_performances.len());
         for (performer, cell) in scheduled_trick_performances {
             let mut slot = commands.spawn((ShowTrickSlotOf(row), performer));
             if let Some(time_slot) = cell.time_slot {
@@ -184,6 +187,19 @@ pub(super) fn apply_show_snapshot_records_to_live_show_stages_and_schedule(
             } else {
                 slot.insert(ShowMixerWait(cell.duration_simulation_ticks));
             }
+            slots.push(slot.id());
+        }
+        if let Some(saved) = running.remove(&scheduled_show_snapshot_record.persistent_identifier.0)
+        {
+            restore_show_phase(
+                commands,
+                row,
+                show_stage_entity,
+                world_root_entity,
+                saved,
+                &slots,
+                identities,
+            )?;
         }
     }
 
@@ -224,7 +240,15 @@ pub(super) fn apply_show_snapshot_records_to_live_show_stages_and_schedule(
         if let Some(saved) =
             running.remove(&scheduled_break_snapshot_record.persistent_identifier.0)
         {
-            restore_show_phase(commands, row, show_stage_entity, world_root_entity, saved)?;
+            restore_show_phase(
+                commands,
+                row,
+                show_stage_entity,
+                world_root_entity,
+                saved,
+                &[],
+                identities,
+            )?;
         }
     }
 
@@ -240,11 +264,13 @@ fn restore_show_phase(
     stage: Entity,
     root: Entity,
     saved: super::show_snapshot_types::RunningShowSnapshot,
+    slots: &[Entity],
+    identities: &PersistentIdIndex,
 ) -> Result<(), WorldSnapshotPersistenceFailure> {
     let phase = saved
         .phase()
         .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
-    commands.spawn((
+    let mut show = commands.spawn((
         WorldMember { root },
         RunningShowOnStage(stage),
         RunningShowFromRow(row),
@@ -258,5 +284,143 @@ fn restore_show_phase(
         },
         RunningShowPhaseTimer::from_remaining(std::time::Duration::from_nanos(saved.remaining_ns)),
     ));
+    let show_entity = show.id();
+    if let Some(continuation) = saved.continuation {
+        let slot = |index: u32| slots[index as usize];
+        show.insert((
+            ShowRunSlotOrder(
+                continuation
+                    .columns
+                    .into_iter()
+                    .map(|column| column.into_iter().map(slot).collect())
+                    .collect(),
+            ),
+            ShowColumnWait::from_remaining(std::time::Duration::from_nanos(continuation.wait_ns)),
+        ));
+        if let Some((predicted, actual)) = continuation.scores {
+            let samples = |rows: Vec<(u32, f32)>| {
+                rows.into_iter()
+                    .map(|(key, score)| (slot(key), score))
+                    .collect()
+            };
+            show.insert(ShowScoreSamples {
+                predicted: samples(predicted),
+                actual: samples(actual),
+            });
+        }
+        for saved in continuation.tricks {
+            let performer = identities
+                .get(root, PersistentId(saved.performer))
+                .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+            let slot = slot(saved.slot);
+            let mut trick = commands.spawn((
+                ActiveShowTrickOf(show_entity),
+                ShowTrickBeingPerformedBy(performer),
+                RunningShowTrick {
+                    definition: saved.definition,
+                    slot,
+                    scored: saved.scored,
+                },
+            ));
+            if let Some(duration) = saved.pending_token_duration {
+                trick.insert(openzt2_shows::shows::PendingShowTrickToken(duration));
+            }
+            if !saved.tokens.is_empty() {
+                trick.insert(RestoredShowTrickTokens {
+                    performer,
+                    slot,
+                    tokens: saved.tokens,
+                });
+            }
+        }
+    }
     Ok(())
+}
+
+#[derive(Component)]
+pub(super) struct RestoredShowTrickTokens {
+    performer: Entity,
+    slot: Entity,
+    tokens: Vec<super::show_snapshot_types::ShowTrickTokenSnapshot>,
+}
+
+pub(super) fn bind_restored_show_trick_tokens(
+    mut commands: Commands,
+    operations: Query<(
+        Entity,
+        &super::pending_snapshot_application_types::SnapshotRestored,
+    )>,
+    tricks: Query<(Entity, &RestoredShowTrickTokens, &ActiveShowTrickOf)>,
+    shows: Query<&WorldMember, With<RunningShow>>,
+    children: Query<&Children>,
+    mut tokens: Query<
+        (
+            &mut BehaviorSelfToken,
+            Option<&ClaimedBehaviorSelfToken>,
+            Option<&mut BehaviorTrickDestination>,
+        ),
+        Without<TrickTokenForShow>,
+    >,
+    identities: Res<PersistentIdIndex>,
+) {
+    use super::pending_snapshot_application_types::{SnapshotRestoreFailed, SnapshotRestored};
+    let Ok((operation, restored)) = operations.single() else {
+        return;
+    };
+    let root = restored.0;
+    let mut bound = bevy::ecs::entity::EntityHashSet::new();
+    for (trick, pending, show) in &tricks {
+        if !shows.get(show.0).is_ok_and(|member| member.root == root) {
+            continue;
+        }
+        for saved in &pending.tokens {
+            let token = children
+                .get(pending.performer)
+                .into_iter()
+                .flat_map(|children| children.iter())
+                .find(|&token| {
+                    !bound.contains(&token)
+                        && tokens.get(token).is_ok_and(|(token, claim, _)| {
+                            token.name == saved.name
+                                && token.available_at == saved.available_at
+                                && token.expires_at == saved.expires_at
+                                && claim.map(|claim| claim.execution_id) == saved.execution
+                        })
+                });
+            let Some(token) = token else {
+                commands
+                    .entity(operation)
+                    .remove::<SnapshotRestored>()
+                    .insert(SnapshotRestoreFailed::DuringReplacement {
+                        reason: WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference,
+                        root_to_unload: Some(root),
+                    });
+                return;
+            };
+            let Ok((mut token_state, _, destination)) = tokens.get_mut(token) else {
+                continue;
+            };
+            bound.insert(token);
+            if let Some(payload) = saved
+                .payload
+                .and_then(|id| identities.get(root, PersistentId(id)))
+            {
+                token_state.payload = Some(payload);
+            }
+            let mut token = commands.entity(token);
+            token.insert((
+                TrickTokenForShow(trick),
+                ScheduledTrickToken { slot: pending.slot },
+            ));
+            super::restored_component_values::restore_optional_component(
+                &mut token,
+                destination,
+                saved
+                    .destination
+                    .map(|position| BehaviorTrickDestination(Vec3::from_array(position))),
+                true,
+            );
+        }
+        commands.entity(trick).remove::<RestoredShowTrickTokens>();
+    }
 }

@@ -747,32 +747,40 @@ pub(super) fn create_world_manager<'scope, 'env: 'scope>(
             scope.create_function(move |_, _: Table| Ok(queries.overhead_camera.map(read)))?,
         )?;
     }
-    let attribute_source = move |request: &Table| -> mlua::Result<(EntityFacts, String)> {
-        let binder: Table = request.get("key")?;
-        let entity = resolve_reference_entity(&binder, queries, pending)?;
-        let fact = entity_fact(queries, pending, entity)
-            .ok_or_else(|| mlua::Error::runtime("attribute requested for absent entity"))?;
-        Ok((fact, request.get("val")?))
+    let attribute_source = move |request: &Table| -> mlua::Result<(Option<EntityFacts>, String)> {
+        let key = request.get("val")?;
+        let fact = match request.get::<mlua::Value>("key")? {
+            mlua::Value::Table(binder) => resolve_reference_entity(&binder, queries, pending)
+                .ok()
+                .and_then(|entity| entity_fact(queries, pending, entity)),
+            _ => None,
+        };
+        Ok((fact, key))
     };
     manager.set(
         "BFG_GET_ATTR_STRING",
         scope.create_function(move |_, (_, request): (Table, Table)| {
             let (fact, key) = attribute_source(&request)?;
-            entity_string_attribute(queries, fact, &key)
+            fact.map_or_else(
+                || Ok(String::new()),
+                |fact| entity_string_attribute(queries, fact, &key),
+            )
         })?,
     )?;
     manager.set(
         "BFG_GET_ATTR_FLOAT",
         scope.create_function(move |_, (_, request): (Table, Table)| {
             let (fact, key) = attribute_source(&request)?;
-            entity_float_attribute(queries, fact, &key)
+            fact.map_or(Ok(0.0), |fact| entity_float_attribute(queries, fact, &key))
         })?,
     )?;
     manager.set(
         "BFG_GET_ATTR_BOOLEAN",
         scope.create_function(move |_, (_, request): (Table, Table)| {
             let (fact, key) = attribute_source(&request)?;
-            entity_boolean_attribute(queries, fact, &key)
+            fact.map_or(Ok(false), |fact| {
+                entity_boolean_attribute(queries, fact, &key)
+            })
         })?,
     )?;
     manager.set(

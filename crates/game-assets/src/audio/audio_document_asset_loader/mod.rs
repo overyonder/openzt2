@@ -7,12 +7,7 @@ use bevy::{
 use openzt2_game_data::audio::VARIANT_CUE_REFERENCE;
 
 use crate::{
-    asset_source::{
-        archive_entry_asset_path::{
-            archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION,
-        },
-        AssetArchives,
-    },
+    asset_source::{archive_entry_asset_path::archive_entry_asset_source_path, AssetArchives},
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
     },
@@ -80,9 +75,5 @@ impl AssetLoader for AudioDocumentAssetLoader {
             document: lowered,
             clip_paths: clip_paths.into_boxed_slice(),
         })
-    }
-
-    fn extensions(&self) -> &[&str] {
-        &[ARCHIVE_ENTRY_ASSET_EXTENSION]
     }
 }

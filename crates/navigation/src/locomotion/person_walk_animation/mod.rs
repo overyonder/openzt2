@@ -18,10 +18,9 @@ use openzt2_game_data::world_definitions::staff_management::{
 };
 use openzt2_game_data::{behavior::action::wander::BehaviorGroundLocomotionSpeed, AssetId};
 use openzt2_world_state::simulation_time::native_visual_random_stream::NativeVisualRandomStream;
-use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorLocomotionIntent;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestArchetype;
-use openzt2_zoo_state::locomotion::locomotion_types::{LocomotionMode, SwimLayer};
+use openzt2_zoo_state::locomotion::locomotion_types::{LocomotionMode, Steering, SwimLayer};
 use openzt2_zoo_state::staff::staff_employment_types::StaffRole;
 
 use openzt2_world_state::{
@@ -42,9 +41,6 @@ use openzt2_zoo_state::{
     locomotion::locomotion_types::{Destination, DirectLocomotion},
     staff::staff_employment_types::Staff,
 };
-
-#[derive(Component)]
-pub struct GuestLocomotionTables(pub Vec<StaffLocomotionTable>);
 
 fn locomotion_row(table: &StaffLocomotionTable, speed: AssetId) -> Option<&StaffLocomotionRow> {
     table.rows.iter().find(|row| row.key == speed).or_else(|| {
@@ -70,6 +66,7 @@ pub(super) struct PersonGaitPlayback {
     rate: i16,
     rate_reset: Timer,
     rates: [f32; 2],
+    waggle_selected: bool,
 }
 
 #[derive(SystemParam)]
@@ -115,7 +112,6 @@ pub(super) fn project_person_motion_to_walk_animation(
             Option<&LocomotionMode>,
             Option<&SwimLayer>,
             Option<&BehaviorLocomotionIntent>,
-            Option<&GuestLocomotionTables>,
             Has<openzt2_zoo_state::staff::staff_employment_types::StaffClimbingTankGate>,
             Option<&openzt2_zoo_state::behavior_task_execution_types::BehaviorLocomotionModifier>,
         ),
@@ -124,7 +120,7 @@ pub(super) fn project_person_motion_to_walk_animation(
     mut playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
     mut random: Option<ResMut<NativeVisualRandomStream>>,
     caffeine_flags: Query<&CaffeineFlags>,
-    binders: Query<(Option<&DefinitionId>, Option<&GuestArchetype>)>,
+    guest_context: Query<(&GuestArchetype, Option<&Steering>, &GlobalTransform)>,
 ) {
     for (
         controller_entity,
@@ -151,7 +147,6 @@ pub(super) fn project_person_motion_to_walk_animation(
             mode,
             layer,
             intent,
-            guest_tables,
             climbing,
             modifier,
         )) = people.get_mut(person)
@@ -187,14 +182,21 @@ pub(super) fn project_person_motion_to_walk_animation(
             .and_then(|(index, definitions)| index.get(definitions));
         let role_definition =
             role.and_then(|role| catalogue.and_then(|catalogue| catalogue.find_staff(role.0)));
-        let (definition_id, archetype) = binders.get(person).unwrap_or_default();
-        let object = definition_id.and_then(|id| catalogue?.find_object(id.0));
-        let base_guest_speed = archetype
-            .and_then(|archetype| catalogue?.find_guest(archetype.0))
-            .map(|guest| guest.move_speed_mps);
-        let rates = super::authored_caffeine_factors(object);
+        let guest = guest_context.get(person).ok();
+        let guest_definition = guest.and_then(|(archetype, ..)| catalogue?.find_guest(archetype.0));
+        let rates = role_definition
+            .map(|role| role.caffeine_factors)
+            .or_else(|| guest_definition.map(|guest| guest.caffeine_factors))
+            .unwrap_or_default();
         let caffeine = caffeine_flags.get(person).copied().unwrap_or_default();
-        let guest_speed = base_guest_speed.map(|speed| caffeine.apply_to_rate(speed, rates));
+        let carrying =
+            modifier.is_some_and(|modifier| modifier.modifier == AssetId::from_key("carry"));
+        let carry_rate = guest_definition
+            .filter(|_| carrying)
+            .and_then(|guest| guest.locomotion.carry_speed_multiplier)
+            .unwrap_or(1.0);
+        let guest_speed = guest_definition
+            .map(|guest| caffeine.apply_to_rate(guest.move_speed_mps, rates) * carry_rate);
         let speed = intent.map(|intent| intent.0).unwrap_or_default();
         let binder = if mode == Some(&LocomotionMode::Swim) {
             if layer == Some(&SwimLayer::Submerged) {
@@ -202,14 +204,14 @@ pub(super) fn project_person_motion_to_walk_animation(
             } else {
                 "water"
             }
-        } else if modifier.is_some_and(|modifier| modifier.modifier == AssetId::from_key("carry")) {
+        } else if carrying {
             "groundcarry"
         } else {
             "ground"
         };
         let tables = role_definition
             .map(|role| role.locomotion_tables.as_slice())
-            .or_else(|| guest_tables.map(|tables| tables.0.as_slice()));
+            .or_else(|| catalogue?.guest_locomotion_tables(guest?.0 .0));
         let table = tables.and_then(|tables| {
             tables
                 .iter()
@@ -236,7 +238,35 @@ pub(super) fn project_person_motion_to_walk_animation(
             && clip_binding.as_ref().is_some_and(|binding| {
                 binding.matches(controller.animation_set_asset.id(), node_key, false)
             });
-        let has_locomotion_node = resolved_node
+        let stationary_clip = (!moving)
+            .then(|| table.and_then(|table| table.stationary_clip.as_deref()))
+            .flatten();
+        let guest_clips = moving.then(|| {
+            let (archetype, steering, pose) = guest?;
+            let direction = steering.map_or(Vec3::Z, |steering| pose.rotation().inverse() * steering.desired_velocity);
+            let direction = if direction.x.abs() > direction.z.abs() {
+                if direction.x < 0.0 { "left" } else { "right" }
+            } else if direction.z < 0.0 {
+                "back"
+            } else {
+                "ahead"
+            };
+            let directions = catalogue?.guest_locomotion_directions(archetype.0)?;
+            let binder = table?.binder;
+            let speed = row?.key;
+            let matches = |clip: &&openzt2_game_data::world_definitions::guest_simulation_definitions::GuestDirectionalLocomotionClip| {
+                clip.binder == binder && clip.speed == speed
+            };
+            let directional = directions.iter().filter(matches)
+                .find(|clip| clip.direction == AssetId::from_key(direction))
+                .map(|clip| clip.clip.as_str());
+            let waggle = directions.iter().filter(matches)
+                .find(|clip| clip.direction == AssetId::from_key("waggle"))
+                .map(|clip| (clip.clip.as_str(), clip.wag.unwrap_or(1.0).clamp(0.0, 1.0)));
+            Some((directional, waggle))
+        }).flatten();
+        let (directional, waggle) = guest_clips.unwrap_or_default();
+        let base_node_present = resolved_node
             || assets
                 .sets
                 .get(&controller.animation_set_asset)
@@ -245,7 +275,11 @@ pub(super) fn project_person_motion_to_walk_animation(
                         .iter()
                         .any(|node| node.animation_graph_node_asset_key == node_key)
                 });
-        if !has_locomotion_node {
+        if stationary_clip.is_none()
+            && directional.is_none()
+            && !waggle.is_some_and(|(_, weight)| weight > 0.0)
+            && !base_node_present
+        {
             if let Some(agent) = agent.filter(|_| moving && row.is_some()) {
                 agent
                     .map_unchanged(|agent| &mut agent.max_speed_mps)
@@ -253,7 +287,7 @@ pub(super) fn project_person_motion_to_walk_animation(
             }
             continue;
         }
-        let sampled_rate = if let (Some(table), Some(row)) = (table, row) {
+        let sampled = if let (Some(table), Some(row)) = (table, row) {
             let mut new_gait = PersonGaitPlayback {
                 binder: AssetId::default(),
                 row: AssetId::default(),
@@ -261,6 +295,7 @@ pub(super) fn project_person_motion_to_walk_animation(
                 rate: 1000,
                 rate_reset: Timer::default(),
                 rates: [1.0; 2],
+                waggle_selected: false,
             };
             let newly_projected = gait.is_none();
             let current = gait.as_deref_mut().unwrap_or(&mut new_gait);
@@ -277,42 +312,63 @@ pub(super) fn project_person_motion_to_walk_animation(
                 || current.row != row.key
                 || current.node != row.node
                 || current.rates != row.playback_speed_range
-                || (row.reset_seconds_range[1] > 0.0 && rate_due)
+                || (stationary_clip.is_none() && row.reset_seconds_range[1] > 0.0 && rate_due)
             {
                 let mut draw = || {
                     random
                         .as_deref_mut()
                         .map_or(0, NativeVisualRandomStream::next_u15)
                 };
-                let reset_seconds = sample_gait_range(row.reset_seconds_range, &mut draw);
-                let rate = sample_gait_range(row.playback_speed_range, draw);
+                let (reset_seconds, rate) = if stationary_clip.is_some() {
+                    (0.0, row.playback_speed_range[1])
+                } else {
+                    (
+                        sample_gait_range(row.reset_seconds_range, &mut draw),
+                        sample_gait_range(row.playback_speed_range, &mut draw),
+                    )
+                };
                 current.rate = (rate * 1000.0).round().clamp(0.0, f32::from(i16::MAX)) as i16;
+                current.waggle_selected = waggle.is_some_and(|(_, weight)| {
+                    weight >= 1.0 || weight > 0.0 && f32::from(draw()) < weight * 32_767.0
+                });
                 current.rate_reset = super::fixed_interval_timer(reset_seconds);
                 current.binder = table.binder;
                 current.row = row.key;
                 current.node.clone_from(&row.node);
                 current.rates = row.playback_speed_range;
             }
-            let rate = current.rate;
+            let playback = (current.rate, current.waggle_selected);
             if newly_projected {
                 commands.entity(controller_entity).insert(new_gait);
             }
-            Some(rate)
+            Some(playback)
         } else {
             None
         };
+        let exact_clip = stationary_clip.or(directional).or_else(|| {
+            let (clip, _) = waggle?;
+            sampled
+                .is_some_and(|(_, selected)| selected)
+                .then_some(clip)
+        });
+        let sampled_rate = sampled.map(|(rate, _)| rate);
+        if exact_clip.is_none() && !base_node_present {
+            if let Some(agent) = agent.filter(|_| moving && row.is_some()) {
+                agent
+                    .map_unchanged(|agent| &mut agent.max_speed_mps)
+                    .set_if_neq(0.0);
+            }
+            continue;
+        }
         let Some(set) = assets.sets.get(&controller.animation_set_asset) else {
             continue;
         };
-        let stationary_clip = (!moving)
-            .then(|| table.and_then(|table| table.stationary_clip.as_deref()))
-            .flatten();
         LocomotionClipDependencies::retain(
             &mut commands,
             controller_entity,
             dependencies,
             controller.animation_set_asset.id(),
-            stationary_clip.unwrap_or(node_key),
+            exact_clip.unwrap_or(node_key),
             set,
             &assets.sources,
             assets.sets.is_changed(),
@@ -322,13 +378,13 @@ pub(super) fn project_person_motion_to_walk_animation(
             controller_entity,
             clip_binding,
             controller.animation_set_asset.id(),
-            stationary_clip.unwrap_or(node_key),
-            stationary_clip.is_some(),
+            exact_clip.unwrap_or(node_key),
+            exact_clip.is_some(),
             assets_changed,
             set,
             &assets.sources,
             || {
-                let selected = stationary_clip.map(str::to_owned).or_else(|| {
+                let selected = exact_clip.map(str::to_owned).or_else(|| {
                     let node = set.animation_graph_nodes.iter().find(|node| node.animation_graph_node_asset_key == node_key)?;
                     openzt2_world_state::animation_graph::animation_graph_transition_operations::select_preferred_animation_clip_from_graph_node(
                         set, |key| assets.sources.get(set, key).is_some(), node,
@@ -355,7 +411,7 @@ pub(super) fn project_person_motion_to_walk_animation(
                     return None;
                 }
                 let rate = if let Some(rate) = sampled_rate {
-                    caffeine.apply_to_rate(f32::from(rate), rates)
+                    caffeine.apply_to_rate(f32::from(rate), rates) * carry_rate
                 } else {
                     guest_speed.or_else(|| agent.as_deref().map(|agent| agent.max_speed_mps))?
                         / speed
@@ -369,7 +425,16 @@ pub(super) fn project_person_motion_to_walk_animation(
                 ))
             })
             .flatten();
-        let rate = binding.map_or(1000, |(_, rate, _)| rate);
+        let rate = binding.map_or_else(
+            || {
+                sampled_rate.map_or(1000, |rate| {
+                    (caffeine.apply_to_rate(f32::from(rate), rates) * carry_rate)
+                        .round()
+                        .clamp(1.0, f32::from(i16::MAX)) as i16
+                })
+            },
+            |(_, rate, _)| rate,
+        );
         if let Some(speed) = guest_speed {
             if let Some(agent) = agent.as_mut() {
                 agent
@@ -401,6 +466,7 @@ pub(super) fn project_person_motion_to_walk_animation(
             }
         }
         let needs_request = controller.animation_clip_asset_key != wanted
+            || (!moving && sampled_rate.is_some() && controller.playback_speed_permille != rate)
             || (moving
                 && binding.is_some()
                 && (controller.playback_speed_permille != rate

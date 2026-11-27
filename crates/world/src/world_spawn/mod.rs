@@ -7,7 +7,7 @@ pub mod prefab_world_instance_spawning;
 
 pub mod challenge_economy_initialization;
 pub mod expanding_column_presentation;
-mod generated_entity_name_application;
+pub mod generated_entity_name_application;
 pub(crate) mod named_physical_presentation_projection;
 mod persistent_id_assignment;
 mod physical_presentation_state;
@@ -15,7 +15,8 @@ mod prefab_attachment_independent_rotation;
 mod prefab_authored_transform_animation_advancement;
 mod prefab_object_presentation_attachment_projection;
 pub mod prefab_presentation_render_tree;
-mod prefab_socket_index;
+pub mod prefab_socket_index;
+mod prefab_terrain_decal_projection;
 
 #[cfg(test)]
 mod persistent_id_tests;
@@ -99,6 +100,10 @@ pub(crate) struct IndependentAttachmentOrientation;
 
 impl Plugin for WorldSpawnPlugin {
     fn build(&self, app: &mut App) {
+        prefab_terrain_decal_projection::register_prefab_terrain_decals(app);
+        app.add_plugins(openzt2_world_state::world_spawn::world_membership_types::target_type_index::WorldTargetTypeIndexPlugin);
+        app.add_observer(generated_entity_name_application::name_requested_world_entity)
+            .add_observer(generated_entity_name_application::assign_pending_world_entity_name);
         app.init_asset::<ChallengeEconomyInitializer>()
             .init_asset_loader::<ChallengeEconomyInitializerLoader>();
         use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndexPlugin;
@@ -271,7 +276,10 @@ impl Plugin for WorldSpawnPlugin {
                         .after(hydrate_required_named_physical_presentations)
                         .after(finish_rebuilding_world_instance_renderables)
                         .after(hydrate_prefab_presentations),
-                    select_named_presentation_fade_states.after(attach_named_presentations_to_model_nodes),
+                    named_physical_presentation_projection::seed_named_presentation_fade_inputs
+                        .after(hydrate_required_named_physical_presentations),
+                    select_named_presentation_fade_states
+                        .after(named_physical_presentation_projection::seed_named_presentation_fade_inputs),
                     project_physical_presentation_caustic_policies
                         .after(attach_named_presentations_to_model_nodes)
                         .after(project_pending_physical_presentation_children),
@@ -307,7 +315,6 @@ impl Plugin for WorldSpawnPlugin {
             .add_systems(
                 FixedUpdate,
                 crate::world_spawn::physical_presentation_state::child_lifecycle::advance_authored_child_lifetimes
-                    .after(openzt2_world_state::simulation_time::simulation_clock_types::ZooClockAdvance)
                     .in_set(FixedGameSet::Act)
                     .run_if(in_state(GamePhase::InGame)),
             )

@@ -2,6 +2,7 @@
 /vendor/*
 !/vendor/avian3d/
 !/vendor/bevy-inspector-egui/
+!/vendor/bevy_audio/
 !/vendor/bevy_camera/
 !/vendor/bevy_core_pipeline/
 !/vendor/bevy_egui/

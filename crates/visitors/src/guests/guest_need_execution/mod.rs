@@ -21,6 +21,7 @@ use super::guest_simulation_types::GuestSocial;
 use super::guest_simulation_types::GuestThirst;
 use super::guest_simulation_types::GuestViewingNeed;
 use super::guest_simulation_types::VisitTime;
+use openzt2_zoo_state::shows::running_show_types::GuestShowNeed;
 
 pub(crate) fn apply_guest_satisfaction_adjustments(
     mut adjustments: MessageReader<AdjustGuestSatisfaction>,
@@ -77,6 +78,61 @@ pub(super) fn tick_guest_need_cadences(
             &mut rng.0,
         ) {
             due.write(GuestNeedAdjustmentDue(entity));
+        }
+    }
+}
+
+pub(super) fn initialize_guest_show_need(
+    active: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    mut guests: Query<
+        (Entity, &GuestArchetype, &mut GuestRng),
+        (With<Guest>, Without<GuestShowNeed>),
+    >,
+    mut commands: Commands,
+) {
+    let Some(definitions) = active.get(&assets) else {
+        return;
+    };
+    for (guest, archetype, mut random) in &mut guests {
+        let Some(policy) = definitions.guest_show_need(archetype.0) else {
+            continue;
+        };
+        let source = |q16: i32| q16 as f32 / 65_536.0;
+        let Some(trigger) = policy.trigger_q16.map(source) else {
+            continue;
+        };
+        let Some(cessation) = policy.cessation_q16.map(source) else {
+            continue;
+        };
+        let [minimum, maximum] = policy.initial_q16.map(source);
+        let range = (minimum < maximum).then(|| (maximum - minimum) as u32);
+        commands.entity(guest).insert(GuestShowNeed::from_authored(
+            minimum,
+            range,
+            trigger,
+            cessation,
+            || random.0.range_u32(32_768).unwrap_or_default() as u16,
+        ));
+    }
+}
+
+pub(super) fn adjust_due_guest_show_needs(
+    mut due: MessageReader<GuestNeedAdjustmentDue>,
+    active: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    mut guests: Query<(&GuestArchetype, &mut GuestShowNeed), With<Guest>>,
+) {
+    let Some(definitions) = active.get(&assets) else {
+        due.clear();
+        return;
+    };
+    for event in due.read() {
+        let Ok((archetype, mut need)) = guests.get_mut(event.0) else {
+            continue;
+        };
+        if let Some(policy) = definitions.guest_show_need(archetype.0) {
+            need.adjust(policy.adjustment_q16 as f32 / 65_536.0);
         }
     }
 }
@@ -235,11 +291,16 @@ pub(super) fn compile_guest_archetype_tables(
     let mut resolved = GuestArchetypeTables::default();
     if let Some(definitions) = definitions.get(&assets) {
         for definition in definitions.guest_definitions() {
-            if let Some(demographic) = GUEST_DEMOGRAPHICS.iter().position(|family| {
-                definition
-                    .behavior_subject_type_identifiers
-                    .contains(&AssetId::from_key(family))
-            }) {
+            if let Some(demographic) = (definition.id != AssetId::from_key(GUEST_DEMOGRAPHICS[0]))
+                .then(|| {
+                    GUEST_DEMOGRAPHICS.iter().position(|family| {
+                        definition
+                            .behavior_subject_type_identifiers
+                            .contains(&AssetId::from_key(family))
+                    })
+                })
+                .flatten()
+            {
                 resolved.rarity[demographic][definition.rarity as usize].push(definition.id);
             }
             let Some(needs) = guest_need_rows(definition) else {

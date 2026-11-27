@@ -27,6 +27,7 @@ use openzt2_game_data::world_definitions::transportation_and_tours::{
     TransportationVehicleSeatAnimationState, TransportationVehicleSeatDefinition,
     TransportationVehicleSeatEmoteBand,
 };
+use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
 fn authored_transportation_track_kind(
@@ -370,8 +371,25 @@ pub(super) fn bind_station(
             ],
             passenger_exits: [exit("p_PassengerExitA")?, exit("p_PassengerExitB")?],
             capacity,
+            sky_stop_nodes: authored_sky_station_stop_nodes(record),
         });
     Ok(())
+}
+
+fn authored_sky_station_stop_nodes(record: &RecordView<'_, '_>) -> [Option<AssetId>; 4] {
+    [
+        "s_StopNodeName_Forward",
+        "s_StopNodeName_Reverse",
+        "s_ReturnStopNodeName_Forward",
+        "s_ReturnStopNodeName_Reverse",
+    ]
+    .map(|attribute| {
+        authored_type_family_component_attribute(record, "BFAIEntityDataShared", attribute)
+            .or_else(|| record.value(&[attribute]))
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(id)
+    })
 }
 
 pub(super) fn bind_track(
@@ -493,6 +511,7 @@ pub(super) fn bind_track(
         } else {
             None
         },
+        ground_obstruction_types: None,
         purchase_cost_cents,
         sky_maximum_connection_distance_metres,
         sky_rope_clearance_metres,
@@ -584,7 +603,7 @@ fn lower_ground_track_physics(
     Ok(Some(GroundTrackPhysicsPolicy {
         maximum_across_grade: number(0)?,
         collision_radius: number(1)?,
-        minimum_obstruction_speed_squared: number(2)?,
+        minimum_obstruction_speed_squared: number(2)?.powi(2),
     }))
 }
 

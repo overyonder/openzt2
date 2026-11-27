@@ -1,10 +1,12 @@
-use bevy::math::UVec2;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::aquatic::tank_navigation_water::TankNavigationWater;
 
 use crate::locomotion::locomotion_types::NavFlags;
-use crate::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph;
-use crate::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraphNode;
+use crate::locomotion::terrain_derived_navigation_graph_types::{
+    NavigationDirectedEdges, NavigationEdgeChange, NavigationTerrainCellEdit,
+    NavigationTerrainChanges, TerrainDerivedNavigationGraph, TerrainDerivedNavigationGraphNode,
+};
 
 impl TerrainDerivedNavigationGraph {
     pub fn navigation_node_count(&self) -> usize {
@@ -36,31 +38,96 @@ impl TerrainDerivedNavigationGraph {
         Some(node)
     }
 
-    pub fn find_navigation_node_mut(
+    /// Commits a batch so the published edges represent its initial and final states.
+    pub fn apply_terrain_cell_edits(
         &mut self,
-        navigation_node: u32,
-    ) -> Option<&mut TerrainDerivedNavigationGraphNode> {
-        self.navigation_nodes.get_mut(navigation_node as usize)
+        edits: impl IntoIterator<Item = NavigationTerrainCellEdit>,
+        tank_water: Option<&TankNavigationWater>,
+    ) -> NavigationTerrainChanges {
+        let mut changes = NavigationTerrainChanges::default();
+        for edit in edits {
+            let Some(index) = self.calculate_navigation_node_for_terrain_cell(edit.cell.to_array())
+            else {
+                continue;
+            };
+            let Some(&before) = self.navigation_nodes.get(index as usize) else {
+                continue;
+            };
+            let mut after = before;
+            after.height_centimetres = edit.height_centimetres;
+            after.minimum_triangle_normal_y = edit.minimum_triangle_normal_y;
+            after.water_depth_centimetres = edit.water_depth_centimetres;
+            if edit.contains_water {
+                after.eligibility_flags.0 |= NavFlags::WATER.0;
+            } else {
+                after.eligibility_flags.0 &= !NavFlags::WATER.0;
+            }
+            changes.affected_nodes.insert(index, [before, after]);
+        }
+        changes.affected_nodes.retain(|_, pair| pair[0] != pair[1]);
+        let before = self
+            .capture_incident_navigation_edges(changes.affected_nodes.keys().copied(), tank_water);
+        for (&node, &[_, after]) in &changes.affected_nodes {
+            self.navigation_nodes[node as usize] = after;
+        }
+        let after = self
+            .capture_incident_navigation_edges(changes.affected_nodes.keys().copied(), tank_water);
+        changes.affected_edges = Self::diff_navigation_edges(before, after);
+        changes
     }
 
-    pub fn update_navigation_node_from_changed_terrain_cell(
-        &mut self,
-        terrain_cell: UVec2,
-        height_centimetres: i32,
-        contains_water: bool,
-        minimum_triangle_normal_y: f32,
-    ) -> Option<()> {
-        let node = self
-            .calculate_navigation_node_for_terrain_cell(terrain_cell.to_array())
-            .and_then(|index| self.navigation_nodes.get_mut(index as usize))?;
-        node.height_centimetres = height_centimetres;
-        node.minimum_triangle_normal_y = minimum_triangle_normal_y;
-        if contains_water {
-            node.eligibility_flags.0 |= NavFlags::WATER.0;
-        } else {
-            node.eligibility_flags.0 &= !NavFlags::WATER.0;
+    /// Captures both directions of the terrain and path edges incident to changed nodes.
+    pub fn capture_incident_navigation_edges(
+        &self,
+        nodes: impl IntoIterator<Item = u32>,
+        tank_water: Option<&TankNavigationWater>,
+    ) -> NavigationDirectedEdges {
+        let nodes: BTreeSet<_> = nodes.into_iter().collect();
+        let mut edges = BTreeMap::new();
+        let mut neighbours = BTreeSet::new();
+        for &source in &nodes {
+            for edge in self.iterate_outgoing_navigation_graph_edges(source, tank_water) {
+                neighbours.insert(edge.destination_node);
+                edges.insert([source, edge.destination_node], edge);
+            }
         }
-        Some(())
+        for &source in neighbours.difference(&nodes) {
+            for edge in self.iterate_outgoing_navigation_graph_edges(source, tank_water) {
+                if nodes.contains(&edge.destination_node) {
+                    edges.insert([source, edge.destination_node], edge);
+                }
+            }
+        }
+        edges
+    }
+
+    pub fn diff_navigation_edges(
+        mut before: NavigationDirectedEdges,
+        after: NavigationDirectedEdges,
+    ) -> BTreeMap<[u32; 2], NavigationEdgeChange> {
+        let mut changes = BTreeMap::new();
+        for (key, edge) in after {
+            let previous = before.remove(&key);
+            if previous != Some(edge) {
+                changes.insert(
+                    key,
+                    NavigationEdgeChange {
+                        before: previous,
+                        after: Some(edge),
+                    },
+                );
+            }
+        }
+        changes.extend(before.into_iter().map(|(key, edge)| {
+            (
+                key,
+                NavigationEdgeChange {
+                    before: Some(edge),
+                    after: None,
+                },
+            )
+        }));
+        changes
     }
 
     pub const fn terrain_tile_size_centimetres(&self) -> u32 {

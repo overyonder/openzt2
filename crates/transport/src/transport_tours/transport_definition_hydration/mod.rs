@@ -74,6 +74,8 @@ pub(super) fn hydrate_transport_entities_from_authored_world_definitions(
             Has<StationRatingPermille>,
             Option<&mut TrackProfile>,
             Option<&mut TransportVehicle>,
+            Option<&mut LocomotionMode>,
+            Has<Velocity>,
             Option<&mut TourViewable>,
         ),
         (Without<TransportCircuit>, Without<TransportTrackJunction>),
@@ -92,8 +94,18 @@ pub(super) fn hydrate_transport_entities_from_authored_world_definitions(
     }
     updated.extend(changed.iter());
     for entity in updated {
-        let Ok((_, source, children, station, rating, track, vehicle, viewable)) =
-            entities.get_mut(entity)
+        let Ok((
+            _,
+            source,
+            children,
+            station,
+            rating,
+            track,
+            vehicle,
+            mode,
+            has_velocity,
+            viewable,
+        )) = entities.get_mut(entity)
         else {
             continue;
         };
@@ -154,18 +166,33 @@ pub(super) fn hydrate_transport_entities_from_authored_world_definitions(
             if let Some(mut vehicle) = vehicle {
                 vehicle.set_if_neq(value);
             } else {
-                commands.entity(entity).insert((
-                    value,
-                    LocomotionMode::Vehicle,
-                    Velocity::default(),
-                ));
+                commands.entity(entity).insert(value);
+            }
+            if let Some(mut mode) = mode {
+                mode.set_if_neq(LocomotionMode::Vehicle);
+            } else {
+                commands.entity(entity).insert(LocomotionMode::Vehicle);
+            }
+            if !has_velocity {
+                commands.entity(entity).insert(Velocity::default());
             }
         }
-        match (viewable, views.by_subject.get(&source.0)) {
-            (Some(mut viewable), Some(&definition)) => {
+        let authored_view = views.by_subject.get(&source.0).copied().or_else(|| {
+            let max_animal = super::tour_view_scoring::authored_maximum_animal_tour_view();
+            let static_value = super::tour_view_scoring::authored_static_tour_value();
+            let object = definitions.find_object(source.0)?;
+            object
+                .authored_runtime
+                .numeric_behavior_properties
+                .iter()
+                .any(|&(key, value)| (key == max_animal || key == static_value) && value != 0.0)
+                .then_some(source.0)
+        });
+        match (viewable, authored_view) {
+            (Some(mut viewable), Some(definition)) => {
                 viewable.set_if_neq(TourViewable { definition });
             }
-            (None, Some(&definition)) => {
+            (None, Some(definition)) => {
                 commands.entity(entity).insert(TourViewable { definition });
             }
             (Some(_), None) => {
@@ -388,13 +415,14 @@ pub(super) fn materialize_restored_transport_prefabs(
         bevy::asset::AssetLoadFailedEvent<openzt2_game_assets::scene_prefab::ScenePrefabAsset>,
     >,
     mut model_events: MessageReader<AssetEvent<bevy::gltf::Gltf>>,
-    pending: Query<(
+    mut pending: Query<(
         Entity,
         Ref<openzt2_zoo_state::transport_tours::transport_topology_types::RestoredTransportPrefab>,
         &openzt2_world_state::world_spawn::persistent_id_types::PersistentId,
         &openzt2_world_state::world_spawn::world_membership_types::WorldMember,
-        &DefinitionId,
-        Option<&Transform>,
+        &mut DefinitionId,
+        Option<&mut Transform>,
+        Option<&mut Visibility>,
         Has<TransportVehicle>,
     )>,
 ) {
@@ -417,7 +445,10 @@ pub(super) fn materialize_restored_transport_prefabs(
         )
     });
     model_events.clear();
-    for (entity, prefab, id, world, definition, pose, vehicle) in &pending {
+    use openzt2_world::world_spawn::prefab_world_instance_spawning::{
+        hydrate_loaded_scene_prefab_into_world_instance_root, PrefabWorldInstanceRootValues,
+    };
+    for (entity, prefab, id, world, definition, pose, visibility, vehicle) in &mut pending {
         if !prefab.is_changed() && !models_changed && !changed_prefabs.contains(&prefab.0.id()) {
             continue;
         }
@@ -435,10 +466,29 @@ pub(super) fn materialize_restored_transport_prefabs(
         if openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id(asset, &models).is_some() {
             continue;
         }
-        openzt2_world::world_spawn::prefab_world_instance_spawning::hydrate_loaded_scene_prefab_into_world_instance_root(
-            &mut commands, entity, asset, prefab.0.clone(), world.root, definition.0, *id,
-            pose.copied().unwrap_or_default(), true, None,
-            if vehicle { avian3d::prelude::RigidBody::Dynamic } else { avian3d::prelude::RigidBody::Static },
+        let definition_id = definition.0;
+        let instance_transform = pose.as_deref().copied().unwrap_or_default();
+        hydrate_loaded_scene_prefab_into_world_instance_root(
+            &mut commands,
+            entity,
+            PrefabWorldInstanceRootValues {
+                transform: pose,
+                visibility,
+                definition: Some(definition),
+            },
+            asset,
+            prefab.0.clone(),
+            world.root,
+            definition_id,
+            *id,
+            instance_transform,
+            true,
+            None,
+            if vehicle {
+                avian3d::prelude::RigidBody::Dynamic
+            } else {
+                avian3d::prelude::RigidBody::Static
+            },
         );
         commands.entity(entity).remove::<openzt2_zoo_state::transport_tours::transport_topology_types::RestoredTransportPrefab>();
     }

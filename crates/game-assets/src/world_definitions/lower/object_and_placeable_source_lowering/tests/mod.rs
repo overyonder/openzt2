@@ -18,3 +18,21 @@ fn inherited_trick_component_distinguishes_show_capability_from_plain_food() {
     assert!(tables.document.objects[0].supports_show_tricks);
     assert!(!tables.document.objects[1].supports_show_tricks);
 }
+
+#[test]
+fn destruction_can_author_fragments_without_a_ruin() {
+    let document = parse_blue_fang_source_document(
+        AssetPath::new("objects/kiosk.xml"),
+        br#"<BFTypedBinder binderType="Kiosk"><shared>
+            <ZTEntityDestructionData explosionEffect="destroy_building" explosionSound="destroy_woodglass_small" rubbleBinderName="Rubble_Fragment_Wood" secsToRemove="0.3f"/>
+        </shared></BFTypedBinder>"#,
+    )
+    .unwrap();
+    let documents = [document];
+    let index = SourceIndex::build(&documents).unwrap();
+    let destruction = super::lower_world_object_destruction(&index.find("Kiosk").unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(destruction.rubble, super::id("Rubble_Fragment_Wood"));
+    assert_eq!(destruction.ruin, Default::default());
+}

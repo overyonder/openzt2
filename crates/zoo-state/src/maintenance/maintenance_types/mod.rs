@@ -1,5 +1,19 @@
 use bevy::prelude::*;
 
+#[derive(Clone, PartialEq)]
+pub struct FirstPersonStaffScript {
+    pub context: openzt2_game_data::AssetId,
+    pub file: String,
+    pub function: String,
+}
+
+#[derive(Event)]
+pub struct RunFirstPersonStaffScript {
+    pub avatar: Entity,
+    pub target: Entity,
+    pub script: FirstPersonStaffScript,
+}
+
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 /// Waste retained by a facility and the maximum amount it can retain.
 pub struct FacilityContainedWaste {
@@ -120,6 +134,3 @@ pub struct AppliedHabitatWasteCleanup {
 
 #[derive(Component)]
 pub struct AuthoredMaintenanceFactsResolutionMarker;
-
-#[derive(Component)]
-pub struct AnimalWasteProductionScheduleResolutionMarker;

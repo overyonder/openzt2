@@ -71,7 +71,7 @@ impl Default for SpineBendPose {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, PartialEq, Eq)]
 pub(super) struct GroundFitJointIndex {
     named: HashMap<AssetId, Entity>,
     root: Option<Entity>,
@@ -88,7 +88,7 @@ pub(super) fn index_ground_fit_joints(
         With<GroundFitPose>,
     >,
     targets: Query<(&AnimationJointTarget, Option<&ChildOf>)>,
-    reparented: Query<&AnimationJointTarget, Changed<ChildOf>>,
+    reparented: Query<&AnimationJointTarget, Or<(Changed<ChildOf>, Changed<AnimationJointTarget>)>>,
     mut detached: RemovedComponents<ChildOf>,
 ) {
     let affected = reparented
@@ -123,7 +123,7 @@ pub(super) fn index_ground_fit_joints(
             }
         }
         if let Some(mut existing) = existing {
-            *existing = index;
+            existing.set_if_neq(index);
         } else {
             commands.entity(controller).insert(index);
         }
@@ -131,15 +131,32 @@ pub(super) fn index_ground_fit_joints(
 }
 
 pub(super) fn clear_procedural_ground_fit_pose(
-    poses: Query<&GroundFitPose>,
+    mut poses: Query<(Entity, &mut GroundFitPose)>,
+    playable: Query<
+        (),
+        (
+            With<AnimationPresentationOwner>,
+            With<AnimationPlaybackController>,
+            With<AnimationPlayer>,
+            With<BoundAnimationBinderRig>,
+            With<GroundFitJointIndex>,
+        ),
+    >,
     mut joints: Query<&mut Transform>,
 ) {
-    for pose in &poses {
+    for (entity, mut pose) in &mut poses {
         for offset in pose.offsets.iter().rev() {
             if let Ok(mut joint) = joints.get_mut(offset.joint) {
-                joint.translation -= offset.translation;
-                joint.rotation = offset.rotation.inverse() * joint.rotation;
+                let base = Transform {
+                    translation: joint.translation - offset.translation,
+                    rotation: offset.rotation.inverse() * joint.rotation,
+                    scale: joint.scale,
+                };
+                joint.set_if_neq(base);
             }
+        }
+        if !pose.offsets.is_empty() && !playable.contains(entity) {
+            pose.offsets.clear();
         }
     }
 }

@@ -197,6 +197,7 @@ bevy = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57
 bevy_a11y = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_app = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_asset = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_audio = { path = "vendor/bevy_audio" }
 bevy_camera = { path = "vendor/bevy_camera" }
 bevy_color = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_core_pipeline = { path = "vendor/bevy_core_pipeline" }
@@ -243,6 +244,7 @@ bevy_window = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f
 bevy_winit = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 
 [patch."https://github.com/bevyengine/bevy"]
+bevy_audio = { path = "vendor/bevy_audio" }
 bevy_camera = { path = "vendor/bevy_camera" }
 bevy_core_pipeline = { path = "vendor/bevy_core_pipeline" }
 bevy_gizmos = { path = "vendor/bevy_gizmos" }

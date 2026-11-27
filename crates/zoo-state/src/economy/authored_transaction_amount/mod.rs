@@ -6,7 +6,7 @@ use openzt2_game_data::world_definitions::economy_transactions::{
 pub fn evaluate_authored_transaction_amount(
     transaction: &EconomyTransactionDefinition,
     price_index: Option<usize>,
-    parent_cents: i64,
+    parent: Money,
     override_amount: Option<f32>,
     mut random_draw: impl FnMut() -> Option<u32>,
 ) -> Option<f64> {
@@ -25,17 +25,9 @@ pub fn evaluate_authored_transaction_amount(
                 )
             }
         }
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "authored source costs are f32; convert the canonical cents for its parent-cost formula"
-        )]
-        EconomyTransactionCostBasis::Parent => parent_cents as f64 / 100.0,
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "authored source costs are f32; convert the canonical cents for its percentage formula"
-        )]
+        EconomyTransactionCostBasis::Parent => f64::from(parent.dollars()),
         EconomyTransactionCostBasis::PercentParent => {
-            parent_cents as f64 * f64::from(transaction.cost) / 10_000.0
+            f64::from(parent.dollars()) * f64::from(transaction.cost) / 100.0
         }
         EconomyTransactionCostBasis::Random => {
             let minimum = f64::from(transaction.minimum_cost);
@@ -64,13 +56,5 @@ pub fn evaluate_authored_transaction_amount(
 }
 
 pub fn authored_currency_to_money(amount: f64) -> Option<Money> {
-    let cents = (amount * 100.0).round();
-    if !cents.is_finite() || cents < 0.0 || cents >= 9_223_372_036_854_775_808.0 {
-        return None;
-    }
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "rounded finite nonnegative cents checked against the i64 upper boundary"
-    )]
-    Some(Money(cents as i64))
+    Money::from_dollars(amount as f32).filter(|&amount| amount >= Money::ZERO)
 }

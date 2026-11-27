@@ -8,6 +8,14 @@ use bevy::{
 use openzt2_game_assets::source_document::{
     blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
 };
+use openzt2_interface_state::persistence::profile_types::ProfileOptions;
+
+pub(super) fn profile_album_spreads(profile: &ProfileOptions) -> Option<u32> {
+    profile
+        .photo_album
+        .and_then(|options| options.default_spreads)
+        .map(|spreads| spreads.clamp(1, MAX_PHOTO_ALBUM_SPREADS))
+}
 
 #[derive(Asset, TypePath)]
 pub(super) struct PhotoConfiguration {

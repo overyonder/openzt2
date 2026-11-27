@@ -7,3 +7,6 @@ pub fn select_bevy_image_asset_path_for_blue_fang_source_image(source_path: &str
         _ => source_path,
     }
 }
+
+#[cfg(test)]
+mod tests;

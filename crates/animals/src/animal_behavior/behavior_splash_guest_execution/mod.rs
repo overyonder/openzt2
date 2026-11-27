@@ -7,11 +7,11 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
-    AssetId,
     animation::animation_text_key::{
         AuthoredAnimationSurfaceEffectKind, AuthoredAnimationTextAction,
     },
     behavior::action::token::BehaviorTokenRecipient,
+    AssetId,
 };
 use openzt2_world_state::{
     animation_graph::{
@@ -38,11 +38,11 @@ use openzt2_zoo_state::{
     aquatic::aquatic_simulation_types::TankGeometry,
     audio::audio_playback_message_types::PlayPositionedAudioCue,
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
         running_actions::{
             RestoredSplashAnimation, RunBehaviorSplashGuest, RunningBehaviorInstruction,
             SplashAnimation, SplashAnimationSeek, WhenBehaviorAction,
         },
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     guests::guest_simulation_types::Guest,
     habitat::habitat_types::HabitatMember,
@@ -315,6 +315,10 @@ impl SplashEffects<'_, '_> {
                     tick,
                     only_one: token.only_one,
                     reconsider: token.reconsider,
+                    context: openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorTokenContext {
+                        force: token.force,
+                        point: token.point_m.map(Vec3::from_array),
+                    },
                     token: BehaviorSelfToken {
                         name: token.token,
                         available_at: at_tick(token.delay),

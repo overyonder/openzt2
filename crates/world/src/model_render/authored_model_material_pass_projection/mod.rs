@@ -1,9 +1,12 @@
 use super::configured_model_effect_materials::{
-    AuthoredModelEffectMaterial, ModelMaterialInputOwner,
+    AuthoredModelEffectMaterial, ModelMaterialInputOwner, ModelMaterialInstanceStart,
 };
 use super::model_scene_visibility_and_shadow_projection::ProjectedModelDrawShadowPolicy;
 use bevy::asset::{asset_changed::AssetChanged, AsAssetId, AssetEvent};
-use bevy::camera::visibility::RenderLayers;
+use bevy::camera::{
+    primitives::Aabb,
+    visibility::{NoAutoAabb, RenderLayers},
+};
 use bevy::gltf::GltfMaterialName;
 use bevy::light::NotShadowCaster;
 use bevy::light::NotShadowReceiver;
@@ -36,9 +39,10 @@ pub(super) fn initialize_model_geometry_texture_coordinate_clocks(
 ) {
     let started = time.elapsed_secs();
     for entity in &geometries {
-        commands
-            .entity(entity)
-            .insert(GeometryTextureCoordinateAnimationClock::new(started));
+        commands.entity(entity).insert((
+            GeometryTextureCoordinateAnimationClock::new(started),
+            ModelMaterialInstanceStart(started),
+        ));
     }
 }
 
@@ -107,7 +111,7 @@ pub(super) fn project_authored_model_material_passes(
             Has<NotShadowCaster>,
             Has<NotShadowReceiver>,
             Option<&SkinnedMesh>,
-            Option<&MeshMorphWeights>,
+            (Option<&MeshMorphWeights>, Option<&Aabb>, Has<NoAutoAabb>),
             Option<&ProjectedModelDrawShadowPolicy>,
             Option<&MeshMaterial3d<StandardMaterial>>,
             Option<&AuthoredModelStandardMaterial>,
@@ -199,7 +203,7 @@ pub(super) fn project_authored_model_material_passes(
         no_shadow_cast,
         no_shadow_receive,
         skin,
-        morph,
+        (morph, render_bound, manual_bound),
         shadow_projection,
         standard,
         authored_standard,
@@ -344,6 +348,8 @@ pub(super) fn project_authored_model_material_passes(
                 template: pass.clone(),
                 clothing_decal: decal.clone(),
                 geometry: entity,
+                effect: material.authored_effect_asset_id(),
+                material_tracks: material.netimmerse_material_animations.clone(),
             };
             let ordering = AuthoredEffectTechniquePassSubmissionOrder::new(entity, pass_index)
                 .expect("the authored effect pass index fits u16")
@@ -410,6 +416,9 @@ pub(super) fn project_authored_model_material_passes(
             }
             if let Some(morph) = morph {
                 additional_pass.insert(morph.clone());
+                if let Some(bound) = render_bound.filter(|_| manual_bound) {
+                    additional_pass.insert((*bound, NoAutoAabb));
+                }
             }
             if let Some(shadow_projection) = shadow_projection {
                 additional_pass.insert(*shadow_projection);
@@ -451,6 +460,7 @@ pub(super) struct AdditionalPassGeometryChanges<'w, 's> {
                 Changed<Mesh3d>,
                 Changed<SkinnedMesh>,
                 Changed<MeshMorphWeights>,
+                Changed<Aabb>,
                 Changed<RenderLayers>,
                 Changed<NotShadowCaster>,
                 Changed<NotShadowReceiver>,
@@ -480,6 +490,8 @@ pub(super) fn synchronize_additional_pass_geometry(
             Has<NotShadowCaster>,
             Has<NotShadowReceiver>,
             Option<&ProjectedModelDrawShadowPolicy>,
+            Option<&Aabb>,
+            Has<NoAutoAabb>,
         ),
         Without<AdditionalAuthoredModelMaterialPass>,
     >,
@@ -493,6 +505,8 @@ pub(super) fn synchronize_additional_pass_geometry(
             Has<NotShadowCaster>,
             Has<NotShadowReceiver>,
             Option<&mut ProjectedModelDrawShadowPolicy>,
+            Option<&mut Aabb>,
+            Has<NoAutoAabb>,
         ),
         With<AdditionalAuthoredModelMaterialPass>,
     >,
@@ -507,8 +521,18 @@ pub(super) fn synchronize_additional_pass_geometry(
         .chain(changes.shadow_receivers.read())
         .chain(changes.lighting.read())
         .collect::<bevy::ecs::entity::EntityHashSet>();
-    for (children, mesh, skin, morph, layers, no_cast, no_receive, shadow) in
-        primitives.iter_many(affected).matched()
+    for (
+        children,
+        mesh,
+        skin,
+        morph,
+        layers,
+        no_cast,
+        no_receive,
+        shadow,
+        bound,
+        source_manual_bound,
+    ) in primitives.iter_many(affected).matched()
     {
         let mut passes = passes.iter_many_mut(children.iter()).matched();
         while let Some((
@@ -520,10 +544,24 @@ pub(super) fn synchronize_additional_pass_geometry(
             had_no_cast,
             had_no_receive,
             current_shadow,
+            existing_bound,
+            manual_bound,
         )) = passes.fetch_next()
         {
             current_mesh.set_if_neq(mesh.clone());
             let mut pass = commands.entity(pass);
+            if let Some(bound) = bound.filter(|_| source_manual_bound && morph.is_some()) {
+                if let Some(mut current) = existing_bound {
+                    current.set_if_neq(*bound);
+                } else {
+                    pass.try_insert(*bound);
+                }
+                if !manual_bound {
+                    pass.try_insert(NoAutoAabb);
+                }
+            } else if manual_bound {
+                pass.try_remove::<(NoAutoAabb, Aabb)>();
+            }
             match (current_skin, skin) {
                 (Some(mut current), Some(skin)) => {
                     if current.inverse_bindposes != skin.inverse_bindposes

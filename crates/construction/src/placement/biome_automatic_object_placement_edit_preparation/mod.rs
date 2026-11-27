@@ -423,9 +423,9 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
         };
         let mode = selection.map(|selection| selection.mode);
         let budget = if unlimited.is_some_and(|unlimited| unlimited.0) {
-            i64::MAX
+            None
         } else {
-            cash.0 .0
+            Some(cash.0)
         };
         let (Some(biome_definition), Some(mask), Ok(mut random)) = (
             catalogue.find_biome(biome),
@@ -529,7 +529,7 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
 
         let mut removed_paths = GroundPathStompRemovals::default();
         let mut created_cells = HashSet::new();
-        let mut total_cost = 0_i64;
+        let mut total_cost = Money::ZERO;
         for cell in candidate_cells.iter().copied() {
             if !policy.random_mask_start
                 && !policy.delete_biome_entities
@@ -600,13 +600,15 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                 continue;
             };
             let Some(amount) =
-                authored_build_charge(&terms, object.price_cents, || Some(random.0.next_u32()))
+                authored_build_charge(&terms, Money::from_cents(object.price_cents), || {
+                    Some(random.0.next_u32())
+                })
             else {
                 continue;
             };
             let Some(next_cost) = total_cost
-                .checked_add(amount.0)
-                .filter(|&cost| cost <= budget)
+                .checked_add(amount)
+                .filter(|&cost| budget.is_none_or(|budget| cost <= budget))
             else {
                 continue;
             };
@@ -776,7 +778,7 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
             });
         prepared.write(ObjectPlacementEditPrepared {
             transaction: request.transaction,
-            cost: Money(total_cost),
+            cost: total_cost,
         });
     }
 }

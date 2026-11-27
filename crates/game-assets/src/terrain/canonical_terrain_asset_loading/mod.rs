@@ -14,6 +14,7 @@ pub fn add_restored_terrain_asset(
     archives: &AssetArchives,
     grid: TerrainGrid,
     declaring_path: PathBuf,
+    tank_water_source_paths: Vec<PathBuf>,
 ) -> Handle<TerrainAsset> {
     let server_for_assets = server.clone();
     let archives = archives.clone();
@@ -22,6 +23,12 @@ pub fn add_restored_terrain_asset(
             server: &server_for_assets,
             source: &declaring_path,
         };
-        build_terrain_asset_dependencies(grid, &archives, &mut publication).await
+        build_terrain_asset_dependencies(
+            grid,
+            &archives,
+            &mut publication,
+            &tank_water_source_paths,
+        )
+        .await
     })
 }

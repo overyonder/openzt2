@@ -34,6 +34,7 @@ use openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::ZooEn
 use super::guest_simulation_calculations::reached_action;
 use super::guest_simulation_calculations::ReachedAction;
 use super::guest_simulation_types::Guest;
+use openzt2_zoo_state::guests::guest_simulation_types::GuestEntranceApproach;
 use super::guest_simulation_types::GuestAmusement;
 use super::guest_simulation_types::GuestArchetype;
 use super::guest_simulation_types::GuestDessert;
@@ -69,7 +70,7 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub(crate) fn choose_guest_destination(
+pub(super) fn choose_guest_destination(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     grid: Single<&SpatialGrid>,
@@ -106,6 +107,7 @@ pub(crate) fn choose_guest_destination(
             Without<Viewing>,
             Without<WaitingForTransport>,
             Without<TransportRider>,
+            Without<GuestEntranceApproach>,
         ),
     >,
     inspectables: Query<(
@@ -553,7 +555,7 @@ fn belongs_to(mut entity: Entity, owner: Entity, parents: &Query<&ChildOf>) -> b
     false
 }
 
-fn view_is_clear(
+pub(super) fn view_is_clear(
     spatial_query: &SpatialQuery,
     parents: &Query<&ChildOf>,
     origin: Vec3,
@@ -585,7 +587,7 @@ fn view_is_clear(
 #[derive(Component)]
 pub(crate) struct EntranceFailureReported;
 
-pub(crate) fn cancel_failed_guest_destinations(
+pub(super) fn cancel_failed_guest_destinations(
     mut failures: MessageReader<NavigationFailed>,
     mut guests: Query<&mut GuestNavigationRequest, With<Guest>>,
     arriving_guests: Query<
@@ -594,6 +596,7 @@ pub(crate) fn cancel_failed_guest_destinations(
             &WorldMember,
             &NavAgent,
             Has<EntranceFailureReported>,
+            Has<GuestEntranceApproach>,
         ),
         With<Guest>,
     >,
@@ -611,10 +614,12 @@ pub(crate) fn cancel_failed_guest_destinations(
             commands
                 .entity(failure.entity)
                 .remove::<(GuestDestination, Viewing, GuestViewingTarget)>();
-            let Ok((phase, member, agent, reported)) = arriving_guests.get(failure.entity) else {
+            let Ok((phase, member, agent, reported, approaching)) =
+                arriving_guests.get(failure.entity)
+            else {
                 continue;
             };
-            if *phase != GuestPhase::Arriving {
+            if *phase == GuestPhase::Leaving || (*phase != GuestPhase::Arriving && !approaching) {
                 continue;
             }
             let Some((_, _, entrance)) = entrances

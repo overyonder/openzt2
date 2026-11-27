@@ -81,4 +81,5 @@ pub enum UiDocumentRole {
     GenericOk,
     Tutorial,
     TutorialComplete,
+    ChallengeWon,
 }

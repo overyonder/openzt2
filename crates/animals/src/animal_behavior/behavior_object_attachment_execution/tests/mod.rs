@@ -14,6 +14,7 @@ use openzt2_world_state::world_spawn::persistent_id_types::{PersistentId, Persis
 
 fn object(id: AssetId) -> WorldObjectDefinition {
     WorldObjectDefinition {
+        collision_scores: None,
         authored_runtime: Default::default(),
         audio_cue_prefixes: Vec::new(),
         audio_stage_volumes: Vec::new(),

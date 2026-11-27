@@ -19,6 +19,7 @@ mod path_placement_highlight_presentation;
 mod path_presentation_neighborhood;
 mod path_support_hydration;
 mod path_surface_presentation;
+pub(crate) mod tank_gate_platform_presentation;
 mod tank_wall_rail_presentation;
 pub mod topology_construction_interaction;
 mod topology_construction_planning;
@@ -94,6 +95,12 @@ impl Plugin for TopologyPlugin {
         if !app.is_plugin_added::<PersistentIdIndexPlugin>() {
             app.add_plugins(PersistentIdIndexPlugin);
         }
+        app.add_systems(
+            PostUpdate,
+            tank_gate_platform_presentation::project_tank_gate_platforms
+                .after(bevy::transform::TransformSystems::Propagate)
+                .run_if(in_state(GamePhase::InGame)),
+        );
         app.register_required_components::<WorldRoot, TopologyIndex>()
             .add_message::<openzt2_progression::progression::AwardProgramEffect>()
             .add_systems(Update, fence_segment_prefab_refresh::replace_zoo_wall_definitions
@@ -104,6 +111,7 @@ impl Plugin for TopologyPlugin {
             .add_observer(path_support_hydration::remove_supports_when_path_tile_is_removed)
             .add_observer(fence_construction_preview_presentation::remove_fence_segments_on_preview_removal)
             .add_observer(tank_wall_rail_presentation::remove_tank_wall_rails_on_component_removal)
+            .add_observer(tank_gate_platform_presentation::remove_platforms_when_tank_gate_is_removed)
             .add_observer(path_curb_presentation::notify_discarded_path_curb_segment)
             .add_observer(topology_construction_interaction::drop_prompt_candidates_when_fence_component_is_removed)
             .init_resource::<ElevatedPathSurfacePresentationAssets>()
@@ -111,9 +119,6 @@ impl Plugin for TopologyPlugin {
             .init_asset_loader::<elevated_path_layout::ElevatedPathModeLoader>()
             .init_resource::<elevated_path_layout::ElevatedPathModeAsset>()
             .init_resource::<path_placement_highlight_presentation::PathPlacementHighlightAssets>()
-            .init_asset::<path_curb_patterns::PathCurbPatterns>()
-            .init_asset_loader::<path_curb_patterns::PathCurbPatternLoader>()
-            .init_resource::<path_curb_patterns::PathCurbPatternAsset>()
             .add_message::<PlaceFence>()
             .add_message::<PlacePath>()
             .add_message::<path_curb_presentation::DiscardedPathCurbSegment>()

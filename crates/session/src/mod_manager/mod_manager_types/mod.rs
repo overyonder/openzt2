@@ -21,3 +21,6 @@ pub(super) struct ModManagerReloadInputBlocker;
 pub struct AssetArchiveEnabledStateCheckbox {
     pub(super) archive_status_index: usize,
 }
+
+#[derive(Component)]
+pub(super) struct ReloadArchiveAtSamePath(pub(super) usize);

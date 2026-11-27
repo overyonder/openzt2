@@ -18,6 +18,44 @@ pub(super) struct RouteSearch {
     endpoints: Option<(u32, u32, [i32; 3])>,
     expansions: usize,
 }
+pub(super) fn edge_became_more_restrictive(
+    change: openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::NavigationEdgeChange,
+) -> bool {
+    change.cost_direction().is_gt()
+        || change
+            .before
+            .zip(change.after)
+            .is_some_and(|(before, after)| {
+                after.width_centimetres < before.width_centimetres
+                    || after.traversal_kind != before.traversal_kind
+            })
+}
+
+impl RouteSearch {
+    pub(super) fn is_affected_by(
+        &self,
+        scratch: &RouteScratch,
+        edges: &[([u32; 2], openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::NavigationEdgeChange)],
+        nodes: &[u32],
+    ) -> bool {
+        let Some((start, goal, _)) = self.endpoints else {
+            return false;
+        };
+        let seen = |node: u32| scratch.marks.get(node as usize) == Some(&scratch.generation);
+        nodes
+            .iter()
+            .any(|&node| node == start || node == goal || seen(node))
+            || edges.iter().any(|&([from, to], change)| {
+                (seen(to)
+                    && scratch.previous[to as usize] == from
+                    && edge_became_more_restrictive(change))
+                    || (seen(from)
+                        && scratch.closed[from as usize]
+                        && change.cost_direction().is_lt())
+            })
+    }
+}
+
 pub(super) const SHORT_PATH_ITERATIONS: usize = 100;
 pub(super) const PRIORITY_PATH_ITERATIONS: usize = 250;
 pub(super) const ITERATIONS_PER_SLICE: usize = 2;

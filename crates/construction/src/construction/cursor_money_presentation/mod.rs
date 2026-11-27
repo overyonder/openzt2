@@ -80,14 +80,14 @@ pub(super) fn project_cursor_money_text_position_and_animation(
         .iter()
         .any(|placement| matches!(placement.operation, AnimalPlacementOperation::Relocation(_)))
     {
-        Some(Money(0))
+        Some(Money::ZERO)
     } else {
         previews
             .single()
             .ok()
             .and_then(|(preview, relocating)| match preview.validity {
                 // Moving a placed object is free whether or not the spot is valid yet.
-                _ if relocating => Some(Money(0)),
+                _ if relocating => Some(Money::ZERO),
                 PlacementValidity::Valid { cost } => Some(cost),
                 PlacementValidity::Pending | PlacementValidity::Invalid(_) => world_definitions
                     .and_then(|world_definitions| {
@@ -154,7 +154,7 @@ pub(super) fn project_cursor_money_text_position_and_animation(
             *negative_format,
             *no_cents,
             *no_minus,
-            cost.0 > 0,
+            cost.is_positive(),
             text,
             font,
         );
@@ -207,10 +207,10 @@ fn write_localized_cursor_money_text_and_font(
     text: Mut<Text>,
     mut font: Mut<TextFont>,
 ) {
-    let absolute_amount = Money(cost.0.saturating_abs());
+    let amount_cents = (f64::from(cost.abs().dollars()) * 100.0).round() as i64;
     let mut raw_localized_currency = String::new();
     let _ = localization.write_localized_currency_amount(
-        absolute_amount.0,
+        amount_cents,
         !no_cents,
         &mut raw_localized_currency,
     );

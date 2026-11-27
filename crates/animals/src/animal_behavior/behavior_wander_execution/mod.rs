@@ -25,7 +25,7 @@ use openzt2_zoo_state::{
     behavior_task_execution_types::{BehaviorTaskExecutionState, PendingBehaviorTaskFailure},
     habitat::{
         habitat_membership_and_containment::locate_habitat_at_world_position,
-        habitat_types::HabitatIndex,
+        habitat_types::{HabitatCellOf, HabitatIndex},
     },
     locomotion::locomotion_types::{
         ActiveTerrainDerivedNavigationGraph, Arrived, Destination, LocomotionMode, NavAgent,
@@ -109,6 +109,7 @@ fn execute_current_wander_actions(
         Option<&ActiveTerrainDerivedNavigationGraph>,
     )>,
     habitat_summaries: Query<&openzt2_zoo_state::habitat::habitat_types::HabitatSummary>,
+    cell_owners: Query<&HabitatCellOf>,
     mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut requests: MessageWriter<NavigateTo>,
     subject_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
@@ -329,7 +330,8 @@ fn execute_current_wander_actions(
             }
             active.request_id = None;
         }
-        let habitat = locate_habitat_at_world_position(habitats, position.xz(), *topology);
+        let habitat =
+            locate_habitat_at_world_position(habitats, &cell_owners, position.xz(), *topology);
         let navigation = graph.terrain_derived_navigation_graph();
         let tile_size_m = navigation.terrain_tile_size_centimetres() as f32 * 0.01;
         let mut selected = None;
@@ -375,12 +377,13 @@ fn execute_current_wander_actions(
                         || if escaped {
                             !super::escaped_animal_reaches(
                                 habitats,
+                                &cell_owners,
                                 *topology,
                                 &habitat_summaries,
                                 point.xz(),
                             )
                         } else {
-                            locate_habitat_at_world_position(habitats, point.xz(), *topology)
+                            locate_habitat_at_world_position(habitats, &cell_owners, point.xz(), *topology)
                                 != habitat
                         }
                     {

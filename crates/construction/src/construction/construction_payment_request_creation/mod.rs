@@ -17,9 +17,9 @@ pub(super) fn create_construction_payment_request(
     payment_purpose: ConstructionPaymentPurpose,
     reverse_payment_direction: bool,
     general_transaction: Option<GeneralEconomyTransaction>,
-) -> Option<TransactionRequest> {
-    let absolute_amount = Money(signed_cost.0.checked_abs()?);
-    let zoo_pays = (signed_cost.0 > 0) ^ reverse_payment_direction;
+) -> TransactionRequest {
+    let absolute_amount = signed_cost.abs();
+    let zoo_pays = signed_cost.is_positive() ^ reverse_payment_direction;
     let (debit_account, credit_account) = if zoo_pays {
         (Account::Zoo, Account::External)
     } else {
@@ -34,7 +34,7 @@ pub(super) fn create_construction_payment_request(
         payment_operation.insert(general_transaction);
     }
     let payment_operation = payment_operation.id();
-    Some(TransactionRequest {
+    TransactionRequest {
         domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Player,
         operation: payment_operation,
         debit: debit_account,
@@ -42,5 +42,5 @@ pub(super) fn create_construction_payment_request(
         amount: absolute_amount,
         kind: TransactionKind::Construction,
         subject: Some(construction_transaction),
-    })
+    }
 }

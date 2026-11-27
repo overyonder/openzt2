@@ -32,11 +32,11 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_
 use openzt2_zoo_state::{
     behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation,
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
         running_actions::{
             BehaviorInstructionId, RunBehaviorTraversalAnimation, RunBehaviorTraversalDock,
             RunningBehaviorInstruction,
         },
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     locomotion::locomotion_types::{
         Arrived, DockAt, NavAgent, NavigationFailed, NavigationRequestGeneration,

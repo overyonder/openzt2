@@ -31,7 +31,6 @@ use super::{
 
 pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
     profile: Res<ProfileOptions>,
-    album_options: Option<Res<super::PhotoAlbumProfileOptions>>,
     configuration: Res<PhotoConfigurationSource>,
     configurations: Res<Assets<PhotoConfiguration>>,
     server: Res<AssetServer>,
@@ -62,21 +61,19 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
     if roots.is_empty() {
         return;
     }
-    let album_spreads = if let Some(spreads) = album_options
-        .as_ref()
-        .and_then(|options| options.get_default_spreads())
-    {
-        spreads
-    } else if let Some(configuration) = configurations.get(&configuration.0) {
-        configuration.album_spreads
-    } else if matches!(
-        server.load_state(configuration.0.id()),
-        bevy::asset::LoadState::Failed(_)
-    ) {
-        INITIAL_PHOTO_ALBUM_SPREADS
-    } else {
-        return;
-    };
+    let album_spreads =
+        if let Some(spreads) = super::photo_configuration::profile_album_spreads(&profile) {
+            spreads
+        } else if let Some(configuration) = configurations.get(&configuration.0) {
+            configuration.album_spreads
+        } else if matches!(
+            server.load_state(configuration.0.id()),
+            bevy::asset::LoadState::Failed(_)
+        ) {
+            INITIAL_PHOTO_ALBUM_SPREADS
+        } else {
+            return;
+        };
     // Allocate at the post-import boundary; pending text must not move this ID.
     for (root, mut allocator, has_roll) in &mut roots {
         let member = WorldMember { root };
@@ -84,12 +81,13 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
             .iter()
             .find(|row| row.1.root == root && row.2.is_some() && row.3.is_none())
         {
-            commands.entity(album).insert((
-                DefaultPhotoAlbum,
-                ActivePhotoAlbum(root),
-                PhotoAlbumPage::default(),
-                PhotoAlbumCapacityPages(album_spreads),
-            ));
+            commands
+                .entity(album)
+                .insert((DefaultPhotoAlbum, ActivePhotoAlbum(root)))
+                .try_insert_if_new((
+                    PhotoAlbumPage::default(),
+                    PhotoAlbumCapacityPages(album_spreads),
+                ));
         } else {
             let id = match allocator.allocate() {
                 Ok(id) => id,

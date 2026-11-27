@@ -125,10 +125,13 @@ pub(super) fn append_runtime_continuation_snapshot(
             || !continuation.breeding_center_births.is_empty()
             || !continuation.water_filter_cleanup.is_empty()
             || !continuation.guests.is_empty()
-            || continuation
-                .fossils
-                .as_ref()
-                .is_some_and(|fossils| !fossils.details.is_empty())
+            || !continuation.authored_float_attributes.is_empty()
+            || !continuation.staff_jobs.is_empty()
+            || !continuation.staff.is_empty()
+            || !continuation.cloning_center_occupancy.is_empty()
+            || continuation.fossils.as_ref().is_some_and(|fossils| {
+                !fossils.details.is_empty() || !fossils.arranged_pieces.is_empty()
+            })
         {
             payload.extend_from_slice(b"RDA2");
             payload.extend(
@@ -144,6 +147,42 @@ pub(super) fn append_runtime_continuation_snapshot(
                 ))
                 .map_err(|_| Failure::CorruptSnapshotSection)?,
             );
+            payload.extend_from_slice(b"RDA3");
+            payload.extend(
+                postcard::to_allocvec(&(
+                    continuation
+                        .guests
+                        .iter()
+                        .map(|guest| guest.saved_activity())
+                        .collect::<Vec<_>>(),
+                    continuation
+                        .fossils
+                        .as_ref()
+                        .map(|fossils| &fossils.arranged_pieces),
+                    &continuation.authored_float_attributes,
+                    &continuation.staff_jobs,
+                ))
+                .map_err(|_| Failure::CorruptSnapshotSection)?,
+            );
+            let guest_resumes = continuation
+                .guests
+                .iter()
+                .filter_map(super::guest_continuation_snapshot::GuestContinuation::saved_resume)
+                .collect::<Vec<_>>();
+            if !continuation.staff.is_empty()
+                || !guest_resumes.is_empty()
+                || !continuation.cloning_center_occupancy.is_empty()
+            {
+                payload.extend_from_slice(b"RDA4");
+                payload.extend(
+                    postcard::to_allocvec(&(
+                        &continuation.staff,
+                        guest_resumes,
+                        &continuation.cloning_center_occupancy,
+                    ))
+                    .map_err(|_| Failure::CorruptSnapshotSection)?,
+                );
+            }
         }
         bytes.extend_from_slice(
             &u32::try_from(payload.len())
@@ -319,9 +358,6 @@ pub(super) fn decode_runtime_continuation_snapshot(
             let ((assignments, births, filters, fossil_details, guests), remaining) =
                 postcard::take_from_bytes(extension)
                     .map_err(|_| Failure::CorruptSnapshotSection)?;
-            if !remaining.is_empty() {
-                return Err(Failure::CorruptSnapshotSection);
-            }
             continuation.disease.assignments = assignments;
             continuation.breeding_center_births = births;
             continuation.water_filter_cleanup = filters;
@@ -332,6 +368,65 @@ pub(super) fn decode_runtime_continuation_snapshot(
                     .as_mut()
                     .ok_or(Failure::CorruptSnapshotSection)?
                     .details = details;
+            }
+            if let Some(extension) = remaining.strip_prefix(b"RDA3") {
+                let ((activities, arranged_pieces, attributes, staff_jobs), rest): (
+                    (
+                        Vec<super::guest_continuation_snapshot::GuestActivityContinuation>,
+                        Option<std::collections::BTreeSet<u64>>,
+                        _,
+                        _,
+                    ),
+                    _,
+                ) = postcard::take_from_bytes(extension)
+                    .map_err(|_| Failure::CorruptSnapshotSection)?;
+                if activities.len() != continuation.guests.len() {
+                    return Err(Failure::CorruptSnapshotSection);
+                }
+                for (guest, activity) in continuation.guests.iter_mut().zip(activities) {
+                    guest.restore_activity(activity);
+                }
+                if let Some(arranged) = arranged_pieces {
+                    continuation
+                        .fossils
+                        .as_mut()
+                        .ok_or(Failure::CorruptSnapshotSection)?
+                        .arranged_pieces = arranged;
+                }
+                continuation.authored_float_attributes = attributes;
+                continuation.staff_jobs = staff_jobs;
+                if let Some(extension) = rest.strip_prefix(b"RDA4") {
+                    let ((staff, guest_resumes, cloning_center_occupancy), trailing): (
+                        (
+                            _,
+                            Vec<(
+                                u64,
+                                super::guest_continuation_snapshot::GuestResumeContinuation,
+                            )>,
+                            _,
+                        ),
+                        _,
+                    ) = postcard::take_from_bytes(extension)
+                        .map_err(|_| Failure::CorruptSnapshotSection)?;
+                    if !trailing.is_empty()
+                        || !guest_resumes.windows(2).all(|pair| pair[0].0 < pair[1].0)
+                    {
+                        return Err(Failure::CorruptSnapshotSection);
+                    }
+                    continuation.staff = staff;
+                    continuation.cloning_center_occupancy = cloning_center_occupancy;
+                    for (id, resume) in guest_resumes {
+                        let index = continuation
+                            .guests
+                            .binary_search_by_key(&id, |guest| guest.id)
+                            .map_err(|_| Failure::BrokenPersistentEntityReference)?;
+                        continuation.guests[index].restore_resume(resume);
+                    }
+                } else if !rest.is_empty() {
+                    return Err(Failure::CorruptSnapshotSection);
+                }
+            } else if !remaining.is_empty() {
+                return Err(Failure::CorruptSnapshotSection);
             }
         } else if !trailing.is_empty() {
             return Err(Failure::CorruptSnapshotSection);
@@ -384,9 +479,38 @@ pub(super) fn validate_runtime_continuation_snapshot(
             .as_ref()
             .is_some_and(|continuation| {
                 continuation
-                    .fossils
-                    .as_ref()
-                    .is_some_and(|fossils| !fossils.valid(record.next_persistent_identifier))
+                    .staff_jobs
+                    .iter()
+                    .any(|job| !job.valid(record.next_persistent_identifier))
+                    || continuation
+                        .staff_jobs
+                        .windows(2)
+                        .any(|pair| pair[0].id >= pair[1].id)
+                    || continuation
+                        .staff
+                        .iter()
+                        .any(|staff| !staff.valid(record.next_persistent_identifier))
+                    || continuation
+                        .staff
+                        .windows(2)
+                        .any(|pair| pair[0].id >= pair[1].id)
+                    || continuation
+                        .cloning_center_occupancy
+                        .windows(2)
+                        .any(|pair| pair[0].0 >= pair[1].0)
+                    || continuation
+                        .cloning_center_occupancy
+                        .iter()
+                        .any(|&(product, center)| {
+                            product == center
+                                || [product, center]
+                                    .into_iter()
+                                    .any(|id| id == 0 || id >= record.next_persistent_identifier)
+                        })
+                    || continuation
+                        .fossils
+                        .as_ref()
+                        .is_some_and(|fossils| !fossils.valid(record.next_persistent_identifier))
                     || continuation
                         .disease
                         .funding
@@ -426,12 +550,29 @@ pub(super) fn validate_runtime_continuation_snapshot(
                         .windows(2)
                         .any(|pair| pair[0].0 >= pair[1].0)
                     || continuation.guests.iter().any(|guest| {
-                        guest.id >= record.next_persistent_identifier || !guest.is_valid()
+                        guest.id >= record.next_persistent_identifier
+                            || !guest.is_valid(record.next_persistent_identifier)
                     })
                     || continuation
                         .guests
                         .windows(2)
                         .any(|pair| pair[0].id >= pair[1].id)
+                    || continuation
+                        .authored_float_attributes
+                        .windows(2)
+                        .any(|rows| rows[0].0 >= rows[1].0)
+                    || continuation
+                        .authored_float_attributes
+                        .iter()
+                        .any(|(id, values)| {
+                            *id == 0
+                                || *id >= record.next_persistent_identifier
+                                || values.is_empty()
+                                || values.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+                                || values.iter().any(|(key, value)| {
+                                    *key == AssetId::default() || !value.is_finite()
+                                })
+                        })
                     || continuation.eggs.iter().any(|egg| {
                         egg.id == 0
                             || egg.id >= record.next_persistent_identifier
@@ -542,6 +683,10 @@ mod tests {
                     breeding_center_births: vec![(12, 3.0)],
                     water_filter_cleanup: vec![(13, 20_000)],
                     guests: Vec::new(),
+                    staff_jobs: Vec::new(),
+                    staff: Vec::new(),
+                    cloning_center_occupancy: vec![(10, 14)],
+                    authored_float_attributes: Vec::new(),
                     eggs: vec![EggContinuation {
                         id: 10,
                         amount: 0.25,
@@ -565,6 +710,16 @@ mod tests {
             let mut encoded = Vec::new();
             append_runtime_continuation_snapshot(&mut encoded, &record).unwrap();
             let decoded = decode_runtime_continuation_snapshot(&encoded).unwrap();
+            assert_eq!(
+                decoded
+                    .domain_continuation
+                    .as_ref()
+                    .map(|domain| domain.cloning_center_occupancy.as_slice()),
+                record
+                    .domain_continuation
+                    .as_ref()
+                    .map(|domain| domain.cloning_center_occupancy.as_slice()),
+            );
             assert_eq!(
                 decoded
                     .domain_continuation

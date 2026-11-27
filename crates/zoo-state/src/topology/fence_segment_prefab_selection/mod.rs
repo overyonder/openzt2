@@ -4,6 +4,19 @@ use openzt2_game_data::AssetId;
 
 use crate::topology::fence_segment_presentation_types::FenceSegmentPrefab;
 use crate::topology::fence_segment_presentation_types::FenceSegmentShape;
+use crate::topology::gate_operation_types::AuthoredGateVariant;
+
+pub fn select_authored_gate_prefab(
+    definition: &FenceDefinition,
+    variant: Option<&AuthoredGateVariant>,
+    prefab_for_variant: impl FnOnce(AssetId) -> Option<AssetId>,
+) -> Option<AssetId> {
+    let prefab = match variant {
+        Some(variant) if variant.0 != definition.gate => prefab_for_variant(variant.0)?,
+        _ => definition.gate_policy.prefab,
+    };
+    (prefab != AssetId::default()).then_some(prefab)
+}
 
 /// Finds the reciprocal, unambiguous corner pairing used by the authored
 /// half-curve meshes. Both meshes run from their outer endpoint to the shared

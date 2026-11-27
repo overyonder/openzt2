@@ -60,13 +60,26 @@ pub fn create_bevy_asset_source_for_enabled_z2f_archives(
         .and_then(|path| path.parent())
         .map(Path::to_owned)
         .ok_or_else(|| std::io::Error::other("Z2F archive has no installation directory"))?;
-    let files = Arc::new(z2f::ArchiveSet::open(enabled_archive_paths)?);
+    let files = z2f::ArchiveSet::open(enabled_archive_paths)?;
+    Ok(create_archive_asset_source(files, installation_root))
+}
+
+#[cfg(feature = "testing")]
+pub fn create_empty_archive_asset_source_for_tests() -> (AssetSourceBuilder, AssetArchives) {
+    let files = z2f::ArchiveSet::open([]).expect("an empty archive set requires no files");
+    create_archive_asset_source(files, PathBuf::new())
+}
+
+fn create_archive_asset_source(
+    files: z2f::ArchiveSet,
+    installation_root: PathBuf,
+) -> (AssetSourceBuilder, AssetArchives) {
     let events = Arc::new(Mutex::new(None));
     let resolved = Arc::default();
     let shared_source_byte_cache = Arc::new(RwLock::new(SharedSourceByteCache::default()));
     let watcher_events = Arc::clone(&events);
     let archives = AssetArchives {
-        files,
+        files: Arc::new(files),
         installation_root,
         events,
         resolved,
@@ -76,7 +89,7 @@ pub fn create_bevy_asset_source_for_enabled_z2f_archives(
     };
     archives.refresh_archive_discovery(None);
     let reader_archives = archives.clone();
-    Ok((
+    (
         AssetSourceBuilder::new(move || {
             Box::new(Z2fAssetReader {
                 archives: reader_archives.clone(),
@@ -89,7 +102,7 @@ pub fn create_bevy_asset_source_for_enabled_z2f_archives(
             Some(Box::new(Z2fAssetWatcher))
         }),
         archives,
-    ))
+    )
 }
 
 #[derive(Resource, Clone)]
@@ -116,6 +129,12 @@ struct SharedSourceByteCache {
 }
 
 impl SharedSourceByteCache {
+    fn invalidate(&mut self, entry: z2f::ArchiveReadEntry) {
+        self.entries_read_once.remove(&entry);
+        if let Some(bytes) = self.bytes_by_entry.remove(&entry) {
+            self.retained_bytes -= bytes.len();
+        }
+    }
     fn retain_reused_entry(&mut self, entry: z2f::ArchiveReadEntry, bytes: &[u8]) {
         if bytes.len() > MAXIMUM_SINGLE_SHARED_SOURCE_BYTE_CACHE_ENTRY_BYTES
             || self.retained_bytes.saturating_add(bytes.len())
@@ -355,6 +374,16 @@ impl AssetArchives {
         if let Some(changes) = changes {
             for change in changes {
                 let path = &change.normalized_asset_path;
+                let previous_entry = discovery
+                    .entries_by_path
+                    .get(path)
+                    .map(z2f::ResolvedArchiveEntry::read_entry);
+                if let Some(entry) = previous_entry {
+                    self.shared_source_byte_cache
+                        .write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .invalidate(entry);
+                }
                 if let Some(entry) = self
                     .files
                     .resolved_winning_entry(path)
@@ -530,6 +559,33 @@ impl AssetArchives {
             .resolve_ui_reference_without_basename_fallback(from, reference)
             .or_else(|| self.resolve_loose_reference(from, reference))
             .or_else(|| self.files.resolve_ui_reference(from, reference))
+    }
+
+    pub(crate) fn resolve_world_presentation_texture(
+        &self,
+        from: &Path,
+        reference: &str,
+    ) -> Option<PathBuf> {
+        let path = z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(Path::new(
+            reference,
+        ));
+        let resolve = |path: &Path| {
+            let path = path.to_str()?;
+            self.resolve_ui_reference(from, path)
+                .or_else(|| self.resolve_model_texture_reference(from, path))
+        };
+        resolve(&path).or_else(|| {
+            // World definitions can refer to the data directory or to a
+            // legacy TGA whose shipped replacement is a DDS at the same path.
+            let data_path = path.strip_prefix("data").ok();
+            data_path.and_then(resolve).or_else(|| {
+                let relative = data_path.unwrap_or(&path);
+                (relative.extension()? == "tga")
+                    .then(|| relative.with_extension("dds"))
+                    .as_deref()
+                    .and_then(resolve)
+            })
+        })
     }
 
     /// Lists one explicitly authored source subtree after overlay selection.
@@ -828,6 +884,30 @@ impl AssetArchives {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let changed = self.files.set_archive_enabled(archive, enabled)?;
+        Ok(self.publish_archive_changes(changed, &mut generation))
+    }
+
+    /// Reopens the archive from its original filesystem path and publishes its changed winners.
+    pub fn reload_archive_at_same_path(
+        &mut self,
+        archive: usize,
+    ) -> std::io::Result<ArchiveOverlayEdit> {
+        let mut generation = self
+            .overlay_generation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let path = self.files.archive_source_path(archive).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "unknown Z2F archive")
+        })?;
+        let changes = self.files.replace_archive(archive, &path)?;
+        Ok(self.publish_archive_changes(changes, &mut generation))
+    }
+
+    fn publish_archive_changes(
+        &self,
+        changed: Vec<z2f::ResolvedAssetChange>,
+        generation: &mut u64,
+    ) -> ArchiveOverlayEdit {
         let publication = if changed.is_empty() {
             None
         } else {
@@ -900,10 +980,10 @@ impl AssetArchives {
                 bevy::log::warn!(%error, "could not notify the archive asset watcher");
             }
         }
-        Ok(ArchiveOverlayEdit {
+        ArchiveOverlayEdit {
             changed_asset_paths,
             publication,
-        })
+        }
     }
 }
 
@@ -985,12 +1065,20 @@ impl AssetReader for Z2fAssetReader {
 /// Source file read for a Bevy asset path. Distinct extensions route some
 /// sources through OpenZT2's loaders instead of Bevy's built-in ones.
 fn source_path_for_asset_path(path: &Path) -> PathBuf {
+    use crate::{
+        texture::interactive_texture_metadata_asset_loading::INTERACTIVE_TEXTURE_ASSET_EXTENSION,
+        ui_document::ui_document_role_asset_path_selection::UI_DOCUMENT_ASSET_EXTENSION,
+    };
+
     match path.extension().and_then(|extension| extension.to_str()) {
         Some(GROUND_PATH_SURFACE_IMAGE_EXTENSION) => {
             source_path_for_asset_path(&path.with_extension(""))
         }
         Some("z2cur") => path.with_extension("cur"),
         Some("z2dds") => path.with_extension("dds"),
+        Some(UI_DOCUMENT_ASSET_EXTENSION | INTERACTIVE_TEXTURE_ASSET_EXTENSION) => {
+            path.with_extension("")
+        }
         _ => gltf_model_source_path_for_asset_path(path),
     }
 }
@@ -998,10 +1086,23 @@ fn source_path_for_asset_path(path: &Path) -> PathBuf {
 /// Bevy asset paths that read a source file: the file itself and its routed
 /// asset path.
 fn asset_paths_reading_source_path(path: &Path) -> Vec<PathBuf> {
+    use crate::{
+        texture::interactive_texture_metadata_asset_loading::INTERACTIVE_TEXTURE_ASSET_EXTENSION,
+        ui_document::ui_document_role_asset_path_selection::UI_DOCUMENT_ASSET_EXTENSION,
+    };
+
     let mut paths = vec![path.to_owned()];
     match path.extension().and_then(|extension| extension.to_str()) {
-        Some("cur") => paths.push(path.with_extension("z2cur")),
+        Some("cur") => {
+            paths.push(path.with_extension("z2cur"));
+            paths.push(path.with_added_extension(INTERACTIVE_TEXTURE_ASSET_EXTENSION));
+        }
         Some("dds") => paths.push(path.with_extension("z2dds")),
+        Some("xml" | "zt2" | "old")
+            if path.starts_with("ui") || path == Path::new("ztapp4.xml") =>
+        {
+            paths.push(path.with_added_extension(UI_DOCUMENT_ASSET_EXTENSION));
+        }
         _ if is_gltf_model_source_path(path) => {
             paths.push(gltf_model_asset_path_for_source_path(path));
         }
@@ -1032,15 +1133,15 @@ pub(crate) mod tests {
     use bevy::{
         app::TaskPoolPlugin,
         asset::{
-            Asset, AssetApp, AssetLoader, AssetPlugin, AssetServer, Assets, Handle, LoadContext,
             io::{AssetReader, AssetSourceId, Reader},
+            Asset, AssetApp, AssetLoader, AssetPlugin, AssetServer, Assets, Handle, LoadContext,
         },
         prelude::{App, TypePath},
     };
-    use zip::{ZipWriter, write::SimpleFileOptions};
+    use zip::{write::SimpleFileOptions, ZipWriter};
 
     use super::{
-        Z2fAssetReader, archive_entry_asset_path, create_bevy_asset_source_for_enabled_z2f_archives,
+        archive_entry_asset_path, create_bevy_asset_source_for_enabled_z2f_archives, Z2fAssetReader,
     };
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -1080,6 +1181,49 @@ pub(crate) mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn labeled_ui_and_cursor_paths_read_their_archived_sources() -> std::io::Result<()> {
+        use crate::ui_document::ui_document_role_asset_path_selection::select_bevy_asset_path_for_canonical_ui_document_role;
+        use bevy::asset::AssetPath;
+        use openzt2_game_data::ui_document::document::UiDocumentRole;
+
+        let directory = TestDirectory::new()?;
+        let archive = directory.archive(
+            "sources.z2f",
+            &[
+                ("UI/Layout/MainMenu.xml", b"menu"),
+                ("ui/cursor.cur", b"cursor"),
+            ],
+        )?;
+        let (_, archives) = create_bevy_asset_source_for_enabled_z2f_archives(vec![archive])?;
+        let reader = Z2fAssetReader { archives };
+        let menu = AssetPath::parse(
+            &select_bevy_asset_path_for_canonical_ui_document_role(UiDocumentRole::MainMenu)
+                .unwrap(),
+        )
+        .into_owned();
+        let cursor = AssetPath::parse("ui/cursor.cur.z2interactive#interactive-image");
+        bevy::tasks::block_on(async {
+            for (asset, source, expected) in [
+                (menu, "ui/layout/mainmenu.xml", b"menu".as_slice()),
+                (cursor, "ui/cursor.cur", b"cursor".as_slice()),
+            ] {
+                assert!(asset.label().is_some());
+                assert!(super::asset_paths_reading_source_path(Path::new(source))
+                    .iter()
+                    .any(|path| path == asset.path()));
+                let mut source = reader
+                    .read(asset.path())
+                    .await
+                    .map_err(std::io::Error::other)?;
+                let mut bytes = Vec::new();
+                source.read_to_end(&mut bytes).await?;
+                assert_eq!(bytes, expected);
+            }
+            Ok(())
+        })
     }
 
     #[derive(Asset, TypePath)]
@@ -1187,8 +1331,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn ui_references_prefer_exact_loose_paths_before_archive_basename_fallbacks()
-    -> std::io::Result<()> {
+    fn ui_references_prefer_exact_loose_paths_before_archive_basename_fallbacks(
+    ) -> std::io::Result<()> {
         let directory = TestDirectory::new()?;
         let base = directory.archive(
             "x300_000.z2f",
@@ -1232,6 +1376,31 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn world_presentation_textures_resolve_data_paths_and_dds_replacements() -> std::io::Result<()>
+    {
+        let directory = TestDirectory::new()?;
+        let archive = directory.archive(
+            "x300_000.z2f",
+            &[
+                ("shared/skymap.tga", b"normal"),
+                ("shared/low/skymap.tga", b"low"),
+                ("world/shadows/blob/shadow.dds", b"shadow"),
+            ],
+        )?;
+        let (_, archives) = create_bevy_asset_source_for_enabled_z2f_archives(vec![archive])?;
+        let from = Path::new("entities/animal.xml");
+        assert_eq!(
+            archives.resolve_world_presentation_texture(from, "Data\\Shared\\SkyMap.tga"),
+            Some(PathBuf::from("shared/skymap.tga"))
+        );
+        assert_eq!(
+            archives.resolve_world_presentation_texture(from, "world/shadows/blob/shadow.tga"),
+            Some(PathBuf::from("world/shadows/blob/shadow.dds"))
+        );
+        Ok(())
+    }
+
+    #[test]
     fn archive_toggle_reloads_assets_that_read_changed_documents() -> std::io::Result<()> {
         let directory = TestDirectory::new()?;
         let base = directory.archive(
@@ -1262,12 +1431,18 @@ pub(crate) mod tests {
         archives.set_archive_enabled(1, false)?;
         update_until(&mut app, &handle, "base")?;
         archives.set_archive_enabled(1, true)?;
-        update_until(&mut app, &handle, "mod")
+        update_until(&mut app, &handle, "mod")?;
+
+        let replacement = directory.archive("replacement.z2f", &[("helper.dep", b"updated")])?;
+        std::fs::rename(replacement, directory.0.join("mod.z2f"))?;
+        let changes = archives.reload_archive_at_same_path(1)?;
+        assert_eq!(changes.changed_asset_paths, [PathBuf::from("helper.dep")]);
+        update_until(&mut app, &handle, "updated")
     }
 
     #[test]
-    fn archive_toggle_reloads_compatible_image_handle_when_physical_dds_winner_changes()
-    -> std::io::Result<()> {
+    fn archive_toggle_reloads_compatible_image_handle_when_physical_dds_winner_changes(
+    ) -> std::io::Result<()> {
         let directory = TestDirectory::new()?;
         let base = directory.archive("x300_000.z2f", &[("image.dds", b"base")])?;
         let modification = directory.archive("mod.z2f", &[("image.dds", b"mod")])?;

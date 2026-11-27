@@ -14,3 +14,9 @@ pub mod guest_simulation_types;
 
 #[derive(bevy::prelude::SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GuestViewingBegin;
+
+#[derive(bevy::prelude::SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GuestNeedCadencePublication;
+
+#[derive(bevy::prelude::SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GuestShowNeedAdjustment;

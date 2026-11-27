@@ -14,20 +14,6 @@ type CameraRole = Or<(With<ZooCamera>, With<ShellUiCamera>, With<ShellClearCamer
 pub(crate) fn route_default_ui_camera(
     phase: Res<State<GamePhase>>,
     roots: Query<(), With<WorldRoot>>,
-    changed_roles: Query<
-        (),
-        (
-            With<Camera>,
-            CameraRole,
-            Or<(
-                Added<Camera>,
-                Added<ZooCamera>,
-                Added<ShellUiCamera>,
-                Added<ShellClearCamera>,
-                Changed<WorldMember>,
-            )>,
-        ),
-    >,
     role_entities: Query<(), CameraRole>,
     mut removed_zoo: RemovedComponents<ZooCamera>,
     mut removed_ui: RemovedComponents<ShellUiCamera>,
@@ -35,15 +21,31 @@ pub(crate) fn route_default_ui_camera(
     mut removed_cameras: RemovedComponents<Camera>,
     mut removed_worlds: RemovedComponents<WorldMember>,
     mut cameras: ParamSet<(
-        Query<
-            (
-                Entity,
-                Has<ZooCamera>,
-                Has<ShellUiCamera>,
-                Option<&WorldMember>,
-            ),
-            (With<Camera>, CameraRole),
-        >,
+        (
+            Query<
+                (),
+                (
+                    With<Camera>,
+                    CameraRole,
+                    Or<(
+                        Added<Camera>,
+                        Added<ZooCamera>,
+                        Added<ShellUiCamera>,
+                        Added<ShellClearCamera>,
+                        Changed<WorldMember>,
+                    )>,
+                ),
+            >,
+            Query<
+                (
+                    Entity,
+                    Has<ZooCamera>,
+                    Has<ShellUiCamera>,
+                    Option<&WorldMember>,
+                ),
+                (With<Camera>, CameraRole),
+            >,
+        ),
         Query<(
             Entity,
             &mut Camera,
@@ -66,6 +68,7 @@ pub(crate) fn route_default_ui_camera(
         .fold(false, |removed, entity| {
             removed || role_entities.contains(entity)
         });
+    let (changed_roles, candidates) = cameras.p0();
     if !phase.is_changed()
         && removed_roles.is_empty()
         && !camera_removed
@@ -73,7 +76,6 @@ pub(crate) fn route_default_ui_camera(
     {
         return;
     }
-    let candidates = cameras.p0();
     let zoo = (*phase.get() == GamePhase::InGame)
         .then(|| {
             candidates

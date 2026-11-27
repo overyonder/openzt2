@@ -7,13 +7,12 @@ use super::world_definition_source_flag_vocabulary::{
     affordance, footprint_flag, object_tag, placement_flag,
 };
 use super::world_definition_source_value_reading_and_conversion::{
-    array, asset, bool_or, element_array, element_bool, element_number, flags, id,
+    array, asset, bool_or, element_array, element_asset, element_bool, element_number, flags, id,
     money_cents_i64_or, number_or, parse_f32_triplet, required, required_element, seconds_ns,
 };
 use crate::source_document::blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme;
 use crate::source_document::resolved_source_record_index::{BindError, RecordView};
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::object_placement::{
     EntranceDefinition, FootprintCell, FootprintCellFlags, PlaceableDefinition,
     PlacementConstraints,
@@ -24,6 +23,7 @@ use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectDestructionDefinition, WorldObjectEggDefinition, WorldObjectPropertyFlags,
     WorldObjectRealPhysicsWaterImpactDefinition, WorldObjectVirtualNode,
 };
+use openzt2_game_data::AssetId;
 
 #[cfg(test)]
 mod tests;
@@ -38,7 +38,6 @@ pub(super) fn lower_world_object_destruction(
             let effect = required_element(&data, &["explosionEffect"])?;
             let sound = required_element(&data, &["explosionSound"])?;
             let rubble = required_element(&data, &["rubbleBinderName"])?;
-            let ruin = required_element(&data, &["entityRuinBinderName"])?;
             let delay_seconds: f64 =
                 parse_blue_fang_source_numeric_lexeme(required_element(&data, &["secsToRemove"])?)
                     .ok_or_else(|| BindError::record(record, "invalid destruction secsToRemove"))?;
@@ -47,7 +46,7 @@ pub(super) fn lower_world_object_destruction(
                 effect_path: format!("particle/{}.psys", effect.trim().to_ascii_lowercase()),
                 audio_cue: AssetId::from_key(&format!("audio-cue:{sound}")),
                 rubble: id(rubble),
-                ruin: id(ruin),
+                ruin: element_asset(&data, &["entityRuinBinderName"]),
                 rubble_count: element_number(&data, &["numParticles"], 0)?,
                 delay_ns,
                 apply_physics: element_bool(&data, &["applyPhysToRubble"], false)?,
@@ -156,6 +155,25 @@ pub(crate) fn lower_authored_world_object_runtime(
     let mut numeric_behavior_properties = std::collections::BTreeMap::new();
     let mut string_behavior_properties = std::collections::BTreeMap::new();
     let mut boolean_behavior_properties = std::collections::BTreeMap::new();
+    if let Some(location) = authored_type_family_elements_named(record, "BFGBiomeData")
+        .into_iter()
+        .find_map(|data| data.attribute_named_any(&["location"]))
+    {
+        string_behavior_properties.insert(id("location"), location.to_owned());
+    }
+    if let Some(rate) = authored_type_family_elements_named(record, "BFAINeedAdjusts")
+        .into_iter()
+        .filter(|row| {
+            row.attribute_named_any(&["Name"])
+                .is_none_or(|name| name.trim().is_empty())
+        })
+        .find_map(|row| row.attribute_named_any(&["lifespan"]))
+    {
+        let rate = parse_blue_fang_source_numeric_lexeme::<f32>(rate)
+            .filter(|rate| rate.is_finite())
+            .ok_or_else(|| BindError::record(record, "invalid lifespan adjustment"))?;
+        numeric_behavior_properties.insert(id("lifespan"), rate);
+    }
     let shared = authored_type_family_elements_named(record, "BFAIEntityDataShared");
     let clip = |attribute| {
         shared
@@ -275,7 +293,17 @@ pub(crate) fn lower_authored_world_object_runtime(
             record,
             "ZTFossilSkeletonComponent",
         )
-        .is_empty();
+        .is_empty()
+            || super::source_element_tree_search::authored_type_family_elements_named(
+                record,
+                "BFNamedBinder",
+            )
+            .into_iter()
+            .any(|binder| {
+                binder
+                    .attribute_named_any(&["binderName"])
+                    .is_some_and(|name| name.eq_ignore_ascii_case("puzzleInteriorObj"))
+            });
     let whap_physics = lower_whap_physics(record)?;
     Ok(AuthoredWorldObjectRuntime {
         whap_physics,
@@ -424,6 +452,7 @@ pub(super) fn bind_object(
         record.key.to_string(),
     ));
     output.document.objects.push(WorldObjectDefinition {
+        collision_scores: super::interaction_policy_lowering::collision_scores(record)?,
         authored_runtime: lower_authored_world_object_runtime(record)?,
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
         audio_stage_volumes: super::authored_placement_object_source_lowering::lower_authored_audio_stage_volumes(record)?,

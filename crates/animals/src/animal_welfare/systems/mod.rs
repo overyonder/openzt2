@@ -72,13 +72,14 @@ fn species_needs<'a>(
 
 pub(crate) fn initialize_animal_needs(
     mut commands: Commands,
-    zoo_seed: Single<&ZooSeed>,
+    seeds: Query<&ZooSeed>,
     assets: Res<Assets<SpeciesAsset>>,
     index: Res<SpeciesAssets>,
     animals: Query<
         (
             Entity,
             &PersistentId,
+            &WorldMember,
             &SpeciesHandle,
             Option<
                 &crate::animal_lifecycle::scripted_animal_spawning::ScriptedAnimalInitialization,
@@ -90,10 +91,13 @@ pub(crate) fn initialize_animal_needs(
     let Some(view) = index.get(&assets) else {
         return;
     };
-    for (entity, persistent_id, species, scripted) in &animals {
+    for (entity, persistent_id, member, species, scripted) in &animals {
+        let Ok(seed) = seeds.get(member.root) else {
+            continue;
+        };
         let initialized = initialize_one_animal_needs(
             &mut commands.entity(entity),
-            **zoo_seed,
+            *seed,
             *persistent_id,
             view,
             species.species,
@@ -358,11 +362,11 @@ pub(super) fn accumulate_need_points(
 /// authored initial range.
 pub(crate) fn initialize_missing_reproduction_needs(
     mut commands: Commands,
-    zoo_seed: Single<&ZooSeed>,
+    seeds: Query<&ZooSeed>,
     assets: Res<Assets<SpeciesAsset>>,
     index: Res<SpeciesAssets>,
     animals: Query<
-        (Entity, &PersistentId, &SpeciesHandle),
+        (Entity, &PersistentId, &WorldMember, &SpeciesHandle),
         (
             With<Animal>,
             With<AnimalWelfare>,
@@ -371,7 +375,10 @@ pub(crate) fn initialize_missing_reproduction_needs(
         ),
     >,
 ) {
-    for (entity, persistent_id, species) in &animals {
+    for (entity, persistent_id, member, species) in &animals {
+        let Ok(seed) = seeds.get(member.root) else {
+            continue;
+        };
         let Some(need) = index
             .get(&assets)
             .and_then(|view| species_reproduction_need(view, species.species))
@@ -379,7 +386,7 @@ pub(crate) fn initialize_missing_reproduction_needs(
             continue;
         };
         let mut random =
-            DeterministicRng::from_entity(**zoo_seed, *persistent_id, RngDomain::AnimalNeeds);
+            DeterministicRng::from_entity(*seed, *persistent_id, RngDomain::AnimalNeeds);
         let minimum = need.initial_wellness_permille_range[0];
         let maximum = need.initial_wellness_permille_range[1].max(minimum);
         let sampled = minimum

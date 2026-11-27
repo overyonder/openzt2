@@ -30,10 +30,62 @@ pub(super) enum BehaviorSnapshotEntityReference {
         name: AssetId,
         available_at: u64,
         expires_at: u64,
-        /// Its payload is not kept: the claiming task already holds its target.
         #[serde(default)]
         retain_on_failure: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        payload: Option<Box<BehaviorSnapshotEntityReference>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<SavedBehaviorTokenContext>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub(super) struct SavedBehaviorTokenContext {
+    pub force: bool,
+    pub point: Option<[u32; 3]>,
+    pub xml: Option<openzt2_game_data::world_definitions::staff_management::StaffTokenXmlElement>,
+}
+
+impl SavedBehaviorTokenContext {
+    pub(super) fn capture(
+        context: Option<
+            &openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorTokenContext,
+        >,
+        xml: Option<
+            &openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorTokenXmlPayload,
+        >,
+    ) -> Option<Self> {
+        (context.is_some() || xml.is_some()).then(|| Self {
+            force: context.is_some_and(|context| context.force),
+            point: context
+                .and_then(|context| context.point)
+                .map(|point| point.to_array().map(f32::to_bits)),
+            xml: xml.map(|xml| xml.0.clone()),
+        })
+    }
+
+    pub(super) fn is_valid(&self) -> bool {
+        self.point.is_none_or(|point| {
+            point
+                .into_iter()
+                .all(|value| f32::from_bits(value).is_finite())
+        })
+    }
+
+    pub(super) fn restore(&self, token: &mut bevy::ecs::system::EntityCommands) {
+        use openzt2_zoo_state::animal_behavior::behavior_token_types::{
+            BehaviorTokenContext, BehaviorTokenXmlPayload,
+        };
+        token.insert(BehaviorTokenContext {
+            force: self.force,
+            point: self
+                .point
+                .map(|point| bevy::prelude::Vec3::from_array(point.map(f32::from_bits))),
+        });
+        if let Some(xml) = &self.xml {
+            token.insert(BehaviorTokenXmlPayload(xml.clone()));
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,8 +251,24 @@ pub(super) struct BehaviorStaffJobSnapshot {
     pub subject_type: Option<AssetId>,
     #[serde(default)]
     pub recipient: Option<AssetId>,
-    pub target: BehaviorSnapshotEntityReference,
-    pub urgency: u32,
+    #[serde(default)]
+    pub target: Option<BehaviorSnapshotEntityReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistent_identifier: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point: Option<[f32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub urgency: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<f32>,
+    #[serde(default)]
+    pub issued_at_seconds: f32,
+    #[serde(default)]
+    pub remaining_wait_seconds: f32,
+    #[serde(default)]
+    pub first_attempt: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejected_staff: Vec<BehaviorSnapshotEntityReference>,
     pub token: Option<AssetId>,
     pub document: String,
     pub program: AssetId,

@@ -41,7 +41,10 @@ pub(super) fn advance_active_staff_waste_container_emptying_jobs(
         ) {
             continue;
         }
-        let Ok(waste_container) = waste_container_targets.get_mut(staff_job.target) else {
+        let Some((target, waste_container)) = staff_job
+            .target
+            .and_then(|target| Some((target, waste_container_targets.get_mut(target).ok()?)))
+        else {
             cancelled_staff_job_requests.write(CancelStaffJobRequest {
                 job: staff_job_entity,
             });
@@ -52,7 +55,7 @@ pub(super) fn advance_active_staff_waste_container_emptying_jobs(
             .set_if_neq(0);
         completed_staff_jobs.write(create_completed_staff_job_message(
             staff_job_entity,
-            staff_job,
+            target,
             job_claim.staff,
             StaffJobKind::EmptyBin,
         ));

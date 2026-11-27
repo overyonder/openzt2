@@ -24,8 +24,15 @@ pub enum Account {
     External,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionDomain {
+    Simulation,
+    Player,
+}
+
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransactionRequest {
+    pub domain: TransactionDomain,
     pub operation: Entity,
     pub debit: Account,
     pub credit: Account,
@@ -36,6 +43,7 @@ pub struct TransactionRequest {
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransactionCompleted {
+    pub domain: TransactionDomain,
     pub operation: Entity,
     pub debit: Account,
     pub credit: Account,
@@ -46,6 +54,7 @@ pub struct TransactionCompleted {
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransactionRejected {
+    pub domain: TransactionDomain,
     pub operation: Entity,
     pub debit: Account,
     pub credit: Account,
@@ -53,6 +62,15 @@ pub struct TransactionRejected {
     pub kind: TransactionKind,
     pub subject: Option<Entity>,
     pub reason: TransactionRejection,
+}
+
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecordedAccountMovement<const PLAYER: bool> {
+    pub root: Entity,
+    pub kind: TransactionKind,
+    pub subject: Option<Entity>,
+    pub zoo_delta: Money,
+    pub named_payment: Option<(Entity, openzt2_game_data::AssetId)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

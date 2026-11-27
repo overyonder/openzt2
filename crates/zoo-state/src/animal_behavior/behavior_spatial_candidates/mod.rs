@@ -12,10 +12,8 @@ use openzt2_world_state::{
     application_schedule::FixedGameSet, world_spawn::world_membership_types::WorldMember,
 };
 
+use crate::locomotion::locomotion_types::{NavAgent, SpatialCell, SpatialCellMembers, SpatialGrid};
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMembers, WorldRoot};
-use openzt2_zoo_state::locomotion::locomotion_types::{
-    NavAgent, SpatialCell, SpatialCellMembers, SpatialGrid,
-};
 
 const OVERFLOW_CELL_SIZE_M: f32 = 8.0;
 
@@ -40,13 +38,14 @@ type SpatialFacts = (
     Has<NavAgent>,
 );
 
-pub(super) fn register_behavior_spatial_candidates(app: &mut App) {
+pub fn register_behavior_spatial_candidates(app: &mut App) {
     app.register_required_components::<WorldRoot, BehaviorSpatialOverflow>()
         .add_observer(remove_missing_spatial_inputs)
         .add_systems(
             FixedUpdate,
             project_spatial_candidates
                 .in_set(FixedGameSet::Clock)
+                .after(crate::locomotion::AgentSpatialMembershipProjection)
                 .run_if(in_state(GamePhase::InGame)),
         );
 }
@@ -141,7 +140,7 @@ fn overflow_cell(point: Vec2) -> IVec2 {
 }
 
 #[derive(SystemParam)]
-pub(super) struct BehaviorSpatialCandidates<'w, 's> {
+pub struct BehaviorSpatialCandidates<'w, 's> {
     worlds: Query<
         'w,
         's,
@@ -157,13 +156,7 @@ pub(super) struct BehaviorSpatialCandidates<'w, 's> {
 }
 
 impl BehaviorSpatialCandidates<'_, '_> {
-    pub(super) fn in_bounds(
-        &self,
-        root: Entity,
-        min: Vec2,
-        max: Vec2,
-        candidates: &mut Vec<Entity>,
-    ) {
+    pub fn in_bounds(&self, root: Entity, min: Vec2, max: Vec2, candidates: &mut Vec<Entity>) {
         candidates.clear();
         let Ok((grid, overflow)) = self.worlds.get(root) else {
             return;
@@ -221,7 +214,7 @@ impl BehaviorSpatialCandidates<'_, '_> {
         candidates.dedup();
     }
 
-    pub(super) fn preserve_query_order(&self, candidates: &mut [Entity]) {
+    pub fn preserve_query_order(&self, candidates: &mut [Entity]) {
         candidates.sort_unstable_by_key(|&entity| {
             self.locations
                 .get(entity)

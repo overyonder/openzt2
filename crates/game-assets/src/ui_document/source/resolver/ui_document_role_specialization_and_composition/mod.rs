@@ -89,6 +89,7 @@ pub(super) fn expose_authored_ui_surface_for_document_role(
     if matches!(
         role,
         UiDocumentRole::ChallengeOffer
+            | UiDocumentRole::ChallengeWon
             | UiDocumentRole::InstantChallengeOffer
             | UiDocumentRole::ScenarioWin
             | UiDocumentRole::ScenarioFailed

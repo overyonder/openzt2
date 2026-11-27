@@ -22,7 +22,7 @@ use openzt2_interface_state::{
     ui::{authored_ui_activation_contracts::UiNodeActivated, UiSet},
 };
 use openzt2_world_state::{
-    application_schedule::{FixedGameSet, GameSet, ZooHeartbeat, ZooSlowTick},
+    application_schedule::{FixedGameSet, GameSet, ZooSlowTick},
     world_spawn::world_load_completion_marker::WorldLoadPreparationSet,
 };
 use openzt2_zoo_state::environment::environment_state_types::ZooTickAdvanced;
@@ -60,13 +60,6 @@ impl Plugin for SimulationTimePlugin {
                 ZooSlowTick
                     .after(openzt2_world_state::simulation_time::simulation_clock_types::ZooClockAdvance)
                     .run_if(timekeeper_cadence::slow_tick_elapsed),
-            )
-            .configure_sets(
-                RunFixedMainLoop,
-                ZooHeartbeat
-                    .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop)
-                    .after(timekeeper_cadence::finish_heartbeat_frame)
-                    .run_if(timekeeper_cadence::heartbeat_elapsed),
             )
             .add_systems(
                 Update,

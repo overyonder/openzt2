@@ -95,20 +95,18 @@ pub(super) fn emit_terrain_shoreline_ripples(
             .and_then(|_| {
                 let region = regions.get(owner)?;
                 let terrain = terrain_assets.get(region.terrain())?;
-                let biome = region.biome(terrain)?;
-                let shoreline = &biome.water_presentation.as_ref()?.shoreline;
-                let timing = if region.edited_state().is_none() {
-                    terrain
-                        .shoreline_ripple_for_region(source?.source_region_index())?
-                        .1
+                let (scene, lifetime, timing) = if region.edited_state().is_none() {
+                    terrain.shoreline_ripple_for_region(source?.source_region_index(), &graphics)?
                 } else {
-                    shoreline.ripple_timing()
+                    let biome = region.biome(terrain)?;
+                    let shoreline = &biome.water_presentation.as_ref()?.shoreline;
+                    let (scene, lifetime) = terrain.shoreline_ripple_instance(
+                        shoreline.ripple_system.as_deref()?,
+                        &biome.name,
+                        &graphics,
+                    )?;
+                    (scene, lifetime, shoreline.ripple_timing())
                 };
-                let (scene, lifetime) = terrain.shoreline_ripple_instance(
-                    shoreline.ripple_system.as_deref()?,
-                    &biome.name,
-                    &graphics,
-                )?;
                 let period = Duration::try_from_secs_f32(timing.period_seconds).ok()?;
                 (!period.is_zero() && !lifetime.is_zero())
                     .then_some((scene, timing, period, lifetime))

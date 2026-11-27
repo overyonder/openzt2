@@ -17,7 +17,7 @@ use openzt2_zoo_state::{
     },
     habitat::{
         habitat_membership_and_containment::locate_habitat_at_world_position,
-        habitat_types::{HabitatIndex, HabitatSummary},
+        habitat_types::{HabitatCellOf, HabitatIndex, HabitatSummary},
     },
     locomotion::locomotion_types::{ActiveTerrainDerivedNavigationGraph, NavAgent, NavFlags},
     terrain::{
@@ -324,6 +324,7 @@ pub(super) struct NaturalWaterTargets<'w, 's> {
     graphs: Query<'w, 's, Ref<'static, ActiveTerrainDerivedNavigationGraph>>,
     pub(super) agents: Query<'w, 's, Ref<'static, NavAgent>>,
     habitats: Query<'w, 's, (Ref<'static, HabitatIndex>, Ref<'static, TopologyGrid>)>,
+    cell_owners: Query<'w, 's, &'static HabitatCellOf>,
     habitat_summaries: Query<'w, 's, Ref<'static, HabitatSummary>>,
 }
 
@@ -481,7 +482,7 @@ impl NaturalWaterTargets<'_, '_> {
 
     fn habitat_at(&self, world: Entity, position: Vec3) -> Option<Entity> {
         let (index, grid) = self.habitats.get(world).ok()?;
-        locate_habitat_at_world_position(&index, position.xz(), *grid)
+        locate_habitat_at_world_position(&index, &self.cell_owners, position.xz(), *grid)
     }
 
     fn reaches_from(

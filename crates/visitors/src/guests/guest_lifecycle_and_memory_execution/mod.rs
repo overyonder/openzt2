@@ -13,6 +13,7 @@ use super::guest_arrival_calculations::displaced_from_entrance_gate;
 use openzt2_zoo_state::locomotion::locomotion_types::{EntranceNavigationConnection, SpatialGrid};
 use super::guest_simulation_types::DeparturePending;
 use super::guest_simulation_types::Guest;
+use openzt2_zoo_state::guests::guest_simulation_types::GuestEntranceApproach;
 use super::guest_simulation_types::GuestArchetype;
 use super::guest_simulation_types::GuestDeparted;
 use super::guest_simulation_types::GuestDestination;
@@ -28,7 +29,7 @@ use super::guest_definition_queries::find_guest_definition;
 use super::guest_definition_queries::find_reaction;
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub(crate) fn advance_guest_lifecycle(
+pub(super) fn advance_guest_lifecycle(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut arrived: MessageReader<Arrived>,
@@ -41,6 +42,7 @@ pub(crate) fn advance_guest_lifecycle(
             &GuestSatisfaction,
             &GuestEducation,
             Option<&GuestDestination>,
+            Has<GuestEntranceApproach>,
         ),
         With<Guest>,
     >,
@@ -65,7 +67,7 @@ pub(crate) fn advance_guest_lifecycle(
         return;
     };
     for arrival in arrived.read() {
-        let Ok((guest, _, phase, _, satisfaction, education, destination)) =
+        let Ok((guest, _, phase, _, satisfaction, education, destination, approaching)) =
             guests.get_mut(arrival.entity)
         else {
             continue;
@@ -74,6 +76,11 @@ pub(crate) fn advance_guest_lifecycle(
             continue;
         };
         if request.0 != Some(arrival.request_id) {
+            continue;
+        }
+        if approaching && *phase != GuestPhase::Leaving {
+            request.set_if_neq(GuestNavigationRequest(None));
+            commands.entity(guest).remove::<GuestEntranceApproach>();
             continue;
         }
         match *phase {
@@ -105,8 +112,8 @@ pub(crate) fn advance_guest_lifecycle(
         }
     }
 
-    for (guest, archetype, phase, mut visit, _, _, destination) in &mut guests {
-        if *phase == GuestPhase::Arriving {
+    for (guest, archetype, phase, mut visit, _, _, destination, approaching) in &mut guests {
+        if *phase == GuestPhase::Arriving || (approaching && *phase == GuestPhase::Visiting) {
             continue;
         }
         if *phase == GuestPhase::Visiting {
@@ -145,6 +152,9 @@ pub(crate) fn advance_guest_lifecycle(
             existing.set_if_neq(request);
         } else {
             commands.entity(guest).insert(request);
+        }
+        if approaching {
+            commands.entity(guest).remove::<GuestEntranceApproach>();
         }
         commands.entity(guest).insert(GuestDestination {
             entity: entrance_entity,
@@ -203,7 +213,7 @@ pub(crate) fn expire_guest_memories(
                     )
         };
         if memories.entries.iter().any(|entry| !retained(entry)) {
-            memories.entries.retain(retained);
+            memories.entries.retain(|entry| retained(entry));
             let capacity = usize::from(memories.active_capacity).max(1);
             memories.next = (usize::from(memories.next) % capacity) as u16;
         }

@@ -42,16 +42,19 @@ pub(super) fn advance_active_staff_litter_sweeping_jobs(
         ) {
             continue;
         }
-        if !litter_targets.contains(staff_job.target) {
+        let Some(target) = staff_job
+            .target
+            .filter(|&target| litter_targets.contains(target))
+        else {
             cancelled_staff_job_requests.write(CancelStaffJobRequest {
                 job: staff_job_entity,
             });
             continue;
-        }
-        commands.entity(staff_job.target).try_despawn();
+        };
+        commands.entity(target).try_despawn();
         completed_staff_jobs.write(create_completed_staff_job_message(
             staff_job_entity,
-            staff_job,
+            target,
             job_claim.staff,
             StaffJobKind::SweepLitter,
         ));

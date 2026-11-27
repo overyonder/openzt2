@@ -14,10 +14,10 @@ use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
 use crate::source_document::ui::parser::source_scalar_and_attribute_reading::parse_source_bool;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::object_placement::{
     FootprintCell, FootprintCellFlags, PlaceableDefinition, PlacementConstraints,
 };
+use openzt2_game_data::AssetId;
 
 #[cfg(test)]
 mod tests;

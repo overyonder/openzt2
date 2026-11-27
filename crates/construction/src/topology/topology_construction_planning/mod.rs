@@ -6,6 +6,7 @@ use openzt2_game_data::world_definitions::paths_and_tile_surfaces::GuestPathDefi
 use openzt2_game_data::world_definitions::world_objects::WorldObjectKind;
 use openzt2_game_data::AssetId;
 use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
+use openzt2_zoo_state::topology::topology_graph_types::TileSurface;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
@@ -154,11 +155,10 @@ pub(super) fn calculate_fence_construction_plan(
         replaced.push(entity);
     }
     replaced.sort_unstable_by_key(|entity| entity.to_bits());
-    let segments = i64::try_from(cells.len() - 1).map_err(|_| PlacementFailure::InvalidTopology)?;
     let cost = unit_price
-        .checked_mul(segments)
+        .checked_scale((cells.len() - 1) as f32)
         .ok_or(PlacementFailure::InvalidTopology)?;
-    Ok((cells, Money(cost), gate, replaced))
+    Ok((cells, cost, gate, replaced))
 }
 
 /// The corners a fence preview runs through: its two ends, or the closed
@@ -354,8 +354,8 @@ pub(super) fn calculate_gate_replacement_plan(
         )
         .ok_or(PlacementFailure::InvalidTopology)?;
     price
-        .checked_sub(refund.0)
-        .map(|cost| (edge, Money(cost)))
+        .checked_sub(refund)
+        .map(|cost| (edge, cost))
         .ok_or(PlacementFailure::InvalidTopology)
 }
 
@@ -367,17 +367,14 @@ pub(super) fn calculate_path_construction_plan(
     terrain_index: &TerrainIndex,
     terrain_assets: &Assets<TerrainAsset>,
     terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-) -> Result<(Vec<IVec3>, Money), PlacementFailure> {
+) -> Result<(Vec<(IVec3, TileSurface)>, Money), PlacementFailure> {
     let definition = definitions
         .find_path(preview.definition)
         .ok_or(PlacementFailure::InvalidTopology)?;
     let topology_cell_size_cm = definitions.topology_cell_size_cm();
-    let cells = if definition.elevated {
+    let tiles = if definition.elevated {
         super::elevated_path_layout::elevated_path_tiles(preview, definition)
             .ok_or(PlacementFailure::InvalidTopology)?
-            .into_iter()
-            .map(|(cell, _)| cell)
-            .collect()
     } else {
         calculate_ground_path_construction_cells(
             preview.from,
@@ -386,9 +383,20 @@ pub(super) fn calculate_path_construction_plan(
             topology_cell_size_cm,
             index,
         )?
+        .into_iter()
+        .map(|cell| {
+            (
+                cell,
+                TileSurface {
+                    height_cm: definition.surface.height_cm,
+                },
+            )
+        })
+        .collect()
     };
     validate_path_construction_cells(
-        cells,
+        tiles,
+        |(cell, _)| *cell,
         definition,
         index,
         grid,
@@ -399,8 +407,9 @@ pub(super) fn calculate_path_construction_plan(
     )
 }
 
-pub(super) fn validate_path_construction_cells(
-    cells: Vec<IVec3>,
+pub(super) fn validate_path_construction_cells<T>(
+    cells: Vec<T>,
+    coordinate: impl Fn(&T) -> IVec3,
     definition: &GuestPathDefinition,
     index: &TopologyIndex,
     grid: TopologyGrid,
@@ -408,53 +417,51 @@ pub(super) fn validate_path_construction_cells(
     terrain_index: &TerrainIndex,
     terrain_assets: &Assets<TerrainAsset>,
     terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-) -> Result<(Vec<IVec3>, Money), PlacementFailure> {
+) -> Result<(Vec<T>, Money), PlacementFailure> {
     let unit_price = definitions
         .find_object(AssetId(definition.object.0))
-        .map(|object| object.price_cents)
+        .map(|object| Money::from_cents(object.price_cents))
         .ok_or(PlacementFailure::InvalidTopology)?;
-    let terrain_heights = cells
-        .iter()
-        .map(|cell| {
-            sample_terrain_height_at_topology_cell(
-                *cell,
-                grid,
-                terrain_index,
-                terrain_assets,
-                terrain_chunks,
-            )
-        })
-        .collect::<Option<Vec<_>>>()
+    let mut available = Vec::with_capacity(cells.len());
+    for item in cells {
+        let cell = coordinate(&item);
+        let ground = sample_terrain_height_at_topology_cell(
+            cell,
+            grid,
+            terrain_index,
+            terrain_assets,
+            terrain_chunks,
+        )
         .ok_or(PlacementFailure::OutsideMap)?;
-    let (cells, terrain_heights): (Vec<_>, Vec<_>) = cells
-        .into_iter()
-        .zip(terrain_heights)
-        .filter(|(cell, _)| !index.paths.contains_key(cell))
-        .unzip();
-    if cells.is_empty() {
+        if !index.paths.contains_key(&cell) {
+            available.push((item, cell, ground));
+        }
+    }
+    if available.is_empty() {
         return Err(PlacementFailure::Occupied);
     }
-    if definition.elevated || cells.iter().any(|cell| cell.z != 0) {
+    if definition.elevated || available.iter().any(|(_, cell, _)| cell.z != 0) {
         let required_headroom_cm = u32::from(definition.support_headroom_cm);
-        if cells.iter().zip(&terrain_heights).any(|(cell, ground)| {
+        if available.iter().any(|(_, cell, ground)| {
             (((cell.z as f32 - *ground) * 100.0).max(0.0) as u32) < required_headroom_cm
         }) {
             return Err(PlacementFailure::NoHeadroom);
         }
-        for (pair, ground) in cells.windows(2).zip(terrain_heights.windows(2)) {
-            let headroom_cm = ((pair[0].z as f32 - ground[0]).min(pair[1].z as f32 - ground[1])
+        for pair in available.windows(2) {
+            let (_, first, first_ground) = &pair[0];
+            let (_, second, second_ground) = &pair[1];
+            let headroom_cm = ((first.z as f32 - first_ground).min(second.z as f32 - second_ground)
                 * 100.0)
                 .max(0.0) as u32;
-            if !path_support_is_eligible(definition, pair[0], pair[1], headroom_cm) {
+            if !path_support_is_eligible(definition, *first, *second, headroom_cm) {
                 return Err(PlacementFailure::NoHeadroom);
             }
         }
     }
-    let count = i64::try_from(cells.len()).map_err(|_| PlacementFailure::InvalidTopology)?;
     let cost = unit_price
-        .checked_mul(count)
+        .checked_scale(available.len() as f32)
         .ok_or(PlacementFailure::InvalidTopology)?;
-    Ok((cells, Money(cost)))
+    Ok((available.into_iter().map(|(item, ..)| item).collect(), cost))
 }
 
 pub(super) fn calculate_ground_path_construction_cells(
@@ -616,12 +623,12 @@ mod ground_path_native_line_tests {
 fn read_fence_construction_facts(
     definitions: WorldDefinitionsView<'_>,
     id: AssetId,
-) -> Option<(i64, Option<Gate>, u16)> {
+) -> Option<(Money, Option<Gate>, u16)> {
     let fence = definitions.find_fence(id)?;
     let object = definitions.find_object(AssetId(fence.object.0))?;
     let is_gate = matches!(&object.kind, WorldObjectKind::Gate);
     Some((
-        object.price_cents,
+        Money::from_cents(object.price_cents),
         is_gate.then_some(Gate {
             open: false,
             locked: false,

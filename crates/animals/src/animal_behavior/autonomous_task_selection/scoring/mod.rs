@@ -1,8 +1,8 @@
 //! Native need-reduction scoring for the supported concrete candidates.
 
 use super::candidate_facts::AnimalCandidateFactsItem;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::behavior::document::BehaviorTask;
+use openzt2_game_data::AssetId;
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
 
 pub(super) fn score_animal_task(

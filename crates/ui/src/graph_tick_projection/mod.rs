@@ -152,7 +152,7 @@ pub(super) fn write_graph_tick_text(
             };
             let mut value = String::new();
             let key = if let Some(format) = label.money {
-                let cents = tick.value.round() as i64;
+                let cents = (tick.value * 100.0).round() as i64;
                 let amount = if format.omit_minus {
                     cents.saturating_abs()
                 } else {

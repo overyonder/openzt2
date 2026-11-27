@@ -1,4 +1,10 @@
-use super::animation_graph_route_selection::resolve_authored_animation_route;
+use super::animation_graph_route_selection::{
+    authored_kfm_duration, begin_prepared_route, crossed_forward_marker, current_route_animation,
+    kfm_route_markers, prepare_authored_route_clips, publish_transition_options,
+    resolve_authored_animation_route, retain_prepared_continuation, GraphTransitionOptions,
+    RouteClipReadiness,
+};
+use crate::animation_playback::managed_clip_binding::ManagedAnimationClip;
 use bevy::asset::AssetLoadFailedEvent;
 use bevy::prelude::*;
 use openzt2_game_assets::animation::{
@@ -13,12 +19,12 @@ use openzt2_world_state::{
         animation_graph_playback_state_types::{
             AnimationGraphPlaybackState, AnimationGraphRoute, AnimationGraphRouteOwner,
         },
-        animation_graph_transition_operations::begin_resolved_animation_graph_route,
     },
     animation_playback::animation_playback_controller_types::{
         AnimationPlaybackController, RetainedAnimationClipSource,
     },
 };
+use std::time::Duration;
 
 #[derive(Component)]
 pub(super) struct AnimationReturnRoute {
@@ -28,6 +34,7 @@ pub(super) struct AnimationReturnRoute {
     node: String,
     sources: Vec<Handle<AnimationClipSourceAsset>>,
     prepared: Option<AnimationGraphRoute>,
+    marker_wait: Option<(f32, Option<f32>, f32)>,
 }
 
 pub(super) fn receive_return_route_requests(
@@ -64,6 +71,7 @@ pub(super) fn receive_return_route_requests(
             node: request.node.clone(),
             sources: Vec::new(),
             prepared: None,
+            marker_wait: None,
         };
         if let Some(mut route) = route {
             *route = wanted;
@@ -80,12 +88,15 @@ pub(super) fn advance_return_routes(
     subjects: Query<()>,
     mut loaded: MessageReader<AssetEvent<AnimationClipSourceAsset>>,
     mut failed: MessageReader<AssetLoadFailedEvent<AnimationClipSourceAsset>>,
+    mut changed_sets: MessageReader<AssetEvent<AnimationSetAsset>>,
+    players: Query<(&AnimationPlayer, &ManagedAnimationClip)>,
     mut routes: Query<(
         Entity,
         &mut AnimationReturnRoute,
         &mut AnimationPlaybackController,
         &mut AnimationGraphPlaybackState,
         Option<&mut RetainedAnimationClipSource>,
+        Option<&mut GraphTransitionOptions>,
     )>,
 ) {
     let finished = loaded
@@ -98,13 +109,31 @@ pub(super) fn advance_return_routes(
         })
         .chain(failed.read().map(|failure| failure.id))
         .collect::<bevy::platform::collections::HashSet<_>>();
-    for (entity, mut route, mut controller, mut state, retained) in &mut routes {
+    let changed_sets = changed_sets
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Modified { id } | AssetEvent::Removed { id } => Some(id),
+            _ => None,
+        })
+        .collect::<bevy::platform::collections::HashSet<_>>();
+    for (entity, mut route, mut controller, mut state, retained, target_seek) in &mut routes {
         if !subjects.contains(route.subject) {
             commands.entity(entity).try_remove::<AnimationReturnRoute>();
             continue;
         }
-        if !route.is_changed()
+        let invalidated = changed_sets.contains(&controller.animation_set_asset.id())
+            || route.prepared.as_ref().is_some_and(|prepared| {
+                prepared.source_node != state.current_animation_graph_node_index
+            });
+        if invalidated {
+            route.prepared = None;
+            route.marker_wait = None;
+            route.sources.clear();
+        }
+        if !invalidated
+            && !route.is_changed()
             && !controller.is_changed()
+            && route.marker_wait.is_none()
             && !route
                 .sources
                 .iter()
@@ -113,14 +142,39 @@ pub(super) fn advance_return_routes(
             continue;
         }
         let generation = controller.playback_generation;
+        let playing = players
+            .get(entity)
+            .ok()
+            .and_then(|(player, binding)| {
+                current_route_animation(Some(player), Some(binding), generation)
+            })
+            .map(|active| {
+                (
+                    active.seek_time(),
+                    !active.is_paused() && !active.is_finished(),
+                )
+            });
+        let (seek, advancing) = playing.unwrap_or((0.0, false));
+        let mut options = (None, None);
         let outcome = advance_route(
             route.bypass_change_detection(),
             &mut controller,
             &mut state,
             &sets,
             &clips,
+            seek,
+            advancing,
+            &mut options,
         );
         if generation != controller.playback_generation {
+            retain_prepared_continuation(&mut commands, entity, &state);
+            publish_transition_options(
+                &mut commands,
+                entity,
+                target_seek,
+                controller.playback_generation,
+                options,
+            );
             let source = sets
                 .get(&controller.animation_set_asset)
                 .and_then(|set| clips.retained_handle(set, &controller.animation_clip_asset_key));
@@ -153,12 +207,17 @@ fn advance_route(
     state: &mut Mut<AnimationGraphPlaybackState>,
     sets: &Assets<AnimationSetAsset>,
     clips: &AnimationClipSources,
+    seek: f32,
+    advancing: bool,
+    options: &mut (Option<f32>, Option<Duration>),
 ) -> Option<bool> {
     if let Some(owner) = state.route_owner.filter(|owner| {
         owner.request_id == route.request_id
             && owner.playback_generation == controller.playback_generation
     }) {
-        if state.active_animation_graph_transition.is_some() {
+        if state.active_animation_graph_transition.is_some()
+            || !state.remaining_transition_steps.is_empty()
+        {
             return None;
         }
         return Some(
@@ -194,48 +253,29 @@ fn advance_route(
     let Some(path) = route.prepared.as_ref() else {
         return Some(false);
     };
-    let mut loading = false;
-    let same_node = path.steps.is_empty();
-    for (next, edge) in path
-        .steps
-        .iter()
-        .map(|step| {
-            (
-                step.target_node,
-                set.animation_graph_edges.get(step.edge_index),
-            )
-        })
-        .chain(same_node.then_some((target, None)))
-    {
-        let Some(target_node) = set.animation_graph_nodes.get(next as usize) else {
-            return Some(false);
-        };
-        for choices in edge
-            .into_iter()
-            .map(|edge| &edge.transition_animation_clip_asset_keys)
-            .filter(|choices| !choices.is_empty())
-            .chain(std::iter::once(&target_node.animation_clip_asset_keys))
-        {
-            if choices.iter().any(|key| clips.get(set, key).is_some()) {
-                continue;
-            }
-            let Some(source) = choices.iter().find_map(|key| {
-                let source = clips.request(set, key)?;
-                (!clips.failed(&source)).then_some(source)
-            }) else {
-                return Some(false);
-            };
-            if !route.sources.contains(&source) {
-                route.sources.push(source);
-            }
-            loading = true;
-        }
+    match prepare_authored_route_clips(set, clips, path, &mut route.sources) {
+        RouteClipReadiness::Unavailable => return Some(false),
+        RouteClipReadiness::Loading => return None,
+        RouteClipReadiness::Ready => {}
     }
-    if loading {
-        return None;
+    if let Some((marker, target, previous)) = route.marker_wait {
+        if advancing && !crossed_forward_marker(previous, seek, marker) {
+            route.marker_wait = Some((marker, target, seek));
+            return None;
+        }
+        options.0 = target;
+    } else if let Some((marker, target)) =
+        kfm_route_markers(set, clips, path, &controller.animation_clip_asset_key, seek)
+    {
+        if let Some(marker) = marker.filter(|marker| advancing && *marker != seek) {
+            route.marker_wait = Some((marker, target, seek));
+            return None;
+        }
+        options.0 = target;
     }
     let path = route.prepared.take()?;
-    if begin_resolved_animation_graph_route(
+    options.1 = authored_kfm_duration(set, &path);
+    if begin_prepared_route(
         set,
         |key| clips.get(set, key).is_some(),
         path,
@@ -252,7 +292,9 @@ fn advance_route(
         target_node: target,
         playback_generation: controller.playback_generation,
     });
-    if state.active_animation_graph_transition.is_some() {
+    if state.active_animation_graph_transition.is_some()
+        || !state.remaining_transition_steps.is_empty()
+    {
         None
     } else {
         Some(

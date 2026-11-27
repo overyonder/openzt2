@@ -2,7 +2,6 @@ use openzt2_zoo_state::economy::account_transaction_types;
 use openzt2_zoo_state::economy::authored_price_queries;
 use openzt2_zoo_state::economy::authored_transaction_amount;
 use openzt2_zoo_state::economy::behavior_transaction_state;
-use openzt2_zoo_state::economy::currency_formatting;
 use openzt2_zoo_state::economy::facility_economy_types;
 use openzt2_zoo_state::economy::guest_admission_types;
 use openzt2_zoo_state::economy::money_types;
@@ -41,9 +40,10 @@ use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    BehaviorStepFixedSet, update_waiting_behavior_actors,
+    update_waiting_behavior_actors, BehaviorStepFixedSet,
 };
 use openzt2_zoo_state::construction::FixedConstructionSet;
+use openzt2_zoo_state::economy::SubmitSimulationAccountRequests;
 
 use self::{
     account_transaction_types::{TransactionCompleted, TransactionRejected, TransactionRequest},
@@ -58,10 +58,6 @@ pub struct EconomyPlugin;
 pub fn display_currency_cents(amount: money_types::Money) -> i64 {
     (f64::from(amount.dollars()) * 100.0).round() as i64
 }
-
-/// Fixed-step producers that submit account requests for this simulation step.
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SubmitSimulationAccountRequests;
 
 impl Plugin for EconomyPlugin {
     fn build(&self, app: &mut App) {
@@ -169,23 +165,34 @@ impl Plugin for EconomyPlugin {
             .add_observer(experience_donation_payment::request_experience_donation_payments)
             .add_observer(
                 behavior_transaction_execution::added_behavior_transaction
-                    .pipe(behavior_transaction_execution::execute_authored_behavior_transaction_steps),
+                    .pipe(behavior_transaction_execution::execute_authored_behavior_transaction_steps::<false>),
             )
             .add_systems(
                 FixedUpdate,
                 update_waiting_behavior_actors
-                    .pipe(behavior_transaction_execution::execute_authored_behavior_transaction_steps)
+                    .pipe(behavior_transaction_execution::execute_authored_behavior_transaction_steps::<false>)
                     .in_set(BehaviorStepFixedSet::Think),
+            )
+            .add_systems(
+                FixedUpdate,
+                update_waiting_behavior_actors
+                    .pipe(behavior_transaction_execution::execute_authored_behavior_transaction_steps::<true>)
+                    .after(openzt2_zoo_state::behavior_task_execution_types::running_actions::GuestDepartureFameApplication)
+                    .before(account_transaction_settlement::stage_requested_account_transactions::<false>)
+                    .in_set(FixedGameSet::Economy),
             )
             .add_systems(
                 FixedUpdate,
                 (
                     keeper_refill_settlement::mark_staff_refill_cancellations_before_account_settlement
+                        .after(account_transaction_settlement::stage_requested_account_transactions::<false>)
                         .before(account_transaction_settlement::settle_requested_account_transactions::<false>),
                     guest_admission_payment::request_guest_admission_payment_after_entrance_reached
+                        .after(openzt2_zoo_state::guests::GuestLifecycleAdvance)
                         .in_set(SubmitSimulationAccountRequests),
                     account_transaction_settlement::stage_requested_account_transactions::<false>
                         .after(BehaviorStepFixedSet::Think)
+                        .after(BehaviorStepFixedSet::Act)
                         .after(SubmitSimulationAccountRequests)
                         .after(service_progress_and_payment::advance_reserved_services_and_request_completed_service_payments),
                     account_transaction_settlement::settle_requested_account_transactions::<false>

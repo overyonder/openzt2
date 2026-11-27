@@ -85,7 +85,7 @@ pub(super) fn validate_staff_placement_preview_against_world_and_zoo_cash(
     let Some(object) = catalogue.find_object(request.0) else {
         return;
     };
-    let cost = Money(object.price_cents);
+    let cost = Money::from_cents(object.price_cents);
     for (preview, hydrated) in &mut previews {
         if preview.definition != request.0 {
             continue;

@@ -1,6 +1,7 @@
+use super::super::lower::named_physical_presentation_source_lowering::AuthoredPhysicalActor;
 use super::super::world_definition_document_asset_and_demand_loaded_dependency_paths::{
-    AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS, DemandLoadedDependencyPath,
-    WorldDefinitionAsset,
+    DemandLoadedDependencyPath, WorldDefinitionAsset,
+    AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS,
 };
 use super::unresolved_reference;
 use crate::asset_source::AssetArchives;
@@ -15,7 +16,7 @@ use crate::source_document::{
 };
 use crate::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image;
 use bevy::asset::LoadContext;
-use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
+use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
 use std::{collections::BTreeMap, io, path::Path};
 
 pub(super) async fn resolve_world_definition_presentation_models(
@@ -150,8 +151,8 @@ pub(super) fn register_world_definition_presentation_dependencies(
                     .iter()
                     .any(|candidate| extension.eq_ignore_ascii_case(candidate)) =>
             {
-                let Some(resolved) =
-                    archives.resolve_ui_reference(Path::new(&declaring_source), &referenced)
+                let Some(resolved) = archives
+                    .resolve_world_presentation_texture(Path::new(&declaring_source), &referenced)
                 else {
                     bevy::log::warn!(
                         source = %declaring_source,
@@ -247,8 +248,111 @@ pub(super) fn register_world_definition_presentation_dependencies(
         tank_water_material_sources: tank_water_material_sources.into_boxed_slice(),
         effects: effects.into_boxed_slice(),
         scenes: scenes.into_boxed_slice(),
+        bound_scenes: BTreeMap::new(),
         animation_sets: animation_sets.into_boxed_slice(),
     })
+}
+
+pub(super) async fn bind_world_definition_physical_actors(
+    context: &mut LoadContext<'_>,
+    asset: &mut WorldDefinitionAsset,
+    manifests: &BlueFangActorManifestModelAndSceneResolutionIndex,
+    mut by_object: BTreeMap<AssetId, BTreeMap<AssetId, AuthoredPhysicalActor>>,
+) -> io::Result<()> {
+    for object in &mut asset.document.objects {
+        let Some(binders) = by_object.remove(&object.id) else {
+            continue;
+        };
+        for (binder, actor) in binders {
+            let manifest = manifests.scoped_actor_manifest_key(&actor.source, &actor.reference);
+            let model = manifests
+                .native_model_source_path_for_normalized_actor_manifest_key(&manifest)
+                .ok_or_else(|| {
+                    unresolved_reference(&actor.source, "physical actor model", &actor.reference)
+                })?;
+            let bytes = context
+                .read_asset_bytes(model.to_owned())
+                .await
+                .map_err(io::Error::other)?;
+            let mut scene = crate::model_source::native_model_source_lowering::lower_native_physical_scene_document(model, &bytes)
+                .map_err(io::Error::other)?;
+            if let Some(distances) = asset
+                .metadata
+                .render_lod_distances
+                .get(&(object.id, binder))
+            {
+                for policy in scene
+                    .entities
+                    .iter_mut()
+                    .filter_map(|entity| entity.render_lod_policy.as_mut())
+                {
+                    for (defaults, overrides) in [
+                        (
+                            &mut policy.switch_distance_squared,
+                            &distances.switch_distance_squared,
+                        ),
+                        (
+                            &mut policy.minimum_switch_distance_squared,
+                            &distances.minimum_switch_distance_squared,
+                        ),
+                    ] {
+                        let shared = defaults.len().min(overrides.len());
+                        defaults[..shared].copy_from_slice(&overrides[..shared]);
+                        defaults.extend_from_slice(&overrides[shared..]);
+                    }
+                }
+            }
+            let animation_set = context
+                .load::<crate::animation::animation_set_asset_types::AnimationSetAsset>(
+                manifest,
+            );
+            let mut prefab = crate::scene_prefab::create_scene_prefab_asset_and_load_dependencies(
+                scene, context,
+            );
+            for row in 0..prefab.canonical_scene_prefab_document().entities.len() {
+                let renderable_count = prefab.canonical_scene_prefab_document().entities[row]
+                    .renderables
+                    .len();
+                for index in 0..renderable_count {
+                    prefab.bind_animation_set_to_renderable(
+                        row,
+                        index,
+                        animation_set.clone(),
+                        actor.start.clone(),
+                    );
+                }
+            }
+            let label = format!(
+                "actor/{}/{}",
+                object.id.to_lowercase_hexadecimal_string(),
+                binder.to_lowercase_hexadecimal_string()
+            );
+            let id = AssetId::from_key(&label);
+            asset.bound_scenes.insert(
+                id,
+                context.add_loaded_labeled_asset(
+                    label,
+                    bevy::asset::LoadedAsset::new_with_dependencies(prefab),
+                ),
+            );
+            for row in object
+                .named_physical_presentations
+                .iter_mut()
+                .filter(|row| row.name == binder)
+            {
+                row.prefab = id;
+            }
+            for state in object
+                .presentation_attachments
+                .iter_mut()
+                .flat_map(|controller| &mut controller.states)
+                .filter(|state| state.child_binder == binder)
+            {
+                state.prefab = id;
+            }
+        }
+    }
+    Ok(())
 }
 /// Registers the detail masks used when rendering ground paths.
 fn append_authored_ground_path_surface_mask_texture_dependencies(

@@ -5,10 +5,10 @@ use bevy::{
     gltf::Gltf,
 };
 use openzt2_game_data::{
-    AssetId,
     world_definitions::{
         document::WorldDefinitionDocument, extinct_animal_recovery::FossilSlotDefinition,
     },
+    AssetId,
 };
 
 use crate::{

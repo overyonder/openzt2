@@ -3,8 +3,7 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBe
 use openzt2_zoo_state::guests::guest_simulation_types::GuestSpeciesViewCounts;
 use openzt2_zoo_state::guests::guest_survey_types::GuestSurveyExperience;
 use bevy::prelude::*;
-use openzt2_zoo_state::progression::fame_types::{GuestSpeciesFameViews, ZooSpeciesFameViews};
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::progression::fame_types::{GuestSpeciesFameContribution, GuestSpeciesFameViews, ZooSpeciesFameViews};
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
@@ -28,7 +27,7 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
         &mut GuestSpeciesViewCounts,
         &mut GuestSurveyExperience,
         &mut GuestSpeciesFameViews,
-        &WorldMember,
+        Option<&GuestSpeciesFameContribution>,
         Option<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
         Option<&mut BehaviorViewingProgress>,
     )>,
@@ -51,7 +50,7 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
             mut counts,
             mut experience,
             mut fame_views,
-            member,
+            contribution,
             task,
             meter,
         )) = guests.get_mut(reaction.guest)
@@ -115,7 +114,10 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
         let previous = *fame;
         fame.events = fame.events.saturating_add(1);
         fame.entertainment += entertainment;
-        if let Ok(mut zoo) = zoo_views.get_mut(member.root) {
+        if let Some(mut zoo) = contribution
+            .and_then(GuestSpeciesFameContribution::root)
+            .and_then(|root| zoo_views.get_mut(root).ok())
+        {
             zoo.replace_contribution(species.species, previous, *fame);
         }
         if reaction.donation_score != 0.0 {

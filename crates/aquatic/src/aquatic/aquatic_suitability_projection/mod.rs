@@ -44,39 +44,42 @@ pub(super) fn project_changed_tank_facts_into_live_aquatic_animal_suitability(
         ),
         With<Tank>,
     >,
-    changed_animals: Query<
-        Entity,
-        (
-            With<Animal>,
-            With<AquaticAnimal>,
-            Without<Dead>,
-            Or<(
-                Changed<AquaticAnimal>,
-                Changed<AquaticWaterRequirement>,
-                Changed<LandWaterRequirement>,
-                Changed<HabitatMember>,
-                Changed<Containment>,
-                Added<AquaticSuitability>,
-                Added<HabitatSuitability>,
-            )>,
-        ),
-    >,
     mut containment_changes: MessageReader<ContainmentChanged>,
     mut removed_members: RemovedComponents<HabitatMember>,
-    mut aquatic_animals: Query<
-        (
-            &AquaticAnimal,
-            &AquaticWaterRequirement,
-            &LandWaterRequirement,
-            Option<&HabitatMember>,
-            Option<&Containment>,
-            &mut AquaticSuitability,
-            &mut HabitatSuitability,
-        ),
-        (With<Animal>, Without<Dead>),
-    >,
+    mut animals: ParamSet<(
+        Query<
+            Entity,
+            (
+                With<Animal>,
+                With<AquaticAnimal>,
+                Without<Dead>,
+                Or<(
+                    Changed<AquaticAnimal>,
+                    Changed<AquaticWaterRequirement>,
+                    Changed<LandWaterRequirement>,
+                    Changed<HabitatMember>,
+                    Changed<Containment>,
+                    Added<AquaticSuitability>,
+                    Added<HabitatSuitability>,
+                )>,
+            ),
+        >,
+        Query<
+            (
+                &AquaticAnimal,
+                &AquaticWaterRequirement,
+                &LandWaterRequirement,
+                Option<&HabitatMember>,
+                Option<&Containment>,
+                &mut AquaticSuitability,
+                &mut HabitatSuitability,
+            ),
+            (With<Animal>, Without<Dead>),
+        >,
+    )>,
 ) {
-    let affected: EntityHashSet = changed_animals
+    let affected: EntityHashSet = animals
+        .p0()
         .iter()
         .chain(changed_tanks.iter().flat_map(RelationshipTarget::iter))
         .chain(
@@ -86,6 +89,7 @@ pub(super) fn project_changed_tank_facts_into_live_aquatic_animal_suitability(
         )
         .chain(removed_members.read())
         .collect();
+    let mut aquatic_animals = animals.p1();
     for entity in affected {
         let Ok((
             animal,

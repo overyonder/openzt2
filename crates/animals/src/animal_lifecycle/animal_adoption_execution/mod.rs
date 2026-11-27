@@ -95,22 +95,16 @@ pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
             continue;
         }
 
-        let Some(mut adoption_cost) =
-            resolve_nonnegative_animal_adoption_cost(world_definitions, species)
-        else {
+        let policy = adoption_policy.get(world_membership.root).ok();
+        let Some(adoption_cost) = resolve_nonnegative_animal_adoption_cost(
+            world_definitions,
+            species,
+            policy.map_or(1000, |policy| policy.multiplier_permille),
+        )
+        .filter(|_| policy.is_none_or(|policy| policy.enabled)) else {
             commands.entity(operation_entity).despawn();
             continue;
         };
-        if let Ok(policy) = adoption_policy.get(world_membership.root) {
-            if !policy.enabled {
-                commands.entity(operation_entity).despawn();
-                continue;
-            }
-            adoption_cost.0 = adoption_cost
-                .0
-                .saturating_mul(i64::from(policy.multiplier_permille))
-                / 1000;
-        }
         if let Some(slot) = adoption_request.offer_slot_index {
             let Some(claim) = offers.reserve(world, slot, adoption_request.species, sex) else {
                 commands.entity(operation_entity).despawn();
@@ -128,7 +122,7 @@ pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
             transform: adoption_request.transform,
             cost: adoption_cost,
         });
-        if adoption_cost.0 > 0 {
+        if adoption_cost.is_positive() {
             transaction_requests.write(TransactionRequest {
                         domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Player,
                 operation: operation_entity,

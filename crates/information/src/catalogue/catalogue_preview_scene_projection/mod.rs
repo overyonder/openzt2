@@ -19,10 +19,8 @@ use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
 use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::ModelAnimationAttachmentResolved;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;
-use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
 use openzt2_ui::authored_ui_image_content_binding::UiImageBinding;
 use openzt2_world_state::world_spawn::prefab_object_presentation_attachment_projection::PrefabObjectPresentationAttachmentProjection;
@@ -581,45 +579,16 @@ pub(crate) fn attach_loaded_species_animation_to_catalogue_preview_renderables(
                 requested_initial_animation_clip_asset_key: variant
                     .initial_animation_clip_asset_key
                     .clone(),
+                requested_initial_repetition_policy: variant
+                    .initial_animation_clip_asset_key
+                    .as_ref()
+                    .map(|_| {
+                        if variant.initial_animation_loops {
+                            AnimationPlaybackRepetitionPolicy::Loop
+                        } else {
+                            AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
+                        }
+                    }),
             });
-    }
-}
-
-pub(crate) fn apply_authored_catalogue_preview_initial_animation_repetition_policy_after_attachment(
-    species_assets: Res<Assets<SpeciesAsset>>,
-    species_index: Res<SpeciesAssets>,
-    newly_resolved_animation_controllers: Query<
-        (Entity, &PrefabModel, &AnimationPlaybackController),
-        (
-            With<CataloguePreviewRenderable>,
-            Added<ModelAnimationAttachmentResolved>,
-        ),
-    >,
-    mut animation_clip_playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
-) {
-    let Some(species_index) = species_index.get(&species_assets) else {
-        return;
-    };
-    for (animation_controller_entity, prefab_model, _) in &newly_resolved_animation_controllers {
-        let Some(variant) = species_index.find_variant_by_model_path(&prefab_model.model_path)
-        else {
-            continue;
-        };
-        let Some(animation_clip_asset_key) = variant.initial_animation_clip_asset_key.as_ref()
-        else {
-            continue;
-        };
-        animation_clip_playback_requests.write(AnimationClipPlaybackRequest {
-            animation_subject_entity: animation_controller_entity,
-            animation_clip_asset_key: animation_clip_asset_key.clone(),
-            blend_duration_milliseconds: 0,
-            playback_speed_permille: 1000,
-            playback_repetition_policy: if variant.initial_animation_loops {
-                AnimationPlaybackRepetitionPolicy::Loop
-            } else {
-                AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
-            },
-            action_settings: None,
-        });
     }
 }

@@ -1,15 +1,16 @@
 use std::{io, path::PathBuf};
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
+    ecs::system::SystemParam,
     platform::collections::{HashMap, HashSet},
     prelude::*,
 };
 use openzt2_game_assets::{
     asset_source::{ArchiveOverlayChanged, AssetArchives},
     effect::{
-        ParticleEffectDocumentAsset, SpawnCompleteParticleEffectDocument,
-        StopParticleEffectsAttachedToEntity,
+        ParticleEffectDocumentAsset, PlayAuthoredParticleDictionaryEffect,
+        SpawnCompleteParticleEffectDocument, StopParticleEffectsAttachedToEntity,
     },
     graphics_settings_types::{GraphicsEffectQuality, GraphicsSettings, ThreeLevelGraphicsDetail},
     source_document::{
@@ -17,7 +18,7 @@ use openzt2_game_assets::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
     },
 };
-use openzt2_game_data::{AssetId, animation::animation_text_key::AuthoredAnimationTextAction};
+use openzt2_game_data::{animation::animation_text_key::AuthoredAnimationTextAction, AssetId};
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::BehaviorTargetBiome;
 use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
@@ -38,8 +39,11 @@ struct ScriptParticleDictionary(HashMap<AssetId, Vec<ParticleCondition>>);
 struct ParticleCondition {
     graphics: Option<ThreeLevelGraphicsDetail>,
     ground: Option<AssetId>,
+    underwater: Option<bool>,
+    weights: [i32; 4],
     biome: Option<AssetId>,
     effect: Option<String>,
+    removal_time: Option<std::time::Duration>,
 }
 
 #[derive(Resource)]
@@ -135,10 +139,6 @@ impl AssetLoader for ScriptParticleDictionaryLoader {
         }
         Ok(ScriptParticleDictionary(dictionary))
     }
-
-    fn extensions(&self) -> &[&str] {
-        &["xml"]
-    }
 }
 
 fn lower_conditions(
@@ -146,6 +146,18 @@ fn lower_conditions(
     dictionary: &mut HashMap<AssetId, Vec<ParticleCondition>>,
 ) {
     for entry in source.root.element_children() {
+        let weights = [
+            "biomeWeight",
+            "groundWeight",
+            "underwaterWeight",
+            "graphicsWeight",
+        ]
+        .map(|key| {
+            entry
+                .attribute_named_any(&[key])
+                .and_then(|value| value.parse::<i32>().ok())
+                .unwrap_or(1)
+        });
         let conditions = entry
             .element_children()
             .filter_map(|condition| {
@@ -166,18 +178,34 @@ fn lower_conditions(
                 let ground = condition
                     .attribute("ground")
                     .map(|ground| AssetId::from_key(&ground.to_ascii_lowercase()));
+                let underwater = condition.attribute("underwater").and_then(|value| {
+                    match value.to_ascii_lowercase().as_str() {
+                        "true" | "1" => Some(true),
+                        "false" | "0" => Some(false),
+                        _ => None,
+                    }
+                });
                 let biome = condition
                     .attribute("biome")
                     .map(|biome| AssetId::from_key(&biome.to_ascii_lowercase()));
-                let effect = condition
+                let definition = condition
                     .element_children()
-                    .find_map(|row| row.attribute("xmlFile"))
+                    .find(|row| row.name.eq_ignore_ascii_case("BFParticleDefinition"));
+                let effect = definition
+                    .and_then(|row| row.attribute("xmlFile"))
                     .map(|path| path.replace('\\', "/").to_ascii_lowercase());
+                let removal_time = definition
+                    .and_then(|row| row.attribute("removeTime"))
+                    .and_then(|value| value.parse::<f64>().ok())
+                    .and_then(|seconds| std::time::Duration::try_from_secs_f64(seconds).ok());
                 Some(ParticleCondition {
                     graphics,
                     ground,
+                    underwater,
+                    weights,
                     biome,
                     effect,
+                    removal_time,
                 })
             })
             .collect::<Vec<_>>();
@@ -202,7 +230,9 @@ pub(in crate::animal_behavior) fn register(app: &mut App) {
             },
         )
         .add_systems(Update, reload_particle_dictionary_after_overlay_change)
-        .add_observer(play_script_particle);
+        .add_systems(Update, retire_authored_dictionary_effects)
+        .add_observer(play_script_particle)
+        .add_observer(play_authored_dictionary_effect);
 }
 
 fn reload_particle_dictionary_after_overlay_change(
@@ -220,14 +250,9 @@ fn reload_particle_dictionary_after_overlay_change(
 #[allow(clippy::too_many_arguments)]
 fn play_script_particle(
     request: On<ScriptParticle>,
-    dictionary_handle: Res<ScriptParticleDictionaryHandle>,
-    dictionaries: Res<Assets<ScriptParticleDictionary>>,
-    asset_server: Res<AssetServer>,
-    settings: Option<Res<GraphicsSettings>>,
+    lookup: ParticleDictionaryLookup,
     named: NamedNodeTransforms,
     transforms: Query<(&GlobalTransform, Option<&WorldMember>)>,
-    surface: DrySurfaceEligibility,
-    biomes: BehaviorTargetBiome,
     mut play: MessageWriter<SpawnCompleteParticleEffectDocument>,
     mut stop: MessageWriter<StopParticleEffectsAttachedToEntity>,
 ) {
@@ -246,41 +271,25 @@ fn play_script_particle(
         else {
             continue;
         };
-        let ground = world
-            .and_then(|world| surface.dictionary_ground(world.root, target_pose.translation()))
-            .map(|context| context.ground.dictionary_key());
-        let graphics = settings
-            .as_ref()
-            .map_or(ThreeLevelGraphicsDetail::High, |settings| {
-                if settings.effects == GraphicsEffectQuality::Low {
-                    ThreeLevelGraphicsDetail::Low
-                } else {
-                    settings.object_detail
-                }
-            });
-        let biome = world.and_then(|world| biomes.at(world.root, target_pose.translation()));
         let load = |effect_key: &str| {
             let asset_key = effect_key.replace('\\', "/").to_ascii_lowercase();
             if asset_key.contains('.') {
-                return Some(asset_server.load::<ParticleEffectDocumentAsset>(asset_key));
+                return Some(
+                    lookup
+                        .asset_server
+                        .load::<ParticleEffectDocumentAsset>(asset_key),
+                );
             }
-            dictionaries
-                .get(&dictionary_handle.0)?
-                .0
-                .get(&AssetId::from_key(&asset_key))?
-                .iter()
-                .filter(|row| {
-                    row.graphics.is_none_or(|required| graphics == required)
-                        && row.ground.is_none_or(|required| ground == Some(required))
-                        && row.biome.is_none_or(|required| biome == Some(required))
-                })
-                .max_by_key(|row| {
-                    usize::from(row.graphics.is_some())
-                        + usize::from(row.ground.is_some())
-                        + usize::from(row.biome.is_some())
-                })
-                .and_then(|row| row.effect.as_ref())
-                .map(|path| asset_server.load::<ParticleEffectDocumentAsset>(path.clone()))
+            let (path, _) = lookup.resolve(
+                AssetId::from_key(&asset_key),
+                world,
+                target_pose.translation(),
+            )?;
+            Some(
+                lookup
+                    .asset_server
+                    .load::<ParticleEffectDocumentAsset>(path.to_owned()),
+            )
         };
         let (effect, attach, target_rotation, z_rotation, scale) =
             match command.animation_text_action {
@@ -344,5 +353,114 @@ fn play_script_particle(
             effect_transform: pose,
             manual_particle_count: 0,
         });
+    }
+}
+
+#[derive(SystemParam)]
+struct ParticleDictionaryLookup<'w, 's> {
+    dictionary_handle: Res<'w, ScriptParticleDictionaryHandle>,
+    dictionaries: Res<'w, Assets<ScriptParticleDictionary>>,
+    asset_server: Res<'w, AssetServer>,
+    settings: Option<Res<'w, GraphicsSettings>>,
+    surface: DrySurfaceEligibility<'w, 's>,
+    biomes: BehaviorTargetBiome<'w, 's>,
+}
+
+impl ParticleDictionaryLookup<'_, '_> {
+    fn resolve(
+        &self,
+        key: AssetId,
+        world: Option<&WorldMember>,
+        position: Vec3,
+    ) -> Option<(&str, Option<std::time::Duration>)> {
+        let rows = self
+            .dictionaries
+            .get(&self.dictionary_handle.0)?
+            .0
+            .get(&key)?;
+        let context = world.and_then(|world| self.surface.dictionary_ground(world.root, position));
+        let ground = context.map(|context| context.ground.dictionary_key());
+        let underwater = context.is_some_and(|context| context.underwater);
+        let graphics = self
+            .settings
+            .as_ref()
+            .map_or(ThreeLevelGraphicsDetail::High, |settings| {
+                if settings.effects == GraphicsEffectQuality::Low {
+                    ThreeLevelGraphicsDetail::Low
+                } else {
+                    settings.object_detail
+                }
+            });
+        let biome = world.and_then(|world| self.biomes.at(world.root, position));
+        let (_, _, winner) = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(ordinal, row)| {
+                let exact = [
+                    row.biome.is_some_and(|required| biome == Some(required)),
+                    row.ground.is_some_and(|required| ground == Some(required)),
+                    row.underwater == Some(underwater),
+                    row.graphics == Some(graphics),
+                ];
+                let score = row
+                    .weights
+                    .into_iter()
+                    .zip(exact)
+                    .filter_map(|(weight, matches)| matches.then_some(i64::from(weight)))
+                    .sum::<i64>();
+                (score >= 0).then_some((score, std::cmp::Reverse(ordinal), row))
+            })
+            .max_by_key(|(score, ordinal, _)| (*score, *ordinal))?;
+        Some((winner.effect.as_deref()?, winner.removal_time))
+    }
+}
+
+#[derive(Component)]
+struct RemoveAuthoredDictionaryEffect(Timer);
+
+fn play_authored_dictionary_effect(
+    request: On<PlayAuthoredParticleDictionaryEffect>,
+    lookup: ParticleDictionaryLookup,
+    subjects: Query<(&GlobalTransform, Option<&WorldMember>)>,
+    mut commands: Commands,
+) {
+    let Ok((pose, world)) = subjects.get(request.subject) else {
+        return;
+    };
+    let position = if request.attach {
+        pose.translation()
+    } else {
+        request.transform.translation
+    };
+    let Some((path, lifetime)) = lookup.resolve(request.effect, world, position) else {
+        return;
+    };
+    let entity = openzt2_game_assets::effect::effect_instance_spawning_and_preparation::
+        spawn_complete_particle_effect_document(&mut commands, &SpawnCompleteParticleEffectDocument {
+            particle_effect_asset: lookup.asset_server.load(path.to_owned()),
+            parent_entity: request.attach.then_some(request.subject),
+            inherit_parent_rotation: request.inherit_parent_rotation,
+            effect_transform: request.transform,
+            manual_particle_count: 0,
+        });
+    if let Some(lifetime) = lifetime {
+        commands
+            .entity(entity)
+            .insert(RemoveAuthoredDictionaryEffect(Timer::new(
+                lifetime,
+                TimerMode::Once,
+            )));
+    }
+}
+
+fn retire_authored_dictionary_effects(
+    time: Res<Time>,
+    mut effects: Query<(Entity, &mut RemoveAuthoredDictionaryEffect)>,
+    mut commands: Commands,
+) {
+    for (entity, mut effect) in &mut effects {
+        if effect.0.tick(time.delta()).is_finished() {
+            commands.entity(entity).try_despawn();
+        }
     }
 }

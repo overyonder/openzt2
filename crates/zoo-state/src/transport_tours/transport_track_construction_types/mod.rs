@@ -50,22 +50,8 @@ pub struct PreparedTransportTrackConstructionEdit {
     pub to_endpoint_index: u8,
     pub path_points: Box<[Vec3]>,
     pub tower_height_m: Option<f32>,
-    pub applied_entities: Vec<Entity>,
     pub preview: Option<Entity>,
     pub application_in_flight: Option<EditApplication>,
-}
-
-/// A transaction made of several route edits, applied in order and undone
-/// in reverse.
-///
-/// Each edit sits on its own child entity; the transaction's own edit only
-/// marks it as a transport edit. Removing one piece from the middle of a road
-/// removes its route and lays the road left on each side.
-#[derive(Component, Debug, Clone, Default)]
-pub struct TransportTrackConstructionEditSteps {
-    pub application: Option<EditApplication>,
-    pub last_application: Option<EditApplication>,
-    pub rejected_application: Option<EditApplication>,
 }
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]

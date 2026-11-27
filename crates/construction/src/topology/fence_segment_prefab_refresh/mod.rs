@@ -1,3 +1,4 @@
+use super::topology_prefab_presentation::authored_gate_definition;
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectInformationViewClass;
@@ -20,7 +21,7 @@ use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_authored
 use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_reciprocal_fence_curve_partners;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentPrefab;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;
-use openzt2_zoo_state::topology::gate_operation_types::Gate;
+use openzt2_zoo_state::topology::gate_operation_types::{AuthoredGateVariant, Gate};
 use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
@@ -68,7 +69,15 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
     nodes: Query<&TopologyNode>,
     mut changes: MessageReader<FenceConnectivityChanged>,
     incident: Query<(Option<&FencesStartingHere>, Option<&FencesEndingHere>)>,
-    changed_edges: Query<Entity, Or<(Changed<FenceEdge>, Changed<FenceStart>, Changed<FenceEnd>)>>,
+    changed_edges: Query<
+        Entity,
+        Or<(
+            Changed<FenceEdge>,
+            Changed<FenceStart>,
+            Changed<FenceEnd>,
+            Changed<AuthoredGateVariant>,
+        )>,
+    >,
     edges: Query<FenceSegment>,
     grid: Single<Ref<TopologyGrid>>,
     mut transforms: Query<&mut Transform, With<FenceEdge>>,
@@ -79,6 +88,7 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
         Option<&mut FenceTerrainEndpointPresentationCells>,
         Option<&Children>,
         Has<Gate>,
+        Option<Ref<AuthoredGateVariant>>,
     )>,
     presentation_roots: Query<(), With<TopologyPresentationRoot>>,
 ) {
@@ -141,7 +151,7 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
         .map(|((entity, _), pairing)| (entity, pairing))
         .collect::<bevy::ecs::entity::EntityHashMap<_>>();
     for fence_entity in dirty {
-        let Ok((_, edge, current_prefab, endpoint_cells, children, gate)) =
+        let Ok((_, edge, current_prefab, endpoint_cells, children, gate, variant)) =
             fences.get_mut(fence_entity)
         else {
             continue;
@@ -151,7 +161,7 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
         };
         // A gated edge shows its fence's gate variant, e.g. chainlinkgate.
         let definition = if gate {
-            definitions.find_gate_fence(edge.definition)
+            authored_gate_definition(definitions, edge.definition, variant.as_deref())
         } else {
             definitions.find_fence(edge.definition)
         };
@@ -183,6 +193,7 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
         if current_prefab
             .as_deref()
             .is_some_and(|current_prefab| *current_prefab == selected_prefab)
+            && !variant.is_some_and(|variant| variant.is_changed())
         {
             continue;
         }

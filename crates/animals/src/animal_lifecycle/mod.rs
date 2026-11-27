@@ -84,7 +84,6 @@ impl Plugin for AnimalLifecyclePlugin {
             .add_message::<ReleaseAnimal>()
             .add_message::<AnimalReleased>()
             .add_observer(outgoing_animal_adoption_execution::settle_departing_animal)
-            .add_observer(animal_presentation_attachment::initialize_authored_animal_animation_repetition)
             .add_message::<scripted_animal_spawning::ScriptedAnimalSpawnRequest>()
             .add_systems(
                 FixedUpdate,

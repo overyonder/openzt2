@@ -12,7 +12,7 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_zoo_state::terrain::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex};
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
-    unconstrained_terrain_water_height, TerrainWaterMembershipIndex, TerrainWaterRegionQuery, TerrainWaterRegionSource, TerrainWaterSupportLimits,
+    unconstrained_terrain_water_height, TerrainWaterCellsChanged, TerrainWaterMembershipIndex, TerrainWaterRegionQuery, TerrainWaterRegionSource, TerrainWaterSupportLimits,
 };
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
@@ -225,6 +225,37 @@ pub(in crate::terrain) fn report_changed_membership_status(
     }
 }
 
+pub(in crate::terrain) fn publish_retired_terrain_water_cells(
+    removed: On<Discard<TerrainWaterMembershipIndex>>,
+    indexed: Query<(&TerrainWaterMembershipIndex, &WorldMember), Allow<Disabled>>,
+    mut published: MessageWriter<TerrainWaterCellsChanged>,
+) {
+    if let Ok((index, member)) = indexed.get(removed.entity) {
+        published.write(TerrainWaterCellsChanged {
+            root: member.root,
+            terrain: index.terrain(),
+            source_bounds: None,
+        });
+    }
+}
+
+fn changed_water_source_bounds(points: &[UVec2]) -> Box<[(UVec2, UVec2)]> {
+    let mut ordered = points.to_vec();
+    ordered.sort_unstable_by_key(|point| (point.y, point.x));
+    ordered.dedup();
+    let mut bounds: Vec<(UVec2, UVec2)> = Vec::new();
+    for point in ordered {
+        if let Some((_, end)) = bounds.last_mut() {
+            if end.y == point.y && end.x.checked_add(1) == Some(point.x) {
+                *end = point;
+                continue;
+            }
+        }
+        bounds.push((point, point));
+    }
+    bounds.into_boxed_slice()
+}
+
 /// An absent index denotes unresolved ownership, not a dry terrain.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(in crate::terrain) fn project_terrain_water_membership(
@@ -247,7 +278,10 @@ pub(in crate::terrain) fn project_terrain_water_membership(
         Query<&mut TerrainWaterSkySupports>,
         Query<&mut source_rows::AuthoredWaterRowGroups>,
     ),
-    mut membership_changed: MessageWriter<TerrainWaterMembershipChanged>,
+    (mut membership_changed, mut water_cells_changed): (
+        MessageWriter<TerrainWaterMembershipChanged>,
+        MessageWriter<TerrainWaterCellsChanged>,
+    ),
     regions: Query<(Entity, &TerrainWaterRegionSource)>,
     live_regions: TerrainWaterRegionQuery,
     mut changes: MessageReader<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>,
@@ -599,6 +633,13 @@ pub(in crate::terrain) fn project_terrain_water_membership(
                         }
                         if !points.is_empty() || !affected_regions.is_empty() {
                             index.set_changed();
+                            if let Ok(member) = inputs.members.get(root_entity) {
+                                water_cells_changed.write(TerrainWaterCellsChanged {
+                                    root: member.root,
+                                    terrain: id,
+                                    source_bounds: Some(changed_water_source_bounds(&points)),
+                                });
+                            }
                             membership_changed.write(TerrainWaterMembershipChanged {
                                 terrain: id,
                                 points: Some(points),
@@ -789,12 +830,27 @@ pub(in crate::terrain) fn project_terrain_water_membership(
             points: None,
             regions: None,
         };
+        let cells_change = inputs
+            .members
+            .get(entity)
+            .ok()
+            .map(|member| TerrainWaterCellsChanged {
+                root: member.root,
+                terrain: chunk.asset.id(),
+                source_bounds: None,
+            });
         if let Ok(mut current) = indexes.get_mut(entity) {
             *current = index;
             membership_changed.write(change);
+            if let Some(change) = cells_change {
+                water_cells_changed.write(change);
+            }
         } else {
             commands.entity(entity).insert(index);
             commands.write_message(change);
+            if let Some(change) = cells_change {
+                commands.write_message(change);
+            }
         }
         set_membership_status(
             &mut commands,

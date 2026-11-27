@@ -31,9 +31,12 @@ pub(super) fn advance_reserved_services_and_request_completed_service_payments(
             continue;
         }
         let Ok((price, service)) = facilities.get(facility.0) else {
+            commands.entity(entity).try_despawn();
             continue;
         };
-        if service.payment_trigger != FacilityPaymentTrigger::TimedTicks {
+        if service.definition != operation.service
+            || service.payment_trigger != FacilityPaymentTrigger::TimedTicks
+        {
             warn!(customer = ?customer.0, facility = ?facility.0, "timed payment requested for a behavior-paid facility");
             commands.entity(entity).try_despawn();
         } else if price.0 == Money::ZERO {

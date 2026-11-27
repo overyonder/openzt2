@@ -45,6 +45,7 @@ pub(super) fn hydrate_placed_object_placement_components(
             With<DefinitionId>,
             With<PersistentId>,
             Without<PlacedObjectDefinitionReference>,
+            Without<crate::topology::tank_gate_platform_presentation::TankGatePlatformSide>,
         ),
     >,
 ) {

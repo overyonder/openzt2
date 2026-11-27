@@ -213,6 +213,7 @@ fn exercise_freeform(
             println!("mod-audit\tworld-request\t{:?}", map.id);
             load.write(BeginWorldLoad {
                 saved_world_document: None,
+                mode_document: None,
                 operation: None,
                 scenario: map.id,
                 mode: WorldSessionMode::Freeform,

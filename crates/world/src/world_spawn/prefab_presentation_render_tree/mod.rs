@@ -1,4 +1,8 @@
+#[cfg(test)]
+mod tests;
+
 use bevy::asset::{asset_changed::AssetChanged, AssetLoadFailedEvent};
+use bevy::ecs::{entity_disabling::Disabled, query::Allow};
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use openzt2_game_data::scene_prefab::ScenePrefabEntityFlags;
@@ -6,13 +10,33 @@ use openzt2_game_data::scene_prefab::ScenePrefabRenderableVisibilityFlags;
 use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
-use openzt2_world_state::world_spawn::prefab_model_replacement::PrefabModelReplaced;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabLocalRenderBound;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentationHydrated;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabShadowPolicy;
 
-use crate::model_render::prefab_render_lod_tier_projection::bind_prefab_lod;
+use openzt2_world_state::animation_playback::model_joint_attachment_binding::{
+    ModelInstanceAttachments, ModelJointAttachment,
+};
+
+#[derive(Component)]
+pub(super) struct OwnedPrefabRenderTreeRow;
+
+/// The model source used by the renderables already attached to an instance.
+#[derive(Component, PartialEq, Eq)]
+pub(super) struct PrefabRenderableSource(pub(super) Option<[u8; 32]>);
+
+impl PrefabRenderableSource {
+    pub(super) fn matches_model(&self, prefab: &ScenePrefabAsset) -> bool {
+        prefab
+            .model_source_digest()
+            .is_some_and(|digest| self.0 == Some(digest))
+    }
+}
+
+use crate::model_render::prefab_render_lod_tier_projection::{
+    bind_prefab_lod, bind_prefab_lod_policy,
+};
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabAuthoredBillboardOrientationMode;
 use openzt2_world_state::world_spawn::prefab_transform_conversion::transform_from_authored;
@@ -32,6 +56,7 @@ pub fn spawn_prefab_render_tree(
         .map(|(index, row)| {
             let transform = transform_from_authored(&row.transform);
             let mut entity = commands.spawn((
+                OwnedPrefabRenderTreeRow,
                 PrefabAuthoredAttachmentIdentifier(AssetId(row.attachment_id.0)),
                 transform,
                 if row.flags.0 & ScenePrefabEntityFlags::VISIBLE.0 != 0 {
@@ -68,7 +93,13 @@ pub fn spawn_prefab_render_tree(
         .first()
         .copied()
         .expect("scene prefab asset must contain a root entity");
-    commands.entity(root).insert(ChildOf(parent));
+    commands.entity(root).insert((
+        ChildOf(parent),
+        PrefabRenderableSource(prefab.model_source_digest()),
+    ));
+    commands
+        .entity(parent)
+        .insert_if_new(super::prefab_socket_index::PrefabSocketIndexRoot);
     let mut renderables = Vec::new();
     for (index, row) in document.entities.iter().enumerate() {
         let spawned = entities[index];
@@ -121,6 +152,9 @@ pub fn spawn_prefab_render_tree(
         }
     }
     for (entity, row) in document.entities.iter().enumerate() {
+        if let Some(policy) = &row.render_lod_policy {
+            bind_prefab_lod_policy(commands, &entities, entities[entity], parent, policy);
+        }
         for lod in &row.lods {
             bind_prefab_lod(commands, &entities, entities[entity], lod);
         }
@@ -234,28 +268,12 @@ pub(super) fn hydrate_prefab_presentations(
 pub(super) struct ReplacedPrefabReloaded(pub(super) bevy::asset::AssetId<ScenePrefabAsset>);
 
 pub(super) fn publish_replaced_prefab_reloads(
-    mut replacements: MessageReader<PrefabModelReplaced>,
     mut prefab_events: MessageReader<AssetEvent<ScenePrefabAsset>>,
     mut reloaded: MessageWriter<ReplacedPrefabReloaded>,
-    asset_server: Res<AssetServer>,
-    mut pending_paths: Local<HashSet<String>>,
 ) {
-    pending_paths.extend(
-        replacements
-            .read()
-            .map(|event| event.model_path.to_ascii_lowercase()),
-    );
     for event in prefab_events.read() {
-        let AssetEvent::Modified { id } = *event else {
-            continue;
-        };
-        if pending_paths.is_empty() {
-            continue;
-        }
-        if let Some(path) = asset_server.get_path(id) {
-            if pending_paths.remove(&path.path().to_string_lossy().to_ascii_lowercase()) {
-                reloaded.write(ReplacedPrefabReloaded(id));
-            }
+        if let AssetEvent::Modified { id } = *event {
+            reloaded.write(ReplacedPrefabReloaded(id));
         }
     }
 }
@@ -263,14 +281,48 @@ pub(super) fn publish_replaced_prefab_reloads(
 pub(super) fn rebuild_prefab_presentations_after_prefab_reload(
     mut commands: Commands,
     mut reloaded: MessageReader<ReplacedPrefabReloaded>,
+    prefabs: Res<Assets<ScenePrefabAsset>>,
     presentations: Query<(Entity, &PrefabPresentation, &PrefabPresentationRenderRoot)>,
+    sources: Query<&PrefabRenderableSource, Allow<Disabled>>,
+    attachments: Query<&ModelInstanceAttachments>,
+    joint_binding: Query<
+        (),
+        (
+            With<ModelJointAttachment>,
+            Without<OwnedPrefabRenderTreeRow>,
+        ),
+    >,
 ) {
     let reloaded = reloaded.read().map(|event| event.0).collect::<HashSet<_>>();
     if reloaded.is_empty() {
         return;
     }
     for (entity, presentation, render_root) in &presentations {
-        if reloaded.contains(&presentation.0.id()) {
+        if reloaded.contains(&presentation.0.id())
+            && prefabs.get(&presentation.0).is_some_and(|prefab| {
+                !sources
+                    .get(render_root.0)
+                    .is_ok_and(|source| source.matches_model(prefab))
+            })
+        {
+            if let Ok(attached) = attachments.get(render_root.0) {
+                for attachment in attached.iter() {
+                    if joint_binding.contains(attachment) {
+                        commands
+                            .entity(attachment)
+                            .try_insert(ChildOf(entity))
+                            .queue(move |mut attachment: bevy::ecs::world::EntityWorldMut| {
+                                let _ = attachment.modify_component(
+                                    |binding: &mut ModelJointAttachment| {
+                                        bevy::ecs::relationship::Relationship::set_risky(
+                                            binding, entity,
+                                        );
+                                    },
+                                );
+                            });
+                    }
+                }
+            }
             commands.entity(render_root.0).try_despawn();
             commands
                 .entity(entity)

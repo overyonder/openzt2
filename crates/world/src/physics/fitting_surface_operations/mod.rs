@@ -61,21 +61,23 @@ pub(super) fn fit_objects_with_changed_inputs_or_terrain(
         Option<&TerrainChunkFittings>,
     )>,
     water: Option<DrySurfaceEligibility>,
-    changed: Query<Entity, ChangedTerrainFitting>,
     agents_added: Query<Entity, (Added<NavAgent>, With<FittingInTerrainChunk>)>,
     mut agents_removed: RemovedComponents<NavAgent>,
     mut surfaces_removed: RemovedComponents<TerrainFittingSurface>,
-    mut objects: Query<
-        (
-            Entity,
-            &TerrainFittingSurface,
-            &WorldMember,
-            Option<&RigidBody>,
-            &mut Transform,
-            Option<&FittingInTerrainChunk>,
-        ),
-        (Without<NavAgent>, Without<FallingReleasedObject>),
-    >,
+    mut fittings: ParamSet<(
+        Query<Entity, ChangedTerrainFitting>,
+        Query<
+            (
+                Entity,
+                &TerrainFittingSurface,
+                &WorldMember,
+                Option<&RigidBody>,
+                &mut Transform,
+                Option<&FittingInTerrainChunk>,
+            ),
+            (Without<NavAgent>, Without<FallingReleasedObject>),
+        >,
+    )>,
 ) {
     let Some(assets) = terrain_assets else {
         return;
@@ -85,7 +87,8 @@ pub(super) fn fit_objects_with_changed_inputs_or_terrain(
             .entity(entity)
             .try_remove::<FittingInTerrainChunk>();
     }
-    let mut candidates: bevy::ecs::entity::EntityHashSet = { changed.iter().collect() };
+    let mut candidates: bevy::ecs::entity::EntityHashSet = fittings.p0().iter().collect();
+    let mut objects = fittings.p1();
     if indexes.iter().any(|index| index.is_changed()) {
         candidates.extend(objects.iter().filter_map(|(entity, _, member, ..)| {
             indexes

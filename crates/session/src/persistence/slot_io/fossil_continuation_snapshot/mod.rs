@@ -1,10 +1,10 @@
+use openzt2_extinct_animals::extinct_animals::FossilAssemblyPiecePose;
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::{
     ecs::{relationship::RelationshipTarget, system::SystemParam},
     prelude::*,
 };
-use openzt2_extinct_animals::fossil_site_types::{DigPit, FossilSiteKind, RequestedFossilPuzzle};
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
@@ -18,6 +18,9 @@ use openzt2_world_state::{
         prefab_presentation_types::PrefabPresentation,
         world_membership_types::{DefinitionId, WorldMember, WorldMembers},
     },
+};
+use openzt2_zoo_state::extinct_animals::fossil_recovery_types::{
+    DigPit, FossilSiteKind, RequestedFossilPuzzle,
 };
 use openzt2_zoo_state::extinct_animals::{
     fossil_collection_and_assembly_types::{
@@ -38,6 +41,8 @@ pub(super) struct FossilContinuation {
     assemblies: Vec<FossilAssemblySnapshot>,
     #[serde(skip)]
     pub(super) details: FossilSiteDetails,
+    #[serde(skip)]
+    pub(super) arranged_pieces: BTreeSet<u64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -88,7 +93,11 @@ impl FossilContinuation {
             .map(|assembly| (assembly.table, assembly))
             .collect();
         let valid_asset = |id| id != AssetId::default();
-        self.details.requested.is_none_or(valid_asset)
+        self.arranged_pieces.iter().all(|id| {
+            self.pieces
+                .binary_search_by_key(id, |piece| piece.id)
+                .is_ok()
+        }) && self.details.requested.is_none_or(valid_asset)
             && self
                 .details
                 .kinds
@@ -162,6 +171,7 @@ pub(super) struct CaptureFossilContinuation<'w, 's> {
             &'static CollectedFossilPiece,
             &'static Transform,
             Option<&'static FossilPieceInSlot>,
+            Has<FossilAssemblyPiecePose>,
         ),
     >,
     slots: Query<'w, 's, (&'static FossilAssemblySlot, &'static FossilAssemblySlotOf)>,
@@ -238,11 +248,15 @@ impl CaptureFossilContinuation<'_, '_> {
                 })
             })
             .collect::<Result<Vec<_>, Failure>>()?;
+        let mut arranged_pieces = BTreeSet::new();
         let mut pieces = self
             .pieces
             .iter_many(members())
             .flatten()
-            .map(|(id, piece, pose, slot)| {
+            .map(|(id, piece, pose, slot, arranged)| {
+                if arranged {
+                    arranged_pieces.insert(id.0);
+                }
                 let slot = slot
                     .map(|slot| {
                         let (slot, table) = self
@@ -280,6 +294,7 @@ impl CaptureFossilContinuation<'_, '_> {
             pieces,
             assemblies,
             details,
+            arranged_pieces,
         }))
     }
 }
@@ -447,6 +462,9 @@ impl RestoreFossilContinuation<'_, '_> {
                     scale: Vec3::from_array(piece.scale),
                 },
             ));
+            if snapshot.arranged_pieces.contains(&piece.id) {
+                entity.insert(FossilAssemblyPiecePose);
+            }
             if let Some(slot) = piece.slot {
                 entity.insert(FossilPieceInSlot(slots[&slot]));
             }

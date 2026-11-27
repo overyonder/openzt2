@@ -233,21 +233,19 @@ pub(super) fn dismiss_one_active_ui_activity_from_cancel_requests(
             [UiTrigger::Cancel, UiTrigger::Press]
                 .into_iter()
                 .find(|trigger| {
-                    let mut found = false;
-                    for action in &node.actions {
-                        let (action_trigger, cancels) = cancellation_action(
-                            action,
-                            modal_id,
-                            modal.is_none_or(|modal| modal == owner.0),
-                        );
-                        if action_trigger == *trigger {
-                            if !cancels {
-                                return false;
-                            }
-                            found = true;
-                        }
-                    }
-                    found
+                    let mut actions = node
+                        .actions
+                        .iter()
+                        .filter(|action| action.trigger() == *trigger)
+                        .peekable();
+                    actions.peek().is_some()
+                        && actions.all(|action| {
+                            dismisses_active_activity(
+                                action,
+                                modal_id,
+                                modal.is_none_or(|modal| modal == owner.0),
+                            )
+                        })
                 })
                 .map(|trigger| (entity, trigger))
         })
@@ -258,6 +256,59 @@ pub(super) fn dismiss_one_active_ui_activity_from_cancel_requests(
             source,
             trigger,
         });
+    }
+}
+
+fn dismisses_active_activity(
+    action: &UiActionRecord,
+    modal_id: Option<openzt2_game_data::AssetId>,
+    owns_modal: bool,
+) -> bool {
+    match action {
+        UiActionRecord::Presentation(record) => match record.action {
+            UiPresentationAction::HideOwningDocument
+            | UiPresentationAction::HideOwningDocumentAfterAlertAcknowledgement
+            | UiPresentationAction::HideOwningDocumentAfterConfirmationDismissal => owns_modal,
+            UiPresentationAction::SetTargetNodeVisible {
+                target_node,
+                visible: false,
+            } => Some(target_node) == modal_id,
+            _ => false,
+        },
+        UiActionRecord::Information(record) => matches!(
+            record.action,
+            UiInformationAction::ApplySetting {
+                setting: InformationSettingAction::Back
+            }
+        ),
+        UiActionRecord::Shell(record) => matches!(
+            record.action,
+            UiShellAction::DismissExitConfirmationDialog
+                | UiShellAction::NavigateBackFromDownloads
+                | UiShellAction::NavigateBackFromOptions
+                | UiShellAction::NavigateBackFromMapSelection
+        ),
+        UiActionRecord::Construction(record) => matches!(
+            record.action,
+            UiConstructionAction::ResolveConfirmation {
+                confirmed: false,
+                ..
+            }
+        ),
+        UiActionRecord::Transport(record) => matches!(
+            record.action,
+            UiTransportAction::ResolvePendingTransportPathDeletion {
+                deletion_confirmed: false
+            }
+        ),
+        UiActionRecord::Show(record) => matches!(
+            record.action,
+            UiShowAction::ResolvePlatformDeletion { confirmed: false }
+        ),
+        UiActionRecord::Photo(record) => {
+            matches!(record.action, UiPhotoAction::CancelMovingSelectedPhoto)
+        }
+        _ => false,
     }
 }
 

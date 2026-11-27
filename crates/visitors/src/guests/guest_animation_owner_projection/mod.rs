@@ -121,6 +121,7 @@ pub(super) fn attach_loaded_animation_sets_to_guest_models(
                 pending_model_animation_set_asset_handles: vec![request.animation_set.clone()]
                     .into_boxed_slice(),
                 requested_initial_animation_clip_asset_key: initial_clip,
+                requested_initial_repetition_policy: None,
             })
             .remove::<(
                 ModelAnimationAttachmentResolved,

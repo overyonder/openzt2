@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use bevy::ecs::system::SystemParam;
+use bevy::ecs::{entity::EntityHashSet, system::SystemParam};
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
@@ -14,12 +14,12 @@ use openzt2_interface_state::information::zoo_message_types::{ZooMessage, ZooMes
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
-use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
+use openzt2_zoo_state::habitat::habitat_cell_ownership_changes::HabitatCellOwnershipChanged;
+use openzt2_zoo_state::habitat::habitat_types::{HabitatCellOf, HabitatIndex};
 use openzt2_zoo_state::habitat::habitat_types::{Containment, HabitatMember, HabitatRegion};
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use openzt2_zoo_state::terrain::{
-    terrain_chunk_types::TerrainIndex,
-    terrain_water_presentation_types::{TerrainWaterMembershipIndex, TerrainWaterRegionQuery},
+use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
+    TerrainWaterMembershipIndex, TerrainWaterRegionQuery,
 };
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
@@ -46,15 +46,22 @@ pub(super) struct WaterQualityFraction(pub(super) f32);
 pub(super) struct FilterWaterSources<'w, 's> {
     tanks: Query<'w, 's, (&'static TankGeometry, &'static HabitatRegion), With<Tank>>,
     terrain: Res<'w, Assets<TerrainAsset>>,
-    indexes: Query<'w, 's, Ref<'static, TerrainWaterMembershipIndex>>,
+    indexes: Query<
+        'w,
+        's,
+        (
+            Ref<'static, TerrainWaterMembershipIndex>,
+            &'static WorldMember,
+        ),
+    >,
     regions: TerrainWaterRegionQuery<'w, 's>,
-    roots: Query<'w, 's, &'static TerrainIndex>,
 }
 
 impl FilterWaterSources<'_, '_> {
     fn terrain_membership(&self, root: Entity) -> Option<Ref<'_, TerrainWaterMembershipIndex>> {
-        let chunk = *self.roots.get(root).ok()?.chunks.get(&IVec2::new(0, -1))?;
-        self.indexes.get(chunk).ok()
+        self.indexes
+            .iter()
+            .find_map(|(index, member)| (member.root == root).then_some(index))
     }
 
     fn volume(&self, root: Entity, water: Entity) -> Option<f32> {
@@ -169,6 +176,8 @@ pub(super) fn remove_water_filter_timing_and_target(
 pub(super) fn resolve_water_filter_targets(
     mut commands: Commands,
     roots: Query<(Ref<TopologyGrid>, Ref<HabitatIndex>)>,
+    cell_owners: Query<&HabitatCellOf>,
+    mut habitat_changes: Option<MessageReader<HabitatCellOwnershipChanged>>,
     filters: Query<
         (
             Entity,
@@ -185,6 +194,10 @@ pub(super) fn resolve_water_filter_targets(
     mut demoted: RemovedComponents<Tank>,
 ) {
     let tanks_changed = !promoted.is_empty() | (demoted.read().count() != 0);
+    let changed_worlds: EntityHashSet = habitat_changes
+        .iter_mut()
+        .flat_map(|changes| changes.read().map(|change| change.root))
+        .collect();
     for (entity, transform, member, interval, current) in &filters {
         let next = (|| {
             let (grid, habitats) = roots.get(member.root).ok()?;
@@ -192,6 +205,7 @@ pub(super) fn resolve_water_filter_targets(
             if !tanks_changed
                 && !grid.is_changed()
                 && !habitats.is_changed()
+                && !changed_worlds.contains(&member.root)
                 && !transform.is_changed()
                 && !member.is_changed()
                 && !interval.is_added()
@@ -205,7 +219,7 @@ pub(super) fn resolve_water_filter_targets(
             let origin = transform.translation().xz();
             let forward = transform.forward().xz().normalize_or_zero();
             let probe = origin + forward * ADJACENT_WATER_REACH_METRES;
-            locate_habitat_at_world_position(&habitats, probe, *grid)
+            locate_habitat_at_world_position(&habitats, &cell_owners, probe, *grid)
                 .filter(|tank| tanks.contains(*tank))
                 .or_else(|| {
                     let membership = terrain?;

@@ -39,7 +39,6 @@ mod zoo_rating_recomputation;
 
 use award_and_progression_fact_types::{
     AdjustScenarioAwardPointTotalRequest, ProgressionAwardGranted, ProgressionFactChanged,
-    ScenarioAwardPointTotal,
 };
 use fame_history_types::FameHistory;
 use fame_types::{Fame, ZooMaximumFame};
@@ -65,6 +64,9 @@ use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
 use openzt2_world_state::simulation_time::simulation_control_queries::simulation_is_running;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    GuestDepartureFameApplication, GuestDepartureSurveyApplication,
+};
 use openzt2_zoo_state::construction::FixedConstructionSet;
 
 pub struct ProgressionPlugin;
@@ -72,7 +74,6 @@ pub struct ProgressionPlugin;
 impl Plugin for ProgressionPlugin {
     fn build(&self, app: &mut App) {
         app.register_required_components::<WorldRoot, FameHistory>()
-            .register_required_components::<WorldRoot, ScenarioAwardPointTotal>()
             .register_required_components::<WorldRoot, TotalEndangeredAnimalBirthCount>()
             .register_required_components::<WorldRoot, TotalAnimalsReleasedCount>()
             .register_required_components::<WorldRoot, Fame>()
@@ -202,7 +203,6 @@ impl Plugin for ProgressionPlugin {
                     profile_challenge_fact_recording::record_endangered_animal_births_for_profile_challenges,
                     research_execution::advance_research_availability_unlock_countdowns
                         .run_if(simulation_is_running),
-                    research_execution::publish_restored_research_progress,
                     research_execution::advance_active_research_projects
                         .after(research_execution::publish_restored_research_progress)
                         .run_if(simulation_is_running),
@@ -212,30 +212,47 @@ impl Plugin for ProgressionPlugin {
             )
             .add_systems(
                 FixedUpdate,
+                research_execution::publish_restored_research_progress
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
+                fame_progression::update_authored_fame::<true>
+                    .after(GuestDepartureSurveyApplication)
+                    .before(FixedGameSet::Economy)
+                    .in_set(GuestDepartureFameApplication)
+                    .in_set(FixedGameSet::Act)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
                 (
                     authored_award_programs::record_award_outcomes,
                     authored_award_programs::process_authored_award_programs
                         .after(authored_award_programs::record_award_outcomes)
                         .run_if(simulation_is_running),
-                    fame_progression::update_authored_fame
+                    fame_progression::update_authored_fame::<false>
                         .after(authored_award_programs::process_authored_award_programs)
                         .after(scenario_award_point_adjustment::apply_requested_scenario_award_point_total_adjustments)
                         .after(zoo_rating_recomputation::publish_zoo_rating_changes)
                         .after(openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet::Think)
                         .after(openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet::Act)
+                        .after(GuestDepartureFameApplication)
                         .before(openzt2_zoo_state::guests::GuestLifecycleAdvance)
                         .before(openzt2_zoo_state::economy::EconomyServiceCleanupSet),
                     fame_progression::apply_scenario_maximum_fame_requests
-                        .after(fame_progression::update_authored_fame),
+                        .after(fame_progression::update_authored_fame::<false>),
                     fame_progression::publish_world_maximum_fame
                         .after(fame_progression::apply_scenario_maximum_fame_requests),
                     authored_award_programs::retire_settled_award_cash_payments,
                     authored_award_programs::publish_award_panels_after_fame
-                        .after(fame_progression::update_authored_fame),
+                        .after(fame_progression::update_authored_fame::<false>),
                     research_execution::refresh_authored_research_availability
-                        .after_ignore_deferred(fame_progression::publish_world_maximum_fame),
+                        .after_ignore_deferred(fame_progression::publish_world_maximum_fame)
+                        .after(research_execution::advance_research_availability_unlock_countdowns),
                     research_execution::complete_research_projects_and_apply_authored_unlocks
-                        .after_ignore_deferred(fame_progression::update_authored_fame),
+                        .after_ignore_deferred(fame_progression::update_authored_fame::<false>)
+                        .after(research_execution::advance_active_research_projects),
                     catalogue_unlock_application::apply_catalogue_definition_unlock_requests
                         .after(research_execution::complete_research_projects_and_apply_authored_unlocks),
                     catalogue_unlock_application::

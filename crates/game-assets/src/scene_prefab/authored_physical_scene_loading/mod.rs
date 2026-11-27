@@ -8,16 +8,16 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::{
-    scene_prefab::{
-        PrefabAnimationStart, PrefabEntity, PrefabTerrainDecal, PrefabTransform,
-        ScenePrefabDocument, ScenePrefabEntityFlags,
-    },
+    scene_prefab::{PrefabAnimationStart, PrefabTerrainDecal, ScenePrefabDocument},
     AssetId,
 };
 
 use crate::{
     asset_source::AssetArchives,
-    model_source::native_model_source_lowering::lower_native_physical_scene_document,
+    model_source::{
+        native_model_source_lowering::lower_native_physical_scene_document,
+        native_scene::scene_prefab_document_assembly::authored_terrain_decal_row,
+    },
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document,
         ordered_source_document_types::OrderedSourceDocumentNode, path::AssetPath,
@@ -126,7 +126,9 @@ impl AssetLoader for AuthoredPhysicalSceneLoader {
             .map(|node| self.terrain_decal(node, &path, context))
             .transpose()?;
         let decal_texture = terrain_decal.map(|(decal, texture)| {
-            document.entities.push(decal_row(&path, decal));
+            document
+                .entities
+                .push(authored_terrain_decal_row(&path.to_string_lossy(), decal));
             texture
         });
         let mut asset = create_scene_prefab_asset_and_load_dependencies(document, context);
@@ -230,37 +232,6 @@ pub(crate) fn animation_start(
             })
         })
         .transpose()
-}
-
-fn decal_row(path: &Path, decal: PrefabTerrainDecal) -> PrefabEntity {
-    PrefabEntity {
-        stable_id: AssetId::from_virtual_path(&format!("{}#TerrainDecal", path.display())),
-        attachment_id: AssetId::default(),
-        model_joint_binding: None,
-        local_render_bound: None,
-        skin_render_bound: None,
-        parent: u32::MAX,
-        transform: PrefabTransform {
-            translation_m: [0.; 3],
-            rotation_xyzw: [0., 0., 0., 1.],
-            scale: [1.; 3],
-        },
-        children: Vec::new(),
-        flags: ScenePrefabEntityFlags::VISIBLE | ScenePrefabEntityFlags::ACTIVE,
-        rotation_cycles: Vec::new(),
-        transform_animations: Vec::new(),
-        visibility_animation: None,
-        morph_animation: None,
-        render_lod_policy: None,
-        renderables: Vec::new(),
-        animation_start: None,
-        colliders: Vec::new(),
-        lods: Vec::new(),
-        billboards: Vec::new(),
-        lights: Vec::new(),
-        effects: Vec::new(),
-        terrain_decal: Some(decal),
-    }
 }
 
 fn child<'a>(

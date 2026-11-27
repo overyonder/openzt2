@@ -4,8 +4,8 @@ use super::world_definition_source_value_reading_and_conversion::{
 };
 use crate::source_document::resolved_source_record_index::{BindError, RecordView};
 use openzt2_game_data::{
-    AssetId,
     world_definitions::aquatic_habitats::{AquaticRequirement, TankDefinition},
+    AssetId,
 };
 
 pub(super) fn bind_tank(

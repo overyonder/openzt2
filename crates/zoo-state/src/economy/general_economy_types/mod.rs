@@ -2,7 +2,7 @@ use bevy::prelude::Component;
 
 use super::{
     money_types::Money,
-    monthly_finance_types::{FinanceMetric, FinancePeriod, MonthlyFinanceHistory},
+    monthly_finance_types::{FinanceMetric, FinancePeriod, FinanceValue, MonthlyFinanceHistory},
 };
 
 /// Identifies a payment issued by a zoo-wide operation.
@@ -34,9 +34,9 @@ impl GeneralEconomyLedger {
     pub fn from_saved(history: MonthlyFinanceHistory) -> Option<Self> {
         let aggregate_only = history
             .finance_metric_value(FinanceMetric::DonationIncome, FinancePeriod::Lifetime)
-            == 0
+            == FinanceValue::Money(Money::ZERO)
             && history.finance_metric_value(FinanceMetric::TotalUsers, FinancePeriod::Lifetime)
-                == 0
+                == FinanceValue::Users(0)
             && history.retained_month_finance_records().all(|month| {
                 month.active_users == 0
                     && month.total_users == 0
@@ -76,11 +76,11 @@ impl GeneralEconomyLedger {
         }
     }
 
-    pub fn cash_after_transaction(&self, delta: i64) -> Option<Money> {
-        self.cash()?.checked_add(Money(delta))
+    pub fn cash_after_transaction(&self, delta: Money) -> Option<Money> {
+        self.cash()?.checked_add(delta)
     }
 
-    pub fn record_completed_transaction(&mut self, delta: i64) -> Option<()> {
+    pub fn record_completed_transaction(&mut self, delta: Money) -> Option<()> {
         let cash = self.cash_after_transaction(delta)?;
         self.history.record_account_cash_movement(delta, cash);
         Some(())

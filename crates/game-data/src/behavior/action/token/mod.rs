@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::AssetId;
 
-/// A payload-free token delivered to the executing subject or its task target.
+/// A token delivered to an authored recipient.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BehaviorSelfTokenDelivery {
     pub token: AssetId,
@@ -11,6 +11,11 @@ pub struct BehaviorSelfTokenDelivery {
     /// `None` keeps the token until a task consumes it: an absent `Timeout`
     /// or the authored `-1` sentinel.
     pub lifetime: Option<Duration>,
+    #[serde(default)]
+    pub force: bool,
+    /// Optional world-space target stored on the token independently of its entity payload.
+    #[serde(default)]
+    pub point_m: Option<[f32; 3]>,
     pub chance_percent: f32,
     #[serde(default)]
     pub recipient: BehaviorTokenRecipient,

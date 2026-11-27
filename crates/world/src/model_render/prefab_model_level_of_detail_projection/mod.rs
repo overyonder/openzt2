@@ -11,7 +11,7 @@ use super::active_model_view_cameras::ActiveModelViewCameras;
 use super::prefab_render_layer_camera_matching::PrefabCameraRenderLayers;
 
 #[derive(Component, Clone, PartialEq, Eq)]
-pub(super) struct PrefabLodVisibleCameras(EntityHashSet);
+pub(super) struct PrefabLodVisibleCameras(pub(super) EntityHashSet);
 
 pub(super) fn register_prefab_lod_camera_visibility(app: &mut App) {
     app.add_plugins(HierarchyPropagatePlugin::<PrefabLodVisibleCameras>::new(

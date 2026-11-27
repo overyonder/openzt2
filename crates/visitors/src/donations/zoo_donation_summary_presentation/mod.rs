@@ -9,10 +9,7 @@ use openzt2_game_data::{
     ui_document::node_property_binding::UiTextPropertyBindingSource, AssetId,
 };
 
-use openzt2_game_assets::localization::{
-    localization_asset_types::LocalizationAsset,
-    localization_precedence_index::LocalizationPrecedenceIndex,
-};
+use openzt2_game_assets::localization::loaded_localization_queries::CurrencyLocalization;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
@@ -165,22 +162,15 @@ pub(super) fn reconcile_donation_contributors(
 }
 
 pub(super) fn project_zoo_donation_summary(
-    active_localization: Option<Res<LocalizationPrecedenceIndex>>,
-    localizations: Res<Assets<LocalizationAsset>>,
+    currency: CurrencyLocalization,
     summaries: Query<Ref<ZooDonationSummary>, With<WorldRoot>>,
     mut fields: Query<(Ref<UiTextBinding>, &mut Text)>,
 ) {
     let Ok(summary) = summaries.single() else {
         return;
     };
-    let refresh_all = summary.is_changed()
-        || localizations.is_changed()
-        || active_localization
-            .as_ref()
-            .is_some_and(|index| index.is_changed());
-    let localization = active_localization
-        .as_deref()
-        .and_then(|sources| sources.borrow_loaded_localization_view(&localizations));
+    let refresh_all = summary.is_changed() || currency.is_changed();
+    let localization = currency.loaded_text();
 
     for (binding, text) in &mut fields {
         if !refresh_all && !binding.is_changed() && !text.is_added() {
@@ -215,9 +205,10 @@ pub(super) fn project_zoo_donation_summary(
                 positive_format,
                 ..
             } => {
-                openzt2_zoo_state::economy::currency_formatting::write_whole_dollar_currency_with_thousands_separators(
-                    &mut rendered,
+                let _ = currency.write_amount(
                     (f64::from(total.amount.dollars()) * 100.0).round() as i64,
+                    false,
+                    &mut rendered,
                 );
                 if let Some(localization) = localization {
                     let unformatted = std::mem::take(&mut rendered);

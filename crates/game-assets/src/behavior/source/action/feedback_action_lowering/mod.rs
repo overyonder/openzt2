@@ -59,7 +59,7 @@ pub(super) fn lower_feedback_data(
     Ok(BehaviorFeedbackAction { entries })
 }
 
-fn lower_feedback_entry(
+pub(crate) fn lower_feedback_entry(
     feedback_entry_source_node: &DataNode,
 ) -> io::Result<BehaviorFeedbackEntry> {
     if feedback_entry_source_node

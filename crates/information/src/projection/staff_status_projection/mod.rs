@@ -1,4 +1,4 @@
-use super::panel_binding_families::*;
+use super::{panel_binding_families::*, text_replacement_operations::currency_cents};
 use bevy::ecs::relationship::RelationshipTarget;
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::node_property_binding::{
@@ -12,7 +12,8 @@ use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
 use openzt2_ui::authored_ui_selection_binding::UiSelectedBinding;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
 use openzt2_zoo_state::staff::staff_assignment_types::{
-    StaffAssignmentArea, StaffAssignmentTarget, WorkerDutyAssignments,
+    DisabledTrainerTricks, StaffAssignmentArea, StaffAssignmentRecord, StaffAssignmentTarget,
+    WorkerDutyAssignments,
 };
 use openzt2_zoo_state::staff::staff_employment_types::Employment;
 use openzt2_zoo_state::staff::staff_employment_types::Staff;
@@ -21,6 +22,53 @@ use openzt2_zoo_state::staff::staff_job_types::JobProgress;
 use openzt2_zoo_state::staff::staff_job_types::StaffJob;
 
 use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
+
+pub(crate) fn project_authored_trainer_trick_toggles(
+    selection: openzt2_interface_state::information::entity_selection_types::WorldUiSelection,
+    disabled: Query<&DisabledTrainerTricks, With<Staff>>,
+    enabled: Query<
+        &openzt2_zoo_state::behavior_task_execution_types::running_actions::TrainerEnabledTricks,
+    >,
+    documents: Res<Assets<openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset>>,
+    roots: Query<
+        &openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot,
+    >,
+    mut nodes: Query<(
+        &openzt2_interface_state::ui::authored_ui_action_projection_components::UiStaffActions,
+        &openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner,
+        &mut UiSelected,
+    )>,
+) {
+    use openzt2_game_data::ui_document::action::staff_management::UiStaffAction;
+    let Some(trainer) = selection.subject() else {
+        return;
+    };
+    let Ok(disabled) = disabled.get(trainer) else {
+        return;
+    };
+    let available = enabled.get(trainer).ok();
+    for (actions, owner, mut selected) in &mut nodes {
+        let Some(document) = roots
+            .get(owner.0)
+            .ok()
+            .and_then(|root| documents.get(&root.document))
+        else {
+            continue;
+        };
+        if let Some(trick) = actions
+            .authored_action_records(document)
+            .find_map(|record| match record.action {
+                UiStaffAction::SetTrainerTrickEnabled { trick, .. } => Some(trick),
+                _ => None,
+            })
+        {
+            selected.set_if_neq(UiSelected(
+                !disabled.is_disabled(trick)
+                    && available.is_some_and(|enabled| enabled.0.contains(&trick)),
+            ));
+        }
+    }
+}
 
 /// Updates the selected maintenance worker’s duty checkboxes.
 pub(crate) fn project_maintenance_worker_duties_to_information_panel_controls(
@@ -84,11 +132,13 @@ pub(crate) fn project_live_staff_status_to_visible_information_panels(
             Ref<Employment>,
             Has<StaffAssignmentArea>,
             Has<StaffAssignmentTarget>,
+            Option<&Children>,
             Option<Ref<CurrentJob>>,
         ),
         With<Staff>,
     >,
     jobs: Query<(&StaffJob, Option<&JobProgress>)>,
+    assignment_records: Query<(), With<StaffAssignmentRecord>>,
     mut bools: Query<(&UiVisibleBinding, &mut Visibility), StaffVisibilityField>,
     mut values: Query<(&UiValueBinding, &mut UiValue), StaffField>,
 ) {
@@ -103,7 +153,7 @@ pub(crate) fn project_live_staff_status_to_visible_information_panels(
         if !visible.get() {
             continue;
         }
-        let Ok((employment, assigned_area, assigned_target, current_job)) =
+        let Ok((employment, assigned_area, assigned_target, assignments, current_job)) =
             workers.get(selection.0)
         else {
             continue;
@@ -120,12 +170,14 @@ pub(crate) fn project_live_staff_status_to_visible_information_panels(
                 continue;
             };
             let next = match &binding.0 {
-                UiIntegerPropertyBindingSource::StaffWageCentsPerDay => employment.wage.0,
+                UiIntegerPropertyBindingSource::StaffWageCentsPerDay => {
+                    currency_cents(employment.wage)
+                }
                 UiIntegerPropertyBindingSource::StaffMonthsEmployed => {
                     i64::from(current_month_ordinal.saturating_sub(employment.hired_month_ordinal))
                 }
                 UiIntegerPropertyBindingSource::StaffJobUrgency => {
-                    job.map_or(0, |(job, _)| i64::from(job.urgency))
+                    job.map_or(0, |(job, _)| job.priority.round() as i64)
                 }
                 UiIntegerPropertyBindingSource::StaffJobRemainingTicks => 0,
                 _ => continue,
@@ -141,7 +193,13 @@ pub(crate) fn project_live_staff_status_to_visible_information_panels(
                 continue;
             };
             let shown = match &binding.0 {
-                UiBooleanPropertyBindingSource::StaffAssigned => assigned_area || assigned_target,
+                UiBooleanPropertyBindingSource::StaffAssigned => {
+                    assigned_area
+                        || assigned_target
+                        || assignments.is_some_and(|rows| {
+                            rows.iter().any(|child| assignment_records.contains(child))
+                        })
+                }
                 UiBooleanPropertyBindingSource::StaffWorking => current_job.is_some(),
                 _ => continue,
             };

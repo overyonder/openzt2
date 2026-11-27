@@ -8,7 +8,6 @@ use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
 use openzt2_interface_state::input::input_types::ActionRequest;
 use openzt2_interface_state::input::input_types::ActionSource;
 use openzt2_interface_state::input::input_types::GameAction;
-use openzt2_zoo_state::locomotion::locomotion_types::DirectLocomotion;
 
 use super::first_person_view_angle_integration::integrate_first_person_view_angles_from_look_input_with_authored_speed_and_bounds;
 use super::immersive_mode_input_policy_operations::interaction_action_flags_allow_requested_game_action;
@@ -16,30 +15,10 @@ use super::immersive_mode_input_policy_operations::interaction_action_flags_allo
 use super::immersive_mode_input_policy_operations::request_cancelled_immersive_mode_exit;
 use super::immersive_mode_message_types::ExitImmersiveMode;
 use super::immersive_mode_policy_types::AllowedInteractionActions;
-use super::immersive_mode_state_types::ControlledEntity;
 use crate::immersive_modes::immersive_control_execution_types::FirstPersonViewAngles;
 
-pub(super) fn apply_allowed_navigation_axes_to_directly_controlled_subject(
-    control_axes: &DeviceControlAxes,
-    subject: Option<Entity>,
-    allowed_interaction_actions: Option<&AllowedInteractionActions>,
-    controller_entity: Entity,
-    view_yaw_radians: f32,
-    controlled_subjects: &mut Query<(&ControlledEntity, &mut DirectLocomotion)>,
-) {
-    let Some(subject_entity) = subject else {
-        return;
-    };
-    let Ok((ownership, direct_locomotion)) = controlled_subjects.get_mut(subject_entity) else {
-        return;
-    };
-    if ownership.controller != controller_entity {
-        return;
-    }
-    let axes = allowed_first_person_movement_axes(control_axes.pan, allowed_interaction_actions);
-    direct_locomotion
-        .map_unchanged(|locomotion| &mut locomotion.local_axes)
-        .set_if_neq(Mat2::from_angle(view_yaw_radians) * axes);
+pub(super) fn subject_relative_movement_axes(yaw: f32, movement: Vec2) -> Vec2 {
+    Mat2::from_angle(yaw) * movement
 }
 
 pub(super) fn allowed_first_person_movement_axes(
@@ -75,43 +54,15 @@ pub(super) fn allowed_first_person_movement_axes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::SystemState;
 
     #[test]
     fn forward_movement_follows_subject_relative_camera_yaw() {
-        let mut world = World::new();
-        let controller = world.spawn_empty().id();
-        let subject = world
-            .spawn((
-                ControlledEntity { controller },
-                DirectLocomotion {
-                    local_axes: Vec2::ZERO,
-                },
-            ))
-            .id();
-        let controls = DeviceControlAxes {
-            pan: Vec2::Y,
-            ..DeviceControlAxes::default()
-        };
-        let mut state =
-            SystemState::<Query<(&ControlledEntity, &mut DirectLocomotion)>>::new(&mut world);
         for yaw in [
             0.0,
             std::f32::consts::FRAC_PI_2,
             -std::f32::consts::FRAC_PI_2,
         ] {
-            apply_allowed_navigation_axes_to_directly_controlled_subject(
-                &controls,
-                Some(subject),
-                None,
-                controller,
-                yaw,
-                &mut state.get_mut(&mut world).expect("registered control query"),
-            );
-            let axes = world
-                .get::<DirectLocomotion>(subject)
-                .expect("controlled subject")
-                .local_axes;
+            let axes = subject_relative_movement_axes(yaw, Vec2::Y);
             let movement = Vec3::new(axes.x, 0.0, -axes.y);
             assert!(movement.abs_diff_eq(Quat::from_rotation_y(yaw) * Vec3::NEG_Z, 1.0e-6));
         }

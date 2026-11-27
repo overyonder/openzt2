@@ -96,6 +96,7 @@ pub(crate) fn publish_material_asset_from_evaluated_d3d9_effect(
     Ok(MaterialAsset {
         netimmerse_material_animations: Default::default(),
         netimmerse_texture_binding: None,
+        authored_effect: None,
         evaluated_d3d9_effect,
         _source_dependencies: Box::default(),
         evaluated_technique_pass_material_assets,

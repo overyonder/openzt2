@@ -1,4 +1,6 @@
+use super::stage_voice_acoustics::DIRECT_MIX;
 use super::stage_voice_acoustics::{PendingStageVoice, StageVoiceAcoustics};
+use bevy::audio::output_mix::AudioMixInput;
 use bevy::{
     audio::{AudioPlayer, Volume},
     prelude::*,
@@ -83,7 +85,7 @@ pub(super) fn start_deferred_audio_playback_after_delays_finish(
             if acoustics {
                 entity.insert((PendingStageVoice(clip), playback));
             } else {
-                entity.insert((AudioPlayer(clip), playback));
+                entity.insert((AudioPlayer(clip), playback, AudioMixInput(DIRECT_MIX)));
             }
             entity.remove::<DeferredAudioPlayback>();
         }

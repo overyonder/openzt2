@@ -29,18 +29,27 @@ struct WinningArchiveEntryLocation {
     archive_priority_index: usize, // Position in the enabled priority-ordered archive set
     zip_entry_index: usize,        // Entry index used to read the already-open ZIP archive
     original_archive_path: PathBuf, // Original enclosed path used to classify the source format
+    content_revision: ArchiveEntryContentRevision,
 }
 
 /// An ordered set of enabled Z2F archives exposed as one normalized filesystem.
 /// Later enabled archives have higher priority.
 pub struct ArchiveSet {
     archive_names: Vec<PathBuf>,
-    open_zip_archives: Vec<ZipArchive<positional_archive_reader::PositionalArchiveReader>>,
-    archive_entries_by_normalized_path: Vec<BTreeMap<PathBuf, WinningArchiveEntryLocation>>,
+
     overlay_state: RwLock<EnabledArchiveOverlayState>,
 }
 
+type OpenArchive = ZipArchive<positional_archive_reader::PositionalArchiveReader>;
+
+struct IndexedArchive {
+    source_path: PathBuf,
+    zip: OpenArchive,
+    entries: BTreeMap<PathBuf, WinningArchiveEntryLocation>,
+}
+
 struct EnabledArchiveOverlayState {
+    archives: Vec<IndexedArchive>,
     archive_enabled_states: Vec<bool>,
     winning_entries_by_normalized_path: BTreeMap<PathBuf, WinningArchiveEntryLocation>,
     unique_basename_aliases: BTreeMap<PathBuf, WinningArchiveEntryLocation>,
@@ -66,15 +75,23 @@ pub struct ResolvedAssetChange {
     pub change_kind: ResolvedAssetChangeKind,
 }
 
+/// The uncompressed size and CRC recorded by the ZIP directory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ArchiveEntryContentRevision {
+    pub uncompressed_size: u64,
+    pub crc32: u32,
+}
+
 /// A stable entry selected from this archive set.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ArchiveReadEntry {
     archive_priority_index: usize,
     zip_entry_ordinal: usize,
+    content_revision: ArchiveEntryContentRevision,
 }
 
 /// One winning entry in the current archive overlay.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedArchiveEntry {
     /// Normalized path used to read the winning entry.
     pub normalized_asset_path: PathBuf,
@@ -84,4 +101,16 @@ pub struct ResolvedArchiveEntry {
     pub archive_priority_index: usize,
     /// Original ZIP entry order within that archive.
     pub zip_entry_ordinal: usize,
+    pub content_revision: ArchiveEntryContentRevision,
+}
+
+impl ResolvedArchiveEntry {
+    #[must_use]
+    pub const fn read_entry(&self) -> ArchiveReadEntry {
+        ArchiveReadEntry {
+            archive_priority_index: self.archive_priority_index,
+            zip_entry_ordinal: self.zip_entry_ordinal,
+            content_revision: self.content_revision,
+        }
+    }
 }

@@ -2,6 +2,7 @@ use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 #[require(ResearchDurationOverride)]
@@ -10,17 +11,73 @@ pub struct ResearchProjectAvailability {
     pub available: bool,
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct ResearchAvailabilityUnlockCountdown {
     pub item: AssetId,
-    pub remaining_ticks: u64,
+    pub timer: Timer,
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct ResearchProject {
     pub definition: AssetId,
-    pub elapsed_ticks: u64,
-    pub required_ticks: u64,
+    pub timer: Timer,
+}
+
+impl ResearchProject {
+    pub fn new(definition: AssetId, duration: Duration) -> Self {
+        Self {
+            definition,
+            timer: Timer::new(duration, TimerMode::Once),
+        }
+    }
+
+    pub fn from_saved_ticks(
+        definition: AssetId,
+        step: Duration,
+        required: u64,
+        elapsed: u64,
+    ) -> Self {
+        let mut project = Self::new(definition, fixed_tick_duration(step, required));
+        project
+            .timer
+            .set_elapsed(fixed_tick_duration(step, elapsed.min(required)));
+        project
+    }
+
+    pub fn saved_ticks(&self, step: Duration) -> (u64, u64) {
+        let step = step.as_nanos().max(1);
+        let required = self.timer.duration().as_nanos().div_ceil(step);
+        let elapsed = self.timer.elapsed().as_nanos() / step;
+        (
+            u64::try_from(required).unwrap_or(u64::MAX),
+            u64::try_from(elapsed).unwrap_or(u64::MAX),
+        )
+    }
+}
+
+impl ResearchAvailabilityUnlockCountdown {
+    pub fn from_saved_ticks(item: AssetId, step: Duration, remaining: u64) -> Self {
+        Self {
+            item,
+            timer: Timer::new(fixed_tick_duration(step, remaining), TimerMode::Once),
+        }
+    }
+
+    pub fn remaining_ticks(&self, step: Duration) -> u64 {
+        let remaining = self
+            .timer
+            .remaining()
+            .as_nanos()
+            .div_ceil(step.as_nanos().max(1));
+        u64::try_from(remaining).unwrap_or(u64::MAX)
+    }
+}
+
+pub(super) fn fixed_tick_duration(step: Duration, ticks: u64) -> Duration {
+    let nanos = step.as_nanos().saturating_mul(u128::from(ticks));
+    u64::try_from(nanos / 1_000_000_000).map_or(Duration::MAX, |seconds| {
+        Duration::new(seconds, (nanos % 1_000_000_000) as u32)
+    })
 }
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -77,12 +134,6 @@ pub struct StartResearchProjectRequest {
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResearchProjectCompleted {
     pub root: Entity,
-    pub project: Entity,
-    pub definition: AssetId,
-}
-
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ResearchProjectCompletionReady {
     pub project: Entity,
     pub definition: AssetId,
 }

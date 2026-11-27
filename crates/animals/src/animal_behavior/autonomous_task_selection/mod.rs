@@ -9,7 +9,7 @@ mod world_object_targets;
 
 use super::{
     behavior_candidate_selection::{
-        candidate_requirements_are_satisfied, BehaviorCandidateRanking,
+        candidate_requirements_are_satisfied, BehaviorCandidateRanking, FORCED_BEHAVIOR_TOKEN_SCORE,
     },
     behavior_random_stream_state::BehaviorRandomStream,
     behavior_set_start_request_types::PendingBehaviorSet,
@@ -93,7 +93,13 @@ pub(super) fn refresh_animal_subject_tasks(
     species_index: Res<SpeciesAssets>,
     mut index: ResMut<AnimalSubjectTaskIndex>,
 ) {
-    if !(documents.is_changed() || assets.is_changed() || species_assets.is_changed() || species_index.is_changed() || world_assets.is_changed() || world_definitions.is_changed()) {
+    if !(documents.is_changed()
+        || assets.is_changed()
+        || species_assets.is_changed()
+        || species_index.is_changed()
+        || world_assets.is_changed()
+        || world_definitions.is_changed())
+    {
         return;
     }
     let mut next = AnimalSubjectTaskIndex::default();
@@ -132,21 +138,34 @@ pub(super) fn refresh_animal_subject_tasks(
         documents.create_declaration_index_view(&assets),
         world_definitions.get(&world_assets),
     ) {
-        let self_tasks = view.behavior_tasks().filter(|(_, _, task)| {
-            task_has_typed_subject_and_target(task)
-                && task.targets.iter().any(|target| target.eq_ignore_ascii_case("self"))
-        }).collect::<Vec<_>>();
-        let ambient_types = ["ambient_air", "ambient_ground", "ambient_water"].map(AssetId::from_key);
+        let self_tasks = view
+            .behavior_tasks()
+            .filter(|(_, _, task)| {
+                task_has_typed_subject_and_target(task)
+                    && task
+                        .targets
+                        .iter()
+                        .any(|target| target.eq_ignore_ascii_case("self"))
+            })
+            .collect::<Vec<_>>();
+        let ambient_types =
+            ["ambient_air", "ambient_ground", "ambient_water"].map(AssetId::from_key);
         for object in definitions.objects().filter(|object| {
-            ambient_types.iter().any(|tag| object.behavior_type_identifiers.contains(tag))
+            ambient_types
+                .iter()
+                .any(|tag| object.behavior_type_identifiers.contains(tag))
         }) {
-            let declarations = self_tasks.iter().filter(|(_, _, task)| {
-                candidate_requirements_are_satisfied(
-                    &task.candidate_eligibility_requirements,
-                    |role, required| ambient_role_matches(object, role, required),
-                    |_, _| true,
-                )
-            }).map(|(handle, declaration, _)| ((*handle).clone(), *declaration)).collect();
+            let declarations = self_tasks
+                .iter()
+                .filter(|(_, _, task)| {
+                    candidate_requirements_are_satisfied(
+                        &task.candidate_eligibility_requirements,
+                        |role, required| ambient_role_matches(object, role, required),
+                        |_, _| true,
+                    )
+                })
+                .map(|(handle, declaration, _)| ((*handle).clone(), *declaration))
+                .collect();
             next.ambient.insert(object.id, declarations);
         }
     }
@@ -184,8 +203,8 @@ pub(super) fn select_idle_animal_tasks(
     ),
     animal_targets: animal_targets::AnimalTargetSources,
     biomes: openzt2_zoo_state::animal_behavior::behavior_candidate_selection::BehaviorTargetBiome,
-    token_facts: Query<
-        &openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorTokenFacts,
+    token_contexts: Query<
+        &openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorTokenContext,
     >,
     commands: ParallelCommands,
 ) {
@@ -232,11 +251,14 @@ pub(super) fn select_idle_animal_tasks(
         let held_tokens: Vec<_> = tokens
             .iter_many(token_owners.get(animal).ok().into_iter().flatten().copied())
             .flatten()
-            .filter(|(_, token)| clock.tick >= token.available_at && clock.tick < token.expires_at)
+            .filter(|(_, token)| token.is_available_at(clock.tick))
             .collect();
         let cadence = crate::zoo_day_cadence(definitions);
         let ticks_per_day = cadence.ticks_per_zoo_day();
         let day_fraction = cadence.day_fraction(**clock).unwrap_or_default();
+        let token_is_forced = |object: Option<Entity>| {
+            object.and_then(|object| token_contexts.get(object).ok()).is_some_and(|token| token.force)
+        };
         let held_items = memberships.members_of_container(animal).collect::<Vec<_>>();
         let slot_of = |object| {
             let (_, slot) = memberships.container_for_member(object)?;
@@ -262,7 +284,6 @@ pub(super) fn select_idle_animal_tasks(
             {
                 return slot_of(object) == Some(required);
             }
-            if let Ok(facts) = token_facts.get(object) { return facts.satisfies(fact); }
             if let Ok((_, object_facts)) = animal_targets.animals.get(object) {
                 return species.find_variant_with_species(object_facts.variant_id()).is_some_and(|(_, variant)| {
                     animal_targets.target_satisfies(animal, &facts, object, &object_facts, fact,
@@ -282,7 +303,7 @@ pub(super) fn select_idle_animal_tasks(
                 })
             })
         };
-        for (document, declaration) in declarations.iter() {
+        'declarations: for (document, declaration) in declarations.iter() {
             let declaration = *declaration;
             let Some(task) = assets
                 .get(document)
@@ -340,22 +361,28 @@ pub(super) fn select_idle_animal_tasks(
                         trace!(?animal, task = %task.name, "animal self task qualifiers refused");
                         continue;
                     }
-                    let Some(score) = scoring::score_animal_task(
-                        task,
-                        &facts,
-                        (clock.tick, ticks_per_day),
-                        policy.outside_range_need_value,
-                        0.0,
-                        || None,
-                        &mut random,
-                    ) else {
+                    let force = token_is_forced(object);
+                    let score = if force {
+                        Some(FORCED_BEHAVIOR_TOKEN_SCORE)
+                    } else {
+                        scoring::score_animal_task(
+                            task,
+                            &facts,
+                            (clock.tick, ticks_per_day),
+                            policy.outside_range_need_value,
+                            0.0,
+                            || None,
+                            &mut random,
+                        )
+                    };
+                    let Some(score) = score else {
                         trace!(?animal, task = %task.name, "animal self task has no supported score");
                         continue;
                     };
                     considered_candidates += 1;
                     trace!(?animal, task = %task.name, score, priority = task.priority.unwrap_or_default(),
                     "animal self task scored");
-                    ranking.consider(
+                    ranking.consider_token_candidate(
                         (
                             document,
                             declaration,
@@ -366,7 +393,11 @@ pub(super) fn select_idle_animal_tasks(
                         ),
                         task.priority.unwrap_or_default(),
                         score,
+                        force,
                     );
+                    if force {
+                        break 'declarations;
+                    }
                 }
                 continue;
             }
@@ -426,21 +457,27 @@ pub(super) fn select_idle_animal_tasks(
                     .transform
                     .translation()
                     .distance(target_facts.transform.translation());
-                let Some(score) = scoring::score_animal_task(
-                    task,
-                    &facts,
-                    (clock.tick, ticks_per_day),
-                    policy.outside_range_need_value,
-                    distance,
-                    || biomes.at(facts.world.root, target_facts.transform.translation()),
-                    &mut random,
-                ) else {
+                let force = token_is_forced(object);
+                let score = if force {
+                    Some(FORCED_BEHAVIOR_TOKEN_SCORE)
+                } else {
+                    scoring::score_animal_task(
+                        task,
+                        &facts,
+                        (clock.tick, ticks_per_day),
+                        policy.outside_range_need_value,
+                        distance,
+                        || biomes.at(facts.world.root, target_facts.transform.translation()),
+                        &mut random,
+                    )
+                };
+                let Some(score) = score else {
                     continue;
                 };
                 considered_candidates += 1;
                 debug!(?animal, task = %task.name, ?target, score, distance,
                     "animal task animal target scored");
-                ranking.consider(
+                ranking.consider_token_candidate(
                     (
                         document,
                         declaration,
@@ -451,7 +488,11 @@ pub(super) fn select_idle_animal_tasks(
                     ),
                     task.priority.unwrap_or_default(),
                     score,
+                    force,
                 );
+                if force {
+                    break 'declarations;
+                }
             }
             }
             if task.targets.len() == 1
@@ -550,23 +591,33 @@ pub(super) fn select_idle_animal_tasks(
                     ) {
                         continue;
                     }
-                    let Some(score) = scoring::score_animal_task(
-                        task,
-                        &facts,
-                        (clock.tick, ticks_per_day),
-                        policy.outside_range_need_value,
-                        distance,
-                        || biomes.at(facts.world.root, shore.water),
-                        &mut random,
-                    ) else {
+                    let force = token_is_forced(object);
+                    let score = if force {
+                        Some(FORCED_BEHAVIOR_TOKEN_SCORE)
+                    } else {
+                        scoring::score_animal_task(
+                            task,
+                            &facts,
+                            (clock.tick, ticks_per_day),
+                            policy.outside_range_need_value,
+                            distance,
+                            || biomes.at(facts.world.root, shore.water),
+                            &mut random,
+                        )
+                    };
+                    let Some(score) = score else {
                         continue;
                     };
                     considered_candidates += 1;
-                    ranking.consider(
+                    ranking.consider_token_candidate(
                         (document, declaration, task, shore.region, object, Some(shore)),
                         task.priority.unwrap_or_default(),
                         score,
+                        force,
                     );
+                    if force {
+                        break 'declarations;
+                    }
                     }
                 }
                 continue;
@@ -635,26 +686,36 @@ pub(super) fn select_idle_animal_tasks(
                             electric, "animal fence task refused the fence");
                         continue;
                     }
-                    let Some(score) = scoring::score_animal_task(
-                        task,
-                        &facts,
-                        (clock.tick, ticks_per_day),
-                        policy.outside_range_need_value,
-                        distance,
-                        || biomes.at(facts.world.root, position),
-                        &mut random,
-                    ) else {
+                    let force = token_is_forced(selected_object);
+                    let score = if force {
+                        Some(FORCED_BEHAVIOR_TOKEN_SCORE)
+                    } else {
+                        scoring::score_animal_task(
+                            task,
+                            &facts,
+                            (clock.tick, ticks_per_day),
+                            policy.outside_range_need_value,
+                            distance,
+                            || biomes.at(facts.world.root, position),
+                            &mut random,
+                        )
+                    };
+                    let Some(score) = score else {
                         debug!(?animal, task = %task.name, ?fence,
                             "animal fence task has no score for the fence");
                         continue;
                     };
                     debug!(?animal, task = %task.name, ?fence, score, "animal fence task scored");
                     considered_candidates += 1;
-                    ranking.consider(
+                    ranking.consider_token_candidate(
                         (document, declaration, task, fence, selected_object, None),
                         task.priority.unwrap_or_default(),
                         score,
+                        force,
                     );
+                    if force {
+                        break 'declarations;
+                    }
                     }
                 }
             }
@@ -744,15 +805,21 @@ pub(super) fn select_idle_animal_tasks(
                 if !distance.is_finite() {
                     continue;
                 }
-                let Some(score) = scoring::score_animal_task(
-                    task,
-                    &facts,
-                    (clock.tick, ticks_per_day),
-                    policy.outside_range_need_value,
-                    distance,
-                    || biomes.at(facts.world.root, target_position),
-                    &mut random,
-                ) else {
+                let force = token_is_forced(selected_object);
+                let score = if force {
+                    Some(FORCED_BEHAVIOR_TOKEN_SCORE)
+                } else {
+                    scoring::score_animal_task(
+                        task,
+                        &facts,
+                        (clock.tick, ticks_per_day),
+                        policy.outside_range_need_value,
+                        distance,
+                        || biomes.at(facts.world.root, target_position),
+                        &mut random,
+                    )
+                };
+                let Some(score) = score else {
                     debug!(?animal, task = %task.name, ?candidate,
                         "animal task has no supported score");
                     continue;
@@ -762,11 +829,15 @@ pub(super) fn select_idle_animal_tasks(
                     priority = task.priority.unwrap_or_default(),
                     minimum_score = policy.minimum_score,
                     "animal task target scored");
-                ranking.consider(
+                ranking.consider_token_candidate(
                     (document, declaration, task, target.entity, selected_object, None),
                     task.priority.unwrap_or_default(),
                     score,
+                    force,
                 );
+                if force {
+                    break 'declarations;
+                }
                 }
             }
         }
@@ -1055,10 +1126,14 @@ fn ambient_role_matches(
     required: AssetId,
 ) -> bool {
     match role {
-        BehaviorCandidateRole::Subject => required == object.id || object.behavior_type_identifiers.contains(&required),
-        BehaviorCandidateRole::Target => required == AssetId::from_key("self")
-            || required == object.id
-            || object.behavior_type_identifiers.contains(&required),
+        BehaviorCandidateRole::Subject => {
+            required == object.id || object.behavior_type_identifiers.contains(&required)
+        }
+        BehaviorCandidateRole::Target => {
+            required == AssetId::from_key("self")
+                || required == object.id
+                || object.behavior_type_identifiers.contains(&required)
+        }
         BehaviorCandidateRole::Object => false,
     }
 }

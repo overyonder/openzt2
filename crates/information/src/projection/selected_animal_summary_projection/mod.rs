@@ -10,10 +10,10 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
-    AssetId,
     ui_document::node_property_binding::{
         UiBooleanPropertyBindingSource, UiTextPropertyBindingSource,
     },
+    AssetId,
 };
 use openzt2_interface_state::{
     information::entity_selection_types::{

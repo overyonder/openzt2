@@ -6,7 +6,7 @@ use openzt2_game_data::{
     scene_prefab::{
         PrefabBillboard, PrefabCollider, PrefabColliderSource, PrefabEffect, PrefabEntity,
         PrefabLight, PrefabLod, PrefabMorphAnimation, PrefabRenderable,
-        PrefabRenderableMaterialOverride, PrefabRotationCycle, PrefabTransform,
+        PrefabRenderableMaterialOverride, PrefabRotationCycle, PrefabTerrainDecal, PrefabTransform,
         PrefabTransformAnimation, PrefabVisibilityAnimation, ScenePrefabAssetDependency,
         ScenePrefabAssetDependencyKind, ScenePrefabColliderLayerFlags, ScenePrefabDocument,
         ScenePrefabEntityFlags, ScenePrefabRenderableVisibilityFlags,
@@ -16,7 +16,10 @@ use openzt2_game_data::{
 
 use crate::source_document::path::AssetPath;
 
-use super::native_scene_lowering_error::NativeSceneLoweringError;
+use super::{
+    native_scene_lowering_error::NativeSceneLoweringError,
+    scene_transform_and_collider_math::identity_prefab_transform,
+};
 
 type Result<T> = std::result::Result<T, NativeSceneLoweringError>;
 
@@ -62,7 +65,6 @@ impl ScenePrefabDocumentAssembler {
             billboards: Vec::new(),
             lights: Vec::new(),
             effects: Vec::new(),
-            terrain_decal: None,
             lods: Vec::new(),
             pending_lods: Vec::new(),
             pending_visibility: Vec::new(),
@@ -100,34 +102,13 @@ impl ScenePrefabDocumentAssembler {
         })?;
         let normalized_authored_attachment_key =
             authored_attachment_key.trim().to_ascii_lowercase();
-        self.entities.push(PrefabEntity {
-            stable_id: AssetId::from_key(stable_key),
-            attachment_id: AssetId::from_key(&normalized_authored_attachment_key),
-            model_joint_binding: None,
-            local_render_bound: None,
-            skin_render_bound: None,
+        self.entities.push(prefab_entity(
+            AssetId::from_key(stable_key),
+            AssetId::from_key(&normalized_authored_attachment_key),
             parent,
             transform,
-            children: Vec::new(),
-            flags: if visible {
-                ScenePrefabEntityFlags::VISIBLE | ScenePrefabEntityFlags::ACTIVE
-            } else {
-                ScenePrefabEntityFlags::ACTIVE
-            },
-            rotation_cycles: Vec::new(),
-            transform_animations: Vec::new(),
-            visibility_animation: None,
-            morph_animation: None,
-            render_lod_policy: None,
-            renderables: Vec::new(),
-            animation_start: None,
-            colliders: Vec::new(),
-            lods: Vec::new(),
-            billboards: Vec::new(),
-            lights: Vec::new(),
-            effects: Vec::new(),
-            terrain_decal: None,
-        });
+            visible,
+        ));
         self.entity_keys.push(stable_key.to_owned());
         self.names.insert(stable_key.to_owned(), index);
         if parent != u32::MAX {
@@ -405,5 +386,54 @@ impl ScenePrefabDocumentAssembler {
             rail_camera: None,
             dependencies: self.dependencies.into_values().collect(),
         })
+    }
+}
+
+pub(crate) fn authored_terrain_decal_row(source: &str, decal: PrefabTerrainDecal) -> PrefabEntity {
+    let mut row = prefab_entity(
+        AssetId::from_virtual_path(&format!("{source}#TerrainDecal")),
+        AssetId::default(),
+        u32::MAX,
+        identity_prefab_transform(),
+        true,
+    );
+    row.terrain_decal = Some(decal);
+    row
+}
+
+fn prefab_entity(
+    stable_id: AssetId,
+    attachment_id: AssetId,
+    parent: u32,
+    transform: PrefabTransform,
+    visible: bool,
+) -> PrefabEntity {
+    PrefabEntity {
+        stable_id,
+        attachment_id,
+        model_joint_binding: None,
+        local_render_bound: None,
+        skin_render_bound: None,
+        parent,
+        transform,
+        children: Vec::new(),
+        flags: if visible {
+            ScenePrefabEntityFlags::VISIBLE | ScenePrefabEntityFlags::ACTIVE
+        } else {
+            ScenePrefabEntityFlags::ACTIVE
+        },
+        rotation_cycles: Vec::new(),
+        transform_animations: Vec::new(),
+        visibility_animation: None,
+        morph_animation: None,
+        render_lod_policy: None,
+        renderables: Vec::new(),
+        animation_start: None,
+        colliders: Vec::new(),
+        lods: Vec::new(),
+        billboards: Vec::new(),
+        lights: Vec::new(),
+        effects: Vec::new(),
+        terrain_decal: None,
     }
 }

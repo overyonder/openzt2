@@ -16,30 +16,32 @@ pub(super) type TintedStandardMaterialKey = (AssetId<StandardMaterial>, [u32; 3]
 
 pub(super) fn project_model_tints_onto_standard_materials(
     mut commands: Commands,
-    mut primitives: Query<(
-        Entity,
-        Mut<MeshMaterial3d<StandardMaterial>>,
-        Option<&mut AuthoredModelStandardMaterial>,
-        Option<Ref<InheritedPrimitiveTint>>,
-        Option<Ref<ModelMaterialInputOwner<ModelExpanded>>>,
-        Option<&PrefabMorphOpacity>,
-        Option<&NamedPrefabOpacity>,
+    mut primitives: ParamSet<(
+        Query<(
+            Entity,
+            Mut<MeshMaterial3d<StandardMaterial>>,
+            Option<&mut AuthoredModelStandardMaterial>,
+            Option<Ref<InheritedPrimitiveTint>>,
+            Option<Ref<ModelMaterialInputOwner<ModelExpanded>>>,
+            Option<&PrefabMorphOpacity>,
+            Option<&NamedPrefabOpacity>,
+        )>,
+        Query<
+            Entity,
+            (
+                With<MeshMaterial3d<StandardMaterial>>,
+                Or<(
+                    Changed<MeshMaterial3d<StandardMaterial>>,
+                    AssetChanged<MeshMaterial3d<StandardMaterial>>,
+                    AssetChanged<AuthoredModelStandardMaterial>,
+                    Changed<InheritedPrimitiveTint>,
+                    Changed<ModelMaterialInputOwner<ModelExpanded>>,
+                    Changed<PrefabMorphOpacity>,
+                    Changed<NamedPrefabOpacity>,
+                )>,
+            ),
+        >,
     )>,
-    changed_primitives: Query<
-        Entity,
-        (
-            With<MeshMaterial3d<StandardMaterial>>,
-            Or<(
-                Changed<MeshMaterial3d<StandardMaterial>>,
-                AssetChanged<MeshMaterial3d<StandardMaterial>>,
-                AssetChanged<AuthoredModelStandardMaterial>,
-                Changed<InheritedPrimitiveTint>,
-                Changed<ModelMaterialInputOwner<ModelExpanded>>,
-                Changed<PrefabMorphOpacity>,
-                Changed<NamedPrefabOpacity>,
-            )>,
-        ),
-    >,
     mut removed_tints: RemovedComponents<InheritedPrimitiveTint>,
     mut removed_models: RemovedComponents<ModelMaterialInputOwner<ModelExpanded>>,
     mut removed_morphs: RemovedComponents<PrefabMorphOpacity>,
@@ -62,12 +64,14 @@ pub(super) fn project_model_tints_onto_standard_materials(
             !changed_assets.contains(source) && assets.contains(*output)
         });
     }
-    let changed = changed_primitives
+    let changed = primitives
+        .p1()
         .iter()
         .chain(removed_tints.read().chain(removed_models.read()))
         .chain(removed_morphs.read())
         .chain(removed_named.read())
         .collect::<EntityHashSet>();
+    let mut primitives = primitives.p0();
     let mut primitives = primitives.iter_many_mut(changed).matched();
     while let Some((entity, mut binding, authored, tint, model, morph, named)) =
         primitives.fetch_next()

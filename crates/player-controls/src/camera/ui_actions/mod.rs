@@ -3,6 +3,7 @@
 use openzt2_game_data::ui_document::action::camera::UiCameraAction;
 use openzt2_game_data::ui_document::action::camera::UiCameraPanDirection;
 use openzt2_game_data::ui_document::action::camera::UiCameraSignedAxisDirection;
+use openzt2_game_data::ui_document::action::camera::UiFirstPersonCommand;
 
 use bevy::picking::pointer::{PointerId, PointerLocation};
 use bevy::prelude::*;
@@ -28,9 +29,68 @@ use super::camera_runtime_state_types::CameraDefinition;
 use super::camera_runtime_state_types::CameraMode;
 use super::camera_runtime_state_types::CameraMouseLook;
 use super::camera_runtime_state_types::ZooCamera;
-use crate::camera::camera_execution_types::{CameraIntent, CameraTuning};
+use crate::camera::camera_execution_types::{CameraIntent, CameraTuning, FirstPersonCommands};
+
+pub(super) fn resolve_first_person_command_actions<'a>(
+    actions: impl Iterator<Item = (KeyCode, &'a UiCameraAction)>,
+) -> FirstPersonCommands {
+    let mut held =
+        bevy::platform::collections::HashSet::<(KeyCode, UiFirstPersonCommand)>::default();
+    for (key, action) in actions {
+        if let UiCameraAction::SetFirstPersonCommandState { command, pressed } = *action {
+            if pressed {
+                held.insert((key, command));
+            } else {
+                held.remove(&(key, command));
+            }
+        }
+    }
+    let mut commands = FirstPersonCommands::default();
+    for (_, command) in held {
+        let state = match command {
+            UiFirstPersonCommand::Forward => &mut commands.forward,
+            UiFirstPersonCommand::Backward => &mut commands.backward,
+            UiFirstPersonCommand::TurnLeft => &mut commands.turn_left,
+            UiFirstPersonCommand::TurnRight => &mut commands.turn_right,
+            UiFirstPersonCommand::Up => &mut commands.up,
+            UiFirstPersonCommand::Down => &mut commands.down,
+            UiFirstPersonCommand::Crouch => &mut commands.crouch,
+            UiFirstPersonCommand::FreeMouseLook => &mut commands.free_mouse_look,
+        };
+        *state = true;
+    }
+    commands
+}
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiCameraActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
+
+#[cfg(test)]
+#[test]
+fn releasing_one_first_person_binding_keeps_the_other_key_held() {
+    let press = UiCameraAction::SetFirstPersonCommandState {
+        command: UiFirstPersonCommand::Forward,
+        pressed: true,
+    };
+    let release = UiCameraAction::SetFirstPersonCommandState {
+        command: UiFirstPersonCommand::Forward,
+        pressed: false,
+    };
+    let commands = resolve_first_person_command_actions(
+        [
+            (KeyCode::KeyW, &press),
+            (KeyCode::ArrowUp, &press),
+            (KeyCode::KeyW, &release),
+        ]
+        .into_iter(),
+    );
+    assert!(commands.forward);
+    assert!(
+        !resolve_first_person_command_actions(
+            [(KeyCode::KeyW, &press), (KeyCode::KeyW, &release),].into_iter()
+        )
+        .forward
+    );
+}
 
 pub(super) fn route_camera_ui_actions(
     (mut activations, mut direct_actions): (

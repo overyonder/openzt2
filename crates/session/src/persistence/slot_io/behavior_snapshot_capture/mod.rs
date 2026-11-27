@@ -231,9 +231,9 @@ use super::{
         BehaviorActorRetrySnapshot, BehaviorActorSnapshot, BehaviorDockingSnapshot,
         BehaviorFrameSnapshot, BehaviorNaturalWaterTargetSnapshot,
         BehaviorNavigationCompletionSnapshot, BehaviorOwnedNavigationSnapshot,
-        BehaviorPursuitSnapshot, BehaviorStaffJobSnapshot, BehaviorSynchronizedSnapshot,
-        BehaviorTargetRetrySnapshot, BehaviorTaskActorSnapshot, BehaviorTaskScoreSnapshot,
-        BehaviorTaskSnapshot,
+        BehaviorPursuitSnapshot, BehaviorSnapshotEntityReference, BehaviorStaffJobSnapshot,
+        BehaviorSynchronizedSnapshot, BehaviorTargetRetrySnapshot, BehaviorTaskActorSnapshot,
+        BehaviorTaskScoreSnapshot, BehaviorTaskSnapshot,
     },
 };
 
@@ -355,12 +355,39 @@ fn capture_behavior_actor_snapshots(
                     return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
                 }
                 let routing = job_entity.staff_job_routing.copied().unwrap_or_default();
+                let mut rejected_staff =
+                    job_entity.rejected_staff.map_or_else(Vec::new, |rejected| {
+                        entities
+                            .iter()
+                            .filter(|candidate| {
+                                candidate.is_staff && candidate.world_member == actor.world_member
+                            })
+                            .filter(|candidate| rejected.contains(candidate.entity))
+                            .filter_map(|candidate| {
+                                candidate
+                                    .persistent_id
+                                    .map(|id| BehaviorSnapshotEntityReference::Persistent(id.0))
+                            })
+                            .collect()
+                    });
+                rejected_staff.sort_unstable();
                 Ok(BehaviorStaffJobSnapshot {
                     subject_type: routing.subject_type,
                     recipient: routing.recipient,
                     kind: job.kind,
-                    target: reference(job.target)?,
-                    urgency: job.urgency,
+                    target: job_entity
+                        .staff_job_target
+                        .map(|target| target.0)
+                        .map(reference)
+                        .transpose()?,
+                    persistent_identifier: job_entity.persistent_id.map(|id| id.0),
+                    point: job.point.map(|point| point.to_array()),
+                    urgency: None,
+                    priority: Some(job.priority),
+                    issued_at_seconds: job.issued_at_seconds,
+                    remaining_wait_seconds: job.remaining_wait_seconds,
+                    first_attempt: job.first_attempt,
+                    rejected_staff,
                     token: job.token,
                     document: behavior
                         .document

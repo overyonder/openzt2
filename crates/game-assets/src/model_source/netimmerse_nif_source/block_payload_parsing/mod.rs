@@ -4,8 +4,8 @@ use super::{
     animation_controller_source_parsing::{
         parse_alpha_controller, parse_bone_level_of_detail_controller, parse_controller_sequence,
         parse_geometry_morpher_controller, parse_keyframe_controller, parse_keyframe_data,
-        parse_material_colour_controller, parse_morph_data, parse_text_key_extra_data,
-        parse_uv_controller, parse_visibility_controller,
+        parse_material_colour_controller, parse_morph_data, parse_sequence,
+        parse_text_key_extra_data, parse_uv_controller, parse_visibility_controller,
     },
     block_payload::NetImmerseNifBlockPayload,
     collision_and_skin_source_parsing::{
@@ -47,6 +47,8 @@ pub(super) fn parse_block_payload(
     block_type_name: &str,
 ) -> Result<NetImmerseNifBlockPayload> {
     match block_type_name {
+        "NiSequence" => parse_sequence(source_bytes, cursor, source_path)
+            .map(NetImmerseNifBlockPayload::NiControllerSequence),
         "NiControllerSequence" => {
             parse_controller_sequence(source_bytes, cursor, source_path, encoded_version)
                 .map(NetImmerseNifBlockPayload::NiControllerSequence)

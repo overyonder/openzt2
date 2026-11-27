@@ -6,7 +6,6 @@ mod album_pointer_drag;
 mod album_presentation;
 mod photo_album_storage;
 mod photo_album_types;
-pub use photo_album_types::PhotoAlbumProfileOptions;
 mod photo_caption;
 pub use photo_caption::PhotoCaption;
 mod photo_capture;

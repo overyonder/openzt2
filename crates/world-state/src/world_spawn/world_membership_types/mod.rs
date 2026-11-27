@@ -20,3 +20,5 @@ pub struct WorldMembers(Vec<Entity>);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DefinitionId(pub AssetId);
+
+pub mod target_type_index;

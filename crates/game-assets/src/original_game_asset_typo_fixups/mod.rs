@@ -12,6 +12,13 @@ pub fn corrected_cursor_filename(filename: &str) -> &str {
     }
 }
 
+pub fn corrected_ui_image_path(path: &str) -> Option<&'static str> {
+    // The tutorial's ditch tool names the valley icon. The terrain tools
+    // ship that button image as terra_ditch.dds.
+    path.eq_ignore_ascii_case("ui/shared/terra_valley.dds")
+        .then_some("ui/shared/terra_ditch.dds")
+}
+
 pub fn corrected_audio_clip_path(path: &str) -> Option<&'static str> {
     [
         (

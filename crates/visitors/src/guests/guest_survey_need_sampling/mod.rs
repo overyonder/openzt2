@@ -1,10 +1,11 @@
 use bevy::prelude::*;
+use openzt2_game_assets::world_definitions::timing::TimekeeperEvent;
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::AssetId;
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooSlowTickElapsed;
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooTimekeeperElapsed;
 use openzt2_world_state::world_spawn::{
     world_entity_crating::UncratedWorldEntity, world_membership_types::WorldMember,
 };
@@ -21,12 +22,13 @@ use openzt2_zoo_state::{
         running_actions::RunningBehaviorInstruction, BehaviorTaskExecutionState,
         PendingBehaviorTaskFailure, SynchronizedBehaviorParticipant,
     },
+    shows::running_show_types::GuestShowNeed,
 };
 
 #[allow(clippy::type_complexity)]
 pub(super) fn sample_current_guest_need_observations(
     time: Res<Time<Fixed>>,
-    mut slow_ticks: MessageReader<ZooSlowTickElapsed>,
+    mut slow_ticks: MessageReader<ZooTimekeeperElapsed>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active: Res<WorldDefinitions>,
     mut cadences: Query<&mut GuestSurveyNeedCadence>,
@@ -49,6 +51,7 @@ pub(super) fn sample_current_guest_need_observations(
             &GuestAmusement,
             &GuestSatisfaction,
             Option<&GuestViewingNeed>,
+            Option<&GuestShowNeed>,
             &mut GuestCriticalNeedObservations,
             &mut GuestSurveyExperience,
         ),
@@ -64,7 +67,10 @@ pub(super) fn sample_current_guest_need_observations(
     >,
 ) {
     let mut ticks = bevy::ecs::entity::EntityHashMap::<u32>::default();
-    for event in slow_ticks.read() {
+    for event in slow_ticks
+        .read()
+        .filter(|event| event.event == TimekeeperEvent::Slow)
+    {
         let count = ticks.entry(event.root).or_default();
         *count = count.saturating_add(event.count);
     }
@@ -101,6 +107,7 @@ pub(super) fn sample_current_guest_need_observations(
         amusement,
         happiness,
         viewing,
+        show,
         mut counters,
         mut experience,
     ) in &mut guests
@@ -173,6 +180,13 @@ pub(super) fn sample_current_guest_need_observations(
                 }
             }
         }
+        if let Some((show, threshold)) =
+            show.zip(definition.show_need.and_then(|policy| policy.critical_q16))
+        {
+            if show.source_need().0 > threshold {
+                counters.observe(AssetId::from_key("show"));
+            }
+        }
     }
 }
 
@@ -225,9 +239,16 @@ mod tests {
             },
         })
         .collect();
+        document.guests[0].show_need = Some(openzt2_game_data::world_definitions::guest_simulation_definitions::GuestShowNeedDefinition {
+            initial_q16: [50 << 16; 2],
+            adjustment_q16: 0,
+            trigger_q16: None,
+            cessation_q16: None,
+            critical_q16: Some((50 << 16) - 1),
+        });
         app.init_resource::<Assets<WorldDefinitionAsset>>()
             .insert_resource(Time::<Fixed>::from_hz(10.0))
-            .add_message::<ZooSlowTickElapsed>()
+            .add_message::<ZooTimekeeperElapsed>()
             .add_systems(Update, sample_current_guest_need_observations);
         let handle = app
             .world_mut()
@@ -261,8 +282,11 @@ mod tests {
         let (mut app, root) = fixture();
         for _ in 0..20 {
             app.world_mut().get_mut::<ZooClock>(root).unwrap().tick += 1_000;
-            app.world_mut()
-                .write_message(ZooSlowTickElapsed { root, count: 1 });
+            app.world_mut().write_message(ZooTimekeeperElapsed {
+                root,
+                event: TimekeeperEvent::Slow,
+                count: 1,
+            });
             app.update();
         }
         let survey = app
@@ -323,10 +347,14 @@ mod tests {
                     residual_q16: 0,
                 },
                 GuestSatisfaction(500, 0),
+                GuestShowNeed::from_authored(50.0, None, 60.0, 30.0, || 0),
             ))
             .id();
-        app.world_mut()
-            .write_message(ZooSlowTickElapsed { root, count: 1 });
+        app.world_mut().write_message(ZooTimekeeperElapsed {
+            root,
+            event: TimekeeperEvent::Slow,
+            count: 1,
+        });
         app.update();
         let observations = app
             .world()
@@ -334,12 +362,16 @@ mod tests {
             .unwrap();
         assert_eq!(observations.observations(AssetId::from_key("hunger")), 0.0);
         assert_eq!(observations.observations(AssetId::from_key("thirst")), 1.0);
+        assert_eq!(observations.observations(AssetId::from_key("show")), 1.0);
         assert_eq!(
             app.world().get::<GuestSurveyNeedCadence>(root).unwrap().0,
             5.0
         );
-        app.world_mut()
-            .write_message(ZooSlowTickElapsed { root, count: 1 });
+        app.world_mut().write_message(ZooTimekeeperElapsed {
+            root,
+            event: TimekeeperEvent::Slow,
+            count: 1,
+        });
         app.update();
         assert_eq!(
             app.world()
@@ -351,8 +383,11 @@ mod tests {
         app.world_mut().entity_mut(guest).insert(Frozen);
         let before = *app.world().get::<GuestSurveyNeedCadence>(root).unwrap();
         let experience = *app.world().get::<GuestSurveyExperience>(guest).unwrap();
-        app.world_mut()
-            .write_message(ZooSlowTickElapsed { root, count: 1 });
+        app.world_mut().write_message(ZooTimekeeperElapsed {
+            root,
+            event: TimekeeperEvent::Slow,
+            count: 1,
+        });
         app.update();
         assert_eq!(
             *app.world().get::<GuestSurveyNeedCadence>(root).unwrap(),

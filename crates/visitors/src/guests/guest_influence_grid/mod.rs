@@ -1,10 +1,12 @@
+pub(super) mod projection;
+
 use bevy::prelude::*;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
 
 use super::guest_influence_watcher::{GuestInfluenceCells, GuestInfluenceEntry};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum InfluenceRadiusDropoff {
     Linear,
     Logarithmic,
@@ -12,20 +14,29 @@ pub enum InfluenceRadiusDropoff {
     Constant,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct GuestInfluenceEmission {
     pub value: GuestInfluenceEntry,
     pub radius: f32,
     pub dropoff: InfluenceRadiusDropoff,
 }
 
-#[derive(Component)]
+#[derive(Component, PartialEq)]
 pub struct GuestInfluenceEmitter(pub Vec<GuestInfluenceEmission>);
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy, PartialEq)]
 pub struct GuestInfluenceUpdatePolicy {
     pub delay_seconds: f32,
     pub cells_per_update: u32,
+}
+
+#[derive(Component, Default, PartialEq)]
+pub(super) struct GuestTerrainInfluence(Vec<GuestInfluenceEntry>);
+
+impl GuestTerrainInfluence {
+    pub(super) fn entries(&self) -> &[GuestInfluenceEntry] {
+        &self.0
+    }
 }
 
 #[derive(Message)]
@@ -103,6 +114,7 @@ pub(super) fn refresh_dirty_guest_influence_cells(
         &GuestInfluenceUpdatePolicy,
         &mut GuestInfluenceRegionWork,
         &mut GuestInfluenceCells,
+        Option<&GuestTerrainInfluence>,
     )>,
     emitters: Query<(
         Entity,
@@ -112,7 +124,7 @@ pub(super) fn refresh_dirty_guest_influence_cells(
     )>,
 ) {
     for update in updates.read() {
-        let Ok((grid, policy, mut work, mut cells)) = roots.get_mut(update.root) else {
+        let Ok((grid, policy, mut work, mut cells, terrain)) = roots.get_mut(update.root) else {
             continue;
         };
         work.delay = (work.delay - update.delta_seconds).max(0.0);
@@ -151,7 +163,8 @@ pub(super) fn refresh_dirty_guest_influence_cells(
             let cell = coord.y * grid.width + coord.x;
             let position =
                 grid.origin + (active.next.as_vec2() + Vec2::splat(0.5)) * grid.cell_size_m;
-            let mut values: Vec<GuestInfluenceEntry> = Vec::new();
+            let mut values: Vec<GuestInfluenceEntry> =
+                terrain.map_or_else(Vec::new, |terrain| terrain.0.clone());
             for value in active
                 .emitters
                 .iter()
@@ -166,7 +179,7 @@ pub(super) fn refresh_dirty_guest_influence_cells(
                     values.push(value);
                 }
             }
-            if values.is_empty() {
+            if terrain.map_or_else(|| values.is_empty(), |terrain| terrain.0 == values) {
                 cells.0.remove(&cell);
             } else {
                 cells.0.insert(cell, values);

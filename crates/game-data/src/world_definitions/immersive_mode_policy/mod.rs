@@ -38,6 +38,8 @@ pub struct ImmersiveModePolicy {
     pub guest_ground_cursor: AssetId,
     #[serde(default)]
     pub first_person_movement: Option<FirstPersonModeMovement>,
+    #[serde(default)]
+    pub fossil_piece_rotation_radians: Option<f32>,
 
     pub camera: AssetId,
     pub restore_camera_on_exit: bool,

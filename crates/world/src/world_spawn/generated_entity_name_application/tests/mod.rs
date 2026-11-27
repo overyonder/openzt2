@@ -50,6 +50,8 @@ fn restored_high_water_names_new_entities_once_and_preserves_explicit_names() {
         .insert_resource(active)
         .insert_resource(localization_assets)
         .insert_resource(localization)
+        .add_observer(name_requested_world_entity)
+        .add_observer(assign_pending_world_entity_name)
         .add_systems(
             Update,
             (
@@ -94,6 +96,10 @@ fn restored_high_water_names_new_entities_once_and_preserves_explicit_names() {
             Name::new("Old oak"),
         ))
         .id();
+    app.world_mut()
+        .trigger(GenerateWorldEntityName { entity: explicit });
+    app.world_mut()
+        .trigger(GenerateWorldEntityName { entity: explicit });
     app.update();
     app.update();
     assert_eq!(

@@ -118,13 +118,8 @@ pub(super) fn create_active_object_placement_preview(
         }
         return;
     }
-    let mut retired_stale_preview = false;
     for (entity, ..) in &previews {
-        commands.entity(entity).despawn();
-        retired_stale_preview = true;
-    }
-    if retired_stale_preview {
-        return;
+        commands.entity(entity).try_despawn();
     }
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
@@ -215,9 +210,6 @@ pub(super) struct AnimalPreviewSpecies {
 
 #[derive(Component)]
 pub(super) struct PendingAnimalPreviewAnimation(AnimalPreviewSpecies);
-
-#[derive(Component)]
-pub(super) struct AnimalPreviewInitialRepetition(AnimationPlaybackRepetitionPolicy);
 
 pub(super) fn hydrate_object_placement_preview_prefab_render_tree(
     mut commands: Commands,
@@ -313,6 +305,9 @@ pub(super) fn attach_pending_animal_placement_preview_animations(
             requested_initial_animation_clip_asset_key: variant
                 .initial_animation_clip_asset_key
                 .clone(),
+            requested_initial_repetition_policy: variant
+                .initial_animation_loops
+                .then_some(AnimationPlaybackRepetitionPolicy::Loop),
         };
         if let Some(mut attachment) = attachment {
             *attachment = assets;
@@ -324,13 +319,6 @@ pub(super) fn attach_pending_animal_placement_preview_animations(
             .insert_if_new(AnimationPresentationOwner {
                 gameplay_entity: owner,
             });
-        if variant.initial_animation_loops {
-            commands
-                .entity(entity)
-                .insert(AnimalPreviewInitialRepetition(
-                    AnimationPlaybackRepetitionPolicy::Loop,
-                ));
-        }
         commands.entity(entity).remove::<(
             PendingAnimalPreviewAnimation,
             ModelAnimationAttachmentResolved,
@@ -358,20 +346,6 @@ fn species_variant_for_placement_preview_model(
     species
         .variants(animal.species)
         .find(|variant| matches_model(variant) && variant.life_stage == LifeStage::Adult)
-}
-
-pub(super) fn apply_authored_initial_animal_placement_preview_animation_repetition_policy(
-    added: On<Add<AnimationPlaybackController>>,
-    mut controllers: Query<(
-        &AnimalPreviewInitialRepetition,
-        &mut AnimationPlaybackController,
-    )>,
-) {
-    if let Ok((repetition, controller)) = controllers.get_mut(added.entity) {
-        controller
-            .map_unchanged(|controller| &mut controller.playback_repetition_policy)
-            .set_if_neq(repetition.0);
-    }
 }
 
 pub(super) fn synchronize_object_placement_preview_with_construction_cursor(

@@ -4,7 +4,7 @@ use std::{io, path::Path};
 
 use bevy::asset::{Handle, LoadContext};
 use openzt2_game_data::world_scenario::ScenarioScriptPhase;
-use openzt2_game_data::{AssetId, world_scenario::WorldScenarioDocument};
+use openzt2_game_data::{world_scenario::WorldScenarioDocument, AssetId};
 
 use crate::{
     asset_source::AssetArchives,
@@ -149,13 +149,21 @@ pub(super) async fn load_world_mode_economy_policy(
     archives: &AssetArchives,
     context: &mut LoadContext<'_>,
 ) -> io::Result<Option<WorldModeEconomyPolicy>> {
-    if child(&template.root, "ZTEconomyMgr").is_none()
-        || template.root.attribute("templateFile").is_some()
-    {
+    let Some(reference) = mode_economy_configuration_reference(template) else {
         return Ok(None);
-    }
-    let economy_config = load_template_economy_configuration(template, archives, context).await?;
+    };
+    let economy_config =
+        load_document_reference(archives, context, template.path.as_str(), reference).await?;
     parse_mode_economy(template, &economy_config).map(Some)
+}
+
+fn mode_economy_configuration_reference(template: &OrderedSourceDocument) -> Option<&str> {
+    if template.root.attribute("templateFile").is_some() {
+        return None;
+    }
+    // A prebuilt map contains saved economy components. The selected mode
+    // supplies the manager's configuration separately.
+    child(&template.root, "ZTEconomyMgr")?.attribute("configData")
 }
 
 async fn load_template_economy_configuration(
@@ -236,3 +244,6 @@ async fn load_document_reference(
     parse_blue_fang_source_document(AssetPath::new(&path.to_string_lossy()), &bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
+
+#[cfg(test)]
+mod tests;

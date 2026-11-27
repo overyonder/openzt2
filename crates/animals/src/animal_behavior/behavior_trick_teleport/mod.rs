@@ -64,18 +64,14 @@ pub(super) fn teleport_trick_target(
         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         return;
     };
-    let offset = action
-        .0
-        .position
-        .map(Vec3::from_array)
-        .or_else(|| destination.map(|destination| destination.0));
+    let authored = action.0.position.map(Vec3::from_array);
     let position = if action.0.reset_prop {
         origins
             .get(target)
             .ok()
-            .map(|origin| origin.0 + offset.unwrap_or_default())
+            .map(|origin| origin.0 + authored.unwrap_or_default())
     } else {
-        offset
+        authored.or_else(|| destination.map(|destination| destination.0))
     };
     let Some(position) = position.filter(|position| position.is_finite()) else {
         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);

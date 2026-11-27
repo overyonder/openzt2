@@ -69,7 +69,11 @@ pub(super) fn aim_player_driven_camera(
         else {
             continue;
         };
-        if active.mode == ImmersiveMode::SuperStaff && *mode == CameraMode::FirstPerson {
+        if matches!(
+            active.mode,
+            ImmersiveMode::SuperStaff | ImmersiveMode::FossilSearch
+        ) && *mode == CameraMode::FirstPerson
+        {
             if let (Some(avatar), Some(angles)) = (
                 subject.and_then(|subject| avatars.get(subject.0).ok()),
                 angles,

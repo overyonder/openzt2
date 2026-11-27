@@ -15,6 +15,7 @@ fn number_row(
         id: AssetId::from_key("fooddish"),
         binder: Some(AssetId::from_key("fill")),
         attribute_key: Some(AssetId::from_key("f_foodlevel")),
+        property_binding: None,
         threshold: StaffRequestThresholdValue::Number(25.0),
         threshold_comparison: comparison,
         cancel_threshold: StaffRequestThresholdValue::Number(50.0),

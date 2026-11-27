@@ -7,14 +7,14 @@ use openzt2_zoo_state::{
     animal_behavior::behavior_token_types::{
         BehaviorSelfToken, BehaviorTokenEconomyTerms, EducationDonationBonus,
     },
-    donations::donation_guest_decision_types::GuestDonationMeters,
+    donations::donation_guest_decision_types::{
+        GuestDonationMeters, SpeciesDonationCandidateLifetimes,
+    },
     economy::facility_economy_types::Wallet,
     guests::guest_simulation_types::GuestSatisfaction,
 };
 
-use super::donation_opportunity_observation::{
-    SpeciesDonationCandidateLifetimes, SPENT_SPECIES_SCORE,
-};
+use super::donation_opportunity_observation::SPENT_SPECIES_SCORE;
 
 pub(crate) fn offer_view_donations(
     guest: Entity,
@@ -67,13 +67,24 @@ pub(crate) fn offer_view_donations(
             let Some(animal) = species.find(id) else {
                 continue;
             };
-            let cap = animal.donation.map_or(0.0, |policy| {
-                policy.base_amount_cents as f32 / 100.0 * policy.maximum_species_factor
-            });
+            let candidate = lifetimes.0.get(&id);
+            let Some(terms) = candidate
+                .and_then(|candidate| species.donation_terms(candidate.binder))
+                .or_else(|| species.donation_terms(id))
+            else {
+                continue;
+            };
+            let Some(token) = terms.token else { continue };
+            let cap = terms.base_amount_cents as f32 / 100.0 * terms.maximum_species_factor;
             let amount = donation_amount(*score, policy, need, false);
-            if let Some(amount) = species_offer(amount, cap, lifetimes.0.get(&id).copied(), cash) {
+            if let Some(amount) = species_offer(
+                amount,
+                cap,
+                candidate.map(|candidate| candidate.remaining),
+                cash,
+            ) {
                 issue_token(
-                    AssetId::from_key("t_donation"),
+                    token,
                     AssetId::from_key(&format!("Donate_{}", animal.authored_species_name)),
                     amount,
                     commands,
@@ -95,7 +106,7 @@ pub(crate) fn offer_view_donations(
             }
         }
     }
-    lifetimes.0.retain(|_, lifetime| *lifetime > 0.0);
+    lifetimes.0.retain(|_, candidate| candidate.remaining > 0.0);
 }
 
 fn donation_amount(

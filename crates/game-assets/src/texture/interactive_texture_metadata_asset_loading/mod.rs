@@ -13,6 +13,8 @@ use super::{
     interactive_texture_metadata_asset_and_borrowing_queries::InteractiveTextureMetadataAsset,
 };
 
+pub(crate) const INTERACTIVE_TEXTURE_ASSET_EXTENSION: &str = "z2interactive";
+
 #[derive(Default, TypePath)]
 pub(super) struct InteractiveTextureMetadataAssetLoader;
 
@@ -29,9 +31,19 @@ impl AssetLoader for InteractiveTextureMetadataAssetLoader {
     ) -> Result<Self::Asset, Self::Error> {
         let mut source_bytes = Vec::new();
         reader.read_to_end(&mut source_bytes).await?;
-        let source_path = load_context.path().path().to_string_lossy();
-        let mut decoded_source_image =
-            decode_blue_fang_source_image_for_interaction(&source_path, &source_bytes)?;
+        let asset_path = load_context.path().path();
+        let source_path = if asset_path
+            .extension()
+            .is_some_and(|extension| extension == INTERACTIVE_TEXTURE_ASSET_EXTENSION)
+        {
+            asset_path.with_extension("")
+        } else {
+            asset_path.to_path_buf()
+        };
+        let mut decoded_source_image = decode_blue_fang_source_image_for_interaction(
+            &source_path.to_string_lossy(),
+            &source_bytes,
+        )?;
         let cursor_atlas_image =
             decoded_source_image
                 .cursor_atlas_image
@@ -52,6 +64,6 @@ impl AssetLoader for InteractiveTextureMetadataAssetLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["bmp", "cur", "dds", "jpg", "jpeg", "png", "tga"]
+        &[INTERACTIVE_TEXTURE_ASSET_EXTENSION]
     }
 }

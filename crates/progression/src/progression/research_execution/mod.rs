@@ -1,18 +1,17 @@
 use std::time::Duration;
 
-use super::research_duration_calculation::resolve_research_duration_to_simulation_ticks;
+use super::research_duration_calculation::resolve_research_duration;
 use bevy::ecs::{entity::EntityHashSet, relationship::RelationshipTarget};
 use bevy::prelude::*;
 use openzt2_world_state::game_session_types::WorldSessionMode;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
-use openzt2_game_data::world_definitions::catalogue_and_progression::research_and_unlock_definition_types::ResearchDuration;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::economy::account_transaction_types::Account;
 use openzt2_zoo_state::economy::account_transaction_types::TransactionCompleted;
-use openzt2_zoo_state::economy::account_transaction_types::TransactionKind;
+use openzt2_zoo_state::economy::account_transaction_types::{TransactionDomain, TransactionKind};
 use openzt2_zoo_state::economy::account_transaction_types::TransactionRejected;
 use openzt2_zoo_state::economy::account_transaction_types::TransactionRequest;
 use openzt2_zoo_state::economy::money_types::Money;
@@ -99,8 +98,7 @@ pub(super) fn validate_start_research_requests_and_request_payments(
             ))
             .id();
         transactions.write(TransactionRequest {
-            domain:
-                openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Player,
+            domain: TransactionDomain::Player,
             operation,
             debit: Account::Zoo,
             credit: Account::External,
@@ -128,7 +126,9 @@ pub(super) fn start_paid_research_projects(
 ) {
     let definitions = active_definitions.get(&definitions);
     let mut consumed = EntityHashSet::default();
-    for result in completed.read() {
+    for result in completed.read().filter(|result| {
+        result.domain == TransactionDomain::Player && result.kind == TransactionKind::Research
+    }) {
         let Ok(payment) = pending.get(result.operation) else {
             continue;
         };
@@ -148,31 +148,20 @@ pub(super) fn start_paid_research_projects(
         let Some(definition) = definitions.find_research(availability.item) else {
             continue;
         };
+        let Ok(seed) = seeds.get(member.root) else {
+            continue;
+        };
         let Ok(mut ids) = ids.get_mut(member.root) else {
             continue;
         };
         let Ok(id) = ids.allocate() else {
             continue;
         };
-        let Ok(seed) = seeds.get(member.root) else {
-            continue;
-        };
         let step = time.timestep();
         let required = duration
             .0
             .and_then(|seconds| Duration::try_from_secs_f32(seconds).ok())
-            .unwrap_or_else(|| match definition.duration {
-                ResearchDuration::Ticks(ticks) => tick_duration(step, ticks),
-                ResearchDuration::Nanoseconds(nanoseconds) => Duration::from_nanos(nanoseconds),
-                ResearchDuration::RandomDefault => {
-                    Duration::from_secs(resolve_research_duration_to_simulation_ticks(
-                        definition.duration,
-                        1,
-                        *seed,
-                        id,
-                    ))
-                }
-            })
+            .unwrap_or_else(|| resolve_research_duration(definition.duration, step, *seed, id))
             .max(step);
         commands.entity(payment.item).insert((
             ResearchProject::new(availability.item, required),
@@ -186,7 +175,9 @@ pub(super) fn discard_rejected_research_payment_operations(
     pending: Query<&PendingResearchProjectPayment>,
     mut commands: Commands,
 ) {
-    for result in rejected.read() {
+    for result in rejected.read().filter(|result| {
+        result.domain == TransactionDomain::Player && result.kind == TransactionKind::Research
+    }) {
         if pending.contains(result.operation) {
             commands.entity(result.operation).try_despawn();
         }
@@ -217,13 +208,6 @@ pub(super) fn apply_research_duration_overrides(
 
 #[derive(Component, Default, PartialEq, Eq)]
 pub struct ResearchCompletionBasisPoints(pub i64);
-
-fn tick_duration(step: Duration, ticks: u64) -> Duration {
-    let nanos = step.as_nanos().saturating_mul(u128::from(ticks));
-    u64::try_from(nanos / 1_000_000_000).map_or(Duration::MAX, |seconds| {
-        Duration::new(seconds, (nanos % 1_000_000_000) as u32)
-    })
-}
 
 fn research_progress(timer: &Timer) -> ResearchCompletionBasisPoints {
     let duration = timer.duration().as_nanos();
@@ -337,22 +321,24 @@ pub(super) fn refresh_authored_research_availability(
         ),
         With<WorldRoot>,
     >,
-    mut availability: Query<(
-        &WorldMember,
-        &mut ResearchProjectAvailability,
-        Option<&ResearchAvailabilityUnlockCountdown>,
+    mut availability: ParamSet<(
+        Query<(
+            &WorldMember,
+            &mut ResearchProjectAvailability,
+            Option<&ResearchAvailabilityUnlockCountdown>,
+        )>,
+        Query<
+            Entity,
+            (
+                With<ResearchProjectAvailability>,
+                Or<(
+                    Added<ResearchProjectAvailability>,
+                    Added<ResearchAvailabilityUnlockCountdown>,
+                    Changed<WorldMember>,
+                )>,
+            ),
+        >,
     )>,
-    added: Query<
-        Entity,
-        (
-            With<ResearchProjectAvailability>,
-            Or<(
-                Added<ResearchProjectAvailability>,
-                Added<ResearchAvailabilityUnlockCountdown>,
-                Changed<WorldMember>,
-            )>,
-        ),
-    >,
     mut expired: RemovedComponents<ResearchAvailabilityUnlockCountdown>,
     mut changed: MessageWriter<ProgressionFactChanged>,
 ) {
@@ -366,9 +352,10 @@ pub(super) fn refresh_authored_research_availability(
             dirty.extend(members.into_iter().flat_map(RelationshipTarget::iter));
         }
     }
-    dirty.extend(added.iter().chain(expired.read()));
+    dirty.extend(availability.p1().iter().chain(expired.read()));
     let mut seen = EntityHashSet::default();
     dirty.retain(|&entity| seen.insert(entity));
+    let mut availability = availability.p0();
     let mut dirty = availability.iter_many_mut(dirty);
     while let Some(row) = dirty.fetch_next() {
         let Ok((member, mut availability, countdown)) = row else {

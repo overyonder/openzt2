@@ -68,7 +68,7 @@ impl d3d9_effects::effect_types::D3d9EffectIncludeResolver
     }
 }
 
-pub(super) fn resolve_blue_fang_d3d9_effect_source_path(
+pub(crate) fn resolve_blue_fang_d3d9_effect_source_path(
     authored_effect_reference: &str,
 ) -> PathBuf {
     let normalized_effect_reference = authored_effect_reference

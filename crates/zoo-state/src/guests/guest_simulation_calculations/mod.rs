@@ -71,7 +71,13 @@ pub fn push_memory(
     }
 
     let slot = match replacement {
-        MemoryReplacement::Oldest => usize::from(memories.next) % capacity,
+        MemoryReplacement::Oldest => {
+            let next = usize::from(memories.next) % capacity;
+            (0..capacity)
+                .map(|offset| (next + offset) % capacity)
+                .min_by_key(|&index| memories.entries[index].created_tick)
+                .unwrap_or(next)
+        }
         MemoryReplacement::LowestAbsoluteValue => memories
             .entries
             .iter()

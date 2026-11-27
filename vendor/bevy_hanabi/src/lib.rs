@@ -226,6 +226,19 @@ pub use render::authored_draw::{
 /// Renderer-wide cap on live particles. Existing particles age out when the cap falls.
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EffectParticleBudget(pub Option<u32>);
+
+/// Maximum number of incoming GPU spawn events an effect can receive in a step.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EffectEventCapacity(pub u32);
+
+/// Emitters with the same owner admit particles against one live count limit.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EffectSpawnBudgetGroup {
+    /// Main-world entity owning this group.
+    pub owner: Entity,
+    /// Maximum shared live particle count.
+    pub capacity: u32,
+}
 pub use render::{DebugSettings, LayoutFlags, ShaderCache};
 pub use render_feedback::{ParticleAliveCount, ParticleEffectGpuReady};
 pub use spawn::{

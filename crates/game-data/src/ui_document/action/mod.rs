@@ -86,3 +86,30 @@ pub enum UiActionRecord {
     Simulation(UiSimulationActionRecord),
     Script(script::UiScriptActionRecord),
 }
+
+impl UiActionRecord {
+    pub fn trigger(&self) -> UiTrigger {
+        match self {
+            Self::Presentation(action) => action.trigger,
+            Self::Shell(action) => action.trigger,
+            Self::PopulateCatalogueTypeList(action) => action.trigger,
+            Self::Construction(action) => action.trigger,
+            Self::Camera(action) => action.trigger,
+            Self::Photo(action) => action.trigger,
+            Self::StartResearchForSelectedCatalogueItem(action) => action.trigger,
+            Self::AnimalHealth(action) => action.trigger,
+            Self::Show(action) => action.trigger,
+            Self::Transport(action) => action.trigger,
+            Self::Scenario(action) => action.trigger,
+            Self::AudioSetting(action) => action.trigger,
+            Self::Information(action) => action.trigger,
+            Self::EnterImmersiveMode(action) => action.trigger,
+            Self::Staff(action) => action.trigger,
+            Self::Economy(action) => action.trigger,
+            Self::Animal(action) => action.trigger,
+            Self::Persistence(action) => action.trigger,
+            Self::Simulation(action) => action.trigger,
+            Self::Script(action) => action.trigger,
+        }
+    }
+}

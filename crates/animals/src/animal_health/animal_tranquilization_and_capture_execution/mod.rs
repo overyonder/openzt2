@@ -1,5 +1,8 @@
 use bevy::{ecs::entity::EntityHashMap, platform::collections::HashSet, prelude::*};
-use openzt2_game_data::world_definitions::staff_management::StaffJobKind;
+use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
+use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
+use openzt2_progression::progression::{AwardHistoryOutcome, RecordAwardOutcome};
+use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
 use std::time::Duration;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -57,10 +60,13 @@ pub(super) fn validate_tranquilizer_requests_and_apply_timed_tranquilization(
             Option<&Rampaging>,
             Option<&mut Tranquilized>,
             Option<&mut TranquilizerDoseTimer>,
+            Option<(&WorldMember, &AnimalVariant)>,
         ),
         (With<Animal>, Without<Dead>),
     >,
     time: Res<Time<Fixed>>,
+    species_assets: Option<Res<Assets<SpeciesAsset>>>,
+    species_index: Option<Res<SpeciesAssets>>,
     tranquilizer_sources: Query<
         &GlobalTransform,
         Or<(With<Staff>, With<TranquilizerTool>, With<ZooCamera>)>,
@@ -72,15 +78,20 @@ pub(super) fn validate_tranquilizer_requests_and_apply_timed_tranquilization(
     let Some(tranquilizer_mode) = world_definitions.tranquilizer_mode() else {
         return;
     };
+    let species = species_index
+        .as_deref()
+        .zip(species_assets.as_deref())
+        .and_then(|(index, assets)| index.get(assets));
+    let dinosaur = ["ornithischia", "saurischia", "b_dinosaur"].map(AssetId::from_key);
     let maximum_range_m = tranquilizer_mode.range_cm as f32 / 100.0;
     let maximum_range_squared = maximum_range_m * maximum_range_m;
-    let mut first_doses: Vec<(Entity, Duration, Duration, bool)> = Vec::new();
+    let mut first_doses: Vec<(Entity, Duration, Duration, bool, Option<Entity>)> = Vec::new();
     let mut first_dose_indices: EntityHashMap<usize> = EntityHashMap::default();
     for request in tranquilizer_requests.read() {
         let Ok(source_transform) = tranquilizer_sources.get(request.source) else {
             continue;
         };
-        let Ok((animal_transform, escaped, rampaging, existing_tranquilization, timer)) =
+        let Ok((animal_transform, escaped, rampaging, existing_tranquilization, timer, identity)) =
             animals.get_mut(request.animal)
         else {
             continue;
@@ -108,7 +119,7 @@ pub(super) fn validate_tranquilizer_requests_and_apply_timed_tranquilization(
             .timestep()
             .saturating_mul(tranquilizer_definition.recovery_ticks);
         let existing = existing_tranquilization.is_some();
-        if let Some(mut current) = existing_tranquilization {
+        if let Some(current) = existing_tranquilization {
             current
                 .map_unchanged(|current| &mut current.recovery_duration)
                 .set_if_neq(recovery_duration);
@@ -119,20 +130,43 @@ pub(super) fn validate_tranquilizer_requests_and_apply_timed_tranquilization(
             }
         } else {
             let index = *first_dose_indices.entry(request.animal).or_insert_with(|| {
-                first_doses.push((request.animal, dose, recovery_duration, existing));
+                let award_root = identity.and_then(|(member, variant)| {
+                    (!existing
+                        && species
+                            .and_then(|species| species.find_variant(variant.0))
+                            .is_some_and(|variant| {
+                                dinosaur.iter().any(|tag| {
+                                    variant.behavior_subject_type_identifiers.contains(tag)
+                                })
+                            }))
+                    .then_some(member.root)
+                });
+                first_doses.push((
+                    request.animal,
+                    dose,
+                    recovery_duration,
+                    existing,
+                    award_root,
+                ));
                 first_doses.len() - 1
             });
-            let (_, remaining, recovery, _) = &mut first_doses[index];
+            let (_, remaining, recovery, ..) = &mut first_doses[index];
             *remaining = (*remaining).max(dose);
             *recovery = recovery_duration;
         }
     }
-    for (animal, dose, recovery_duration, already_tranquilized) in first_doses {
+    for (animal, dose, recovery_duration, already_tranquilized, award_root) in first_doses {
         let mut animal = commands.entity(animal);
         if !already_tranquilized {
             animal.insert(Tranquilized { recovery_duration });
         }
         animal.insert(TranquilizerDoseTimer(Timer::new(dose, TimerMode::Once)));
+        if let Some(root) = award_root {
+            commands.write_message(RecordAwardOutcome {
+                root,
+                outcome: AwardHistoryOutcome::DinosaurTranquilized,
+            });
+        }
     }
 }
 
@@ -165,7 +199,7 @@ pub(super) fn validate_staff_capture_requests_and_clear_animal_emergency_state(
                 .is_ok_and(|current| current.job() == request.job)
             || !jobs.get(request.job).is_ok_and(|(job, claim, behavior)| {
                 job.kind == Some(StaffJobKind::Capture)
-                    && job.target == request.animal
+                    && job.target == Some(request.animal)
                     && claim.staff == request.staff
                     && behavior.execution_id == Some(request.execution_id)
             })

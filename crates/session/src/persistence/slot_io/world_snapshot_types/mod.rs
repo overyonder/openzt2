@@ -11,6 +11,7 @@ pub(super) struct WorldSnapshotRecord {
     pub map_definition_identifier: AssetId,
     pub starting_point_definition_identifier: AssetId,
     pub session_mode: WorldSessionMode,
+    pub mode_document_path: Option<String>,
     pub last_saved_unix_timestamp_milliseconds: u64,
     pub display_name: String,
     pub source_document: Option<openzt2_game_assets::world_scenario::world_scenario_document_source::WorldScenarioDocumentSource>,

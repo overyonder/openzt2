@@ -19,8 +19,8 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
-    AssetId, localization::LocalizationFormatArgument,
-    ui_document::widget_live_collection::UiWidgetLiveCollectionSource,
+    localization::LocalizationFormatArgument,
+    ui_document::widget_live_collection::UiWidgetLiveCollectionSource, AssetId,
 };
 use openzt2_interface_state::ui::{
     authored_reusable_list_and_table_runtime_types::{
@@ -34,7 +34,6 @@ use openzt2_world_state::world_spawn::{
 };
 use openzt2_zoo_state::{
     donations::donation_payment_types::{DonationTotal, ZooDonationSummary},
-    economy::currency_formatting::write_whole_dollar_currency_with_thousands_separators,
     shows::show_stage_types::{ShowName, ShowStage},
     transport_tours::transport_circuit_types::TransportCircuit,
 };
@@ -336,7 +335,7 @@ pub(super) fn project_finance_donation_rows(
                         if let Some(mut numeric) = numeric {
                             numeric.set_if_neq(UiValue(value));
                         }
-                        write_whole_dollar_currency_with_thousands_separators(&mut rendered, value);
+                        let _ = locale.write_localized_currency_amount(value, false, &mut rendered);
                         let format = AssetId::from_key(if value < 0 {
                             "zoostatus:negformat"
                         } else {

@@ -2,7 +2,6 @@
 //! their own, scored by their authored needs, as animals and guests do.
 
 use openzt2_zoo_state::behavior_task_execution_types::allocate_behavior_execution_id;
-use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 
 use bevy::prelude::*;
 use openzt2_game_data::{
@@ -15,13 +14,9 @@ use openzt2_game_data::{
             BehaviorSpatialEligibilityFact,
         },
     },
-    world_definitions::staff_management::StaffRoleDefinition,
+    world_definitions::staff_management::StaffRoleKind,
     AssetId,
 };
-use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    RunBehaviorExitTankGate, RunningBehaviorInstruction,
-};
-use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
 
 use openzt2_game_assets::behavior::behavior_asset_types::{
     BehaviorDocumentAsset, LoadedBehaviorDocumentCollection,
@@ -36,25 +31,21 @@ use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::{
 };
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
 use openzt2_zoo_state::animal_behavior::behavior_token_types::{
-    BehaviorSelfToken, ClaimedBehaviorSelfToken,
+    BehaviorSelfToken, BehaviorTokenContext, ClaimedBehaviorSelfToken,
 };
 use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRejections;
 use openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore;
-use openzt2_zoo_state::aquatic::aquatic_simulation_types::Tank;
 use openzt2_zoo_state::behavior_task_execution_types::{
     abandon_behavior_task_for_reconsideration,
     BehaviorTaskExecutionPhase,
-    BehaviorTaskGeneration, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+    BehaviorTaskGeneration, BehaviorTaskExecutionState,
     SynchronizedBehaviorParticipant,
 };
-use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
-use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
-use openzt2_zoo_state::locomotion::locomotion_types::{
-    Arrived, Destination, LocomotionMode, NavAgent, NavigateTo, NavigationFailed,
-    NavigationRequestGeneration,
-};
+use openzt2_zoo_state::locomotion::locomotion_types::{Destination, LocomotionMode, NavAgent};
 use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
-use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
+
+use super::staff_cognitive_state::{FossilStaffSensor, StaffNeeds};
+use openzt2_zoo_state::extinct_animals::fossil_recovery_types::FossilSiteKind;
 
 use super::{
     staff_employment_types::{Staff, StaffRole},
@@ -66,6 +57,7 @@ use super::{
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct IdleStaffTask {
     execution_id: u64,
+    fossil_site: Option<Entity>,
 }
 
 pub(crate) fn start_authored_idle_staff_tasks(
@@ -78,6 +70,9 @@ pub(crate) fn start_authored_idle_staff_tasks(
     target_retry_delays: BehaviorTargetRejections,
     surfaces: DrySurfaceEligibility,
     biomes: BehaviorTargetBiome,
+    clocks: Query<&ZooClock>,
+    puzzle_sites: Query<(Entity, &FossilSiteKind, &WorldMember)>,
+    running_staff: Query<&BehaviorTaskExecutionState, With<Staff>>,
     world_objects: Query<(Entity, &GlobalTransform, &DefinitionId, &WorldMember)>,
     mut idle: Query<
         (
@@ -87,6 +82,8 @@ pub(crate) fn start_authored_idle_staff_tasks(
             &WorldMember,
             Option<&LocomotionMode>,
             &mut BehaviorRandomStream,
+            &StaffNeeds,
+            &mut FossilStaffSensor,
         ),
         (
             With<Staff>,
@@ -110,10 +107,52 @@ pub(crate) fn start_authored_idle_staff_tasks(
     let Some(policy) = catalogue.behavior_selection_policy() else {
         return;
     };
-    for (staff, role, transform, world, mode, mut random) in &mut idle {
+    if !policy.enabled {
+        return;
+    }
+    let find_reservation = AssetId::from_key("find");
+    let fossil_type = AssetId::from_key("fossilsite");
+    let mut reserved_puzzles: bevy::ecs::entity::EntityHashSet = running_staff
+        .iter()
+        .filter_map(|task| {
+            let declaration = assets
+                .get(&task.document)?
+                .behavior_task_at_index(task.declaration)?;
+            if declaration.reservation_tag == Some(find_reservation) {
+                task.target()
+            } else {
+                None
+            }
+        })
+        .collect();
+    for (staff, role, transform, world, mode, mut random, needs, mut fossil_sensor) in &mut idle {
         let Some(role) = catalogue.find_staff(role.0) else {
             continue;
         };
+        let active_sites: Vec<Entity> = if role.role == StaffRoleKind::Paleontologist {
+            puzzle_sites
+                .iter()
+                .filter_map(|(site, kind, member)| {
+                    (*kind == FossilSiteKind::Puzzle && member.root == world.root).then_some(site)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let scan_puzzles = role.role == StaffRoleKind::Paleontologist
+            && clocks
+                .get(world.root)
+                .ok()
+                .zip(catalogue.simulation_timestep())
+                .zip(catalogue.staff_manager())
+                .is_some_and(|((clock, step), policy)| {
+                    fossil_sensor.scan(
+                        clock.tick as f64 * step.as_secs_f64(),
+                        f64::from(policy.paleontologist_search_delay_seconds),
+                        &active_sites,
+                        |site| puzzle_sites.contains(site),
+                    )
+                });
         let position = transform.translation();
         let subject_matches = |required| staff_subject_matches(catalogue, role, required);
         let mut ranking = BehaviorCandidateRanking::new(policy.minimum_score);
@@ -131,6 +170,16 @@ pub(crate) fn start_authored_idle_staff_tasks(
                         std::slice::from_ref(requirement),
                         |_, required| subject_matches(required),
                         |_, fact| {
+                            if fact.fact_input
+                                == BehaviorEligibilityFactInput::State(
+                                    BehaviorEntityStateEligibilityFact::Teleportable,
+                                )
+                            {
+                                return fact.expected_value
+                                    == BehaviorEligibilityFactValue::Q16(
+                                        i32::from(fossil_sensor.teleport) << 16,
+                                    );
+                            }
                             satisfies_idle_staff_fact(
                                 world.root,
                                 fact,
@@ -145,9 +194,39 @@ pub(crate) fn start_authored_idle_staff_tasks(
             if !subject_can_start {
                 continue;
             }
-            for target in idle_task_targets(task, staff, world, &world_objects, |object| {
-                catalogue.find_object(object)
-            }) {
+            let find_fossil = task.reservation_tag == Some(find_reservation)
+                && task
+                    .targets
+                    .iter()
+                    .any(|target| AssetId::from_key(target) == fossil_type);
+            let mut targets = if find_fossil {
+                if !scan_puzzles {
+                    continue;
+                }
+                active_sites
+                    .iter()
+                    .copied()
+                    .filter(|&site| {
+                        fossil_sensor.accepts(site) && !reserved_puzzles.contains(&site)
+                    })
+                    .filter_map(|site| {
+                        world_objects
+                            .get(site)
+                            .ok()
+                            .map(|(_, pose, ..)| Some((site, pose.translation())))
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                idle_task_targets(task, staff, world, &world_objects, |object| {
+                    catalogue.find_object(object)
+                })
+            };
+            if !find_fossil {
+                targets.retain(|target| {
+                    target.is_none_or(|(entity, _)| !puzzle_sites.contains(entity))
+                });
+            }
+            for target in targets {
                 if target.is_some_and(|(target, _)| target_retry_delays.rejects(staff, target)) {
                     continue;
                 }
@@ -194,10 +273,10 @@ pub(crate) fn start_authored_idle_staff_tasks(
                 let Some(score) = score_supported_behavior_task(
                     task,
                     0.0,
-                    position.xz().distance(target_position.xz()),
+                    position.distance(target_position),
                     || biomes.at(world.root, target_position),
-                    |attribute| staff_need(role, attribute),
-                    |value| value.sample_q16(|_| 0),
+                    |attribute| needs.source_need(attribute),
+                    |value| value.sample_q16(|upper| random.range_u32(upper).unwrap_or(0)),
                 ) else {
                     continue;
                 };
@@ -207,17 +286,22 @@ pub(crate) fn start_authored_idle_staff_tasks(
                         declaration,
                         task,
                         target.map(|(object, _)| object),
+                        find_fossil,
                     ),
                     task.priority.unwrap_or_default(),
                     score,
                 );
             }
         }
-        let Some(((document, declaration, task, target), score)) =
+        let Some(((document, declaration, task, target, find_fossil), score)) =
             ranking.finish(|| random.next_u32())
         else {
             continue;
         };
+        let fossil_site = target.filter(|_| find_fossil);
+        if let Some(site) = fossil_site {
+            reserved_puzzles.insert(site);
+        }
         let execution_id = allocate_behavior_execution_id(
             staff,
             behavior_generations.get_mut(staff).ok(),
@@ -244,7 +328,10 @@ pub(crate) fn start_authored_idle_staff_tasks(
                 interaction_slot: None,
                 depth: 0,
             },
-            IdleStaffTask { execution_id },
+            IdleStaffTask {
+                execution_id,
+                fossil_site,
+            },
         ));
     }
 }
@@ -285,19 +372,6 @@ fn idle_task_targets<'a>(
         })
         .map(|(entity, transform, _, _)| Some((entity, transform.translation())))
         .collect()
-}
-
-/// An authored need, deprived by its value and triggered above its threshold.
-fn staff_need(role: &StaffRoleDefinition, attribute: AssetId) -> Option<(i32, bool)> {
-    role.state_variables
-        .iter()
-        .find(|variable| variable.name == attribute)
-        .map(|variable| {
-            (
-                (f64::from(variable.value) * 65_536.0).round() as i32,
-                variable.value > variable.trigger_threshold,
-            )
-        })
 }
 
 /// Qualifiers an idle employee's own tasks use. Any other qualifier refuses
@@ -353,6 +427,25 @@ fn satisfies_idle_staff_fact(
     }
 }
 
+pub(super) fn collect_completed_staff_fossil_sites(
+    mut completed: MessageReader<
+        openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished,
+    >,
+    mut staff: Query<(&IdleStaffTask, &mut FossilStaffSensor)>,
+    sites: Query<(), With<FossilSiteKind>>,
+) {
+    for completion in completed.read() {
+        let Ok((task, mut sensor)) = staff.get_mut(completion.actor) else {
+            continue;
+        };
+        if task.execution_id == completion.execution_id {
+            if let Some(site) = task.fossil_site.filter(|&site| sites.contains(site)) {
+                sensor.collect(site);
+            }
+        }
+    }
+}
+
 /// A claimed job replaces the employee's idle task at once, without its
 /// failure branch, so the job's own task starts next.
 pub(crate) fn interrupt_idle_staff_tasks_for_claimed_jobs(
@@ -379,208 +472,6 @@ pub(crate) fn interrupt_idle_staff_tasks_for_claimed_jobs(
     }
 }
 
-#[derive(Component)]
-pub(super) struct PendingStaffExitTankGate {
-    instruction:
-        openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorInstructionId,
-    request_id: u64,
-}
-
-/// Chooses an outside endpoint across an actual tank gate. The navigation
-/// owner approaches and traverses that gate before completing this request.
-pub(super) fn start_staff_exit_tank_gate_actions(
-    activation: In<Option<Entity>>,
-    mut commands: Commands,
-    roots: Query<(&ZooClock, &HabitatIndex, &TopologyGrid)>,
-    tanks: Query<(), With<Tank>>,
-    boundaries: HabitatBoundaryQueries,
-    gates: Query<(
-        openzt2_zoo_state::topology::topology_graph_types::FenceSegment,
-        &openzt2_zoo_state::topology::gate_operation_types::Gate,
-    )>,
-    nodes: Query<&openzt2_zoo_state::topology::topology_graph_types::TopologyNode>,
-    surfaces: DrySurfaceEligibility,
-    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
-    mut requests: MessageWriter<NavigateTo>,
-    mut actors: Query<
-        (
-            Entity,
-            &GlobalTransform,
-            &BehaviorTaskExecutionState,
-            &WorldMember,
-            &RunningBehaviorInstruction,
-            Option<&mut PendingStaffExitTankGate>,
-        ),
-        (
-            With<RunBehaviorExitTankGate>,
-            Without<PendingBehaviorTaskFailure>,
-        ),
-    >,
-) {
-    for (actor, transform, task, member, instruction, exiting) in
-        behavior_action_actors(&mut actors, activation.0)
-    {
-        let Ok((clock, habitats, topology)) = roots.get(member.root) else {
-            continue;
-        };
-        if !instruction.is_current(task)
-            || (activation.0.is_none() && !instruction.can_update_after_activation(clock.tick))
-            || task.next_action_tick > clock.tick
-            || exiting
-                .as_ref()
-                .is_some_and(|exiting| exiting.instruction == instruction.id())
-        {
-            continue;
-        }
-        let tank =
-            locate_habitat_at_world_position(habitats, transform.translation().xz(), *topology)
-                .filter(|habitat| tanks.contains(*habitat));
-        let Some(tank) = tank else {
-            instruction.complete(actor, clock.tick, &mut commands);
-            continue;
-        };
-        let endpoint = boundaries
-            .fences(tank)
-            .filter_map(|gate| {
-                let (edge, gate) = gates.get(gate).ok()?;
-                if gate.locked {
-                    return None;
-                }
-                let a = topology.cell_translation(nodes.get(edge.a()).ok()?.cell);
-                let b = topology.cell_translation(nodes.get(edge.b()).ok()?.cell);
-                let middle = (a + b) * 0.5;
-                let tangent = (b - a).xz().normalize_or_zero();
-                let normal = Vec2::new(-tangent.y, tangent.x) * topology.spacing_m;
-                [-1.0, 1.0].into_iter().find_map(|sign| {
-                    let mut point = middle + Vec3::new(normal.x, 0.0, normal.y) * sign;
-                    if locate_habitat_at_world_position(habitats, point.xz(), *topology)
-                        == Some(tank)
-                    {
-                        return None;
-                    }
-                    point.y = surfaces
-                        .water_surface_height(member.root, point.xz())
-                        .or_else(|| surfaces.ground_height(member.root, point.xz()))?;
-                    Some(point)
-                })
-            })
-            .min_by(|left, right| {
-                left.distance_squared(transform.translation())
-                    .total_cmp(&right.distance_squared(transform.translation()))
-            });
-        let Some(destination) = endpoint else {
-            openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            continue;
-        };
-        let Ok(mut generation) = navigation_generations.get_mut(actor) else {
-            continue;
-        };
-        let request_id = generation.advance();
-        requests.write(NavigateTo {
-            entity: actor,
-            request_id,
-            destination,
-            arrival_radius_m: 0.1,
-        });
-        let pending = PendingStaffExitTankGate {
-            instruction: instruction.id(),
-            request_id,
-        };
-        if let Some(mut exiting) = exiting {
-            *exiting = pending;
-        } else {
-            commands.entity(actor).insert(pending);
-        }
-    }
-}
-
-pub(super) fn retire_inactive_staff_tank_exits(
-    mut commands: Commands,
-    pending: Query<(
-        Entity,
-        &PendingStaffExitTankGate,
-        Option<(
-            &BehaviorTaskExecutionState,
-            &RunningBehaviorInstruction,
-            &RunBehaviorExitTankGate,
-        )>,
-        Has<PendingBehaviorTaskFailure>,
-    )>,
-) {
-    for (actor, exit, instruction, failed) in &pending {
-        if failed
-            || instruction.is_none_or(|(task, instruction, _)| {
-                exit.instruction != instruction.id() || !instruction.is_current(task)
-            })
-        {
-            commands.entity(actor).remove::<PendingStaffExitTankGate>();
-        }
-    }
-}
-
-pub(super) fn settle_staff_tank_exit_navigation(
-    mut commands: Commands,
-    mut arrivals: MessageReader<Arrived>,
-    mut failures: MessageReader<NavigationFailed>,
-    roots: Query<(&ZooClock, &HabitatIndex, &TopologyGrid)>,
-    tanks: Query<(), With<Tank>>,
-    pending: Query<
-        (
-            &PendingStaffExitTankGate,
-            &BehaviorTaskExecutionState,
-            &RunningBehaviorInstruction,
-            &GlobalTransform,
-            &WorldMember,
-        ),
-        (
-            With<RunBehaviorExitTankGate>,
-            Without<PendingBehaviorTaskFailure>,
-        ),
-    >,
-) {
-    let mut settled = bevy::ecs::entity::EntityHashSet::default();
-    let outcomes = failures
-        .read()
-        .map(|event| (event.entity, event.request_id, true))
-        .chain(
-            arrivals
-                .read()
-                .map(|event| (event.entity, event.request_id, false)),
-        );
-    for (actor, request_id, failed) in outcomes {
-        let Ok((exit, task, instruction, transform, member)) = pending.get(actor) else {
-            continue;
-        };
-        if exit.request_id != request_id
-            || exit.instruction != instruction.id()
-            || !instruction.is_current(task)
-            || settled.contains(&actor)
-        {
-            continue;
-        }
-        let Ok((clock, habitats, topology)) = roots.get(member.root) else {
-            continue;
-        };
-        if !instruction.can_update_after_activation(clock.tick)
-            || task.next_action_tick > clock.tick
-        {
-            continue;
-        }
-        let inside_a_tank =
-            locate_habitat_at_world_position(habitats, transform.translation().xz(), *topology)
-                .is_some_and(|habitat| tanks.contains(habitat));
-        if failed || !inside_a_tank {
-            settled.insert(actor);
-            commands.entity(actor).remove::<PendingStaffExitTankGate>();
-            if failed {
-                openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            } else {
-                instruction.complete(actor, clock.tick, &mut commands);
-            }
-        }
-    }
-}
-
 /// Starts a staff task its delivered token calls for, such as `Scared_Staff`
 /// when an attacking animal gives nearby staff `t_Attack`. The token's payload,
 /// the animal, is the `fromToken` target.
@@ -597,7 +488,16 @@ pub(crate) fn start_staff_token_tasks(
     mut behavior_generations: Query<&mut BehaviorTaskGeneration>,
     surfaces: DrySurfaceEligibility,
     token_tasks: Res<crate::staff::staff_job_eligibility::StaffTasksByRequestToken>,
-    tokens: Query<(Entity, &BehaviorSelfToken, &ChildOf), Without<ClaimedBehaviorSelfToken>>,
+    tokens: Query<
+        (
+            Entity,
+            &BehaviorSelfToken,
+            &ChildOf,
+            Option<&BehaviorTokenContext>,
+        ),
+        Without<ClaimedBehaviorSelfToken>,
+    >,
+    targets: Query<(&WorldMember, &GlobalTransform, Option<&LocomotionMode>)>,
     staff: Query<
         (
             &StaffRole,
@@ -624,26 +524,37 @@ pub(crate) fn start_staff_token_tasks(
         return;
     };
     let mut started = Vec::new();
-    for (token_entity, token, holder) in &tokens {
+    for (token_entity, token, holder, context) in &tokens {
         let member = holder.parent();
-        let (Ok((role, transform, mode, world)), Some(payload)) =
-            (staff.get(member), token.payload)
-        else {
+        let Ok((role, transform, mode, world)) = staff.get(member) else {
             continue;
         };
         let Ok(clock) = clocks.get(world.root) else {
             continue;
         };
-        if clock.tick < token.available_at
-            || clock.tick >= token.expires_at
-            || started.contains(&member)
-        {
+        if !token.is_available_at(clock.tick) || started.contains(&member) {
             continue;
         }
         let Some(role) = catalogue.find_staff(role.0) else {
             continue;
         };
         let position = transform.translation();
+        let (target_position, target_swimming) = if let Some(payload) = token.payload {
+            let Ok((target_world, target_transform, target_mode)) = targets.get(payload) else {
+                continue;
+            };
+            if target_world.root != world.root {
+                continue;
+            }
+            (
+                target_transform.translation(),
+                target_mode == Some(&LocomotionMode::Swim),
+            )
+        } else if let Some(point) = context.and_then(|context| context.point) {
+            (point, false)
+        } else {
+            continue;
+        };
         let mut chosen = None;
         for (document, declaration, task) in token_tasks
             .candidates(token.name)
@@ -674,15 +585,21 @@ pub(crate) fn start_staff_token_tasks(
                     BehaviorCandidateRole::Object => required == token.name,
                 },
                 |candidate_role, fact| {
-                    candidate_role == BehaviorCandidateRole::Subject
-                        && satisfies_idle_staff_fact(
-                            world.root,
-                            fact,
-                            position,
-                            position,
-                            mode == Some(&LocomotionMode::Swim),
-                            &surfaces,
-                        )
+                    let (fact_position, swimming) = match candidate_role {
+                        BehaviorCandidateRole::Subject => {
+                            (position, mode == Some(&LocomotionMode::Swim))
+                        }
+                        BehaviorCandidateRole::Target => (target_position, target_swimming),
+                        BehaviorCandidateRole::Object => return false,
+                    };
+                    satisfies_idle_staff_fact(
+                        world.root,
+                        fact,
+                        fact_position,
+                        position,
+                        swimming,
+                        &surfaces,
+                    )
                 },
             );
             let priority = task.priority.unwrap_or_default();
@@ -704,7 +621,7 @@ pub(crate) fn start_staff_token_tasks(
             behavior_generations.get_mut(member).ok(),
             &mut commands,
         );
-        debug!(staff = ?member, task = %task.name, animal = ?payload, "staff started a token task");
+        debug!(staff = ?member, task = %task.name, target = ?token.payload, "staff started a token task");
         commands
             .entity(token_entity)
             .insert(ClaimedBehaviorSelfToken { execution_id });
@@ -713,12 +630,13 @@ pub(crate) fn start_staff_token_tasks(
                 execution_id,
                 template_score: Some(task.priority.unwrap_or_default()),
                 linked_score: None,
-                selected_candidate_score: None,
+                selected_candidate_score: context
+                    .and_then(|context| context.force.then_some(1_000_000_000.0)),
             },
             BehaviorTaskExecutionState {
                 execution_id,
                 program: task.id,
-                target: Some(payload),
+                target: token.payload,
                 document,
                 declaration,
                 phase: BehaviorTaskExecutionPhase::Execution,

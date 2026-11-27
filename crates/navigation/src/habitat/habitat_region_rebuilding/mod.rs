@@ -1,5 +1,5 @@
 use bevy::{
-    ecs::entity::EntityHashSet,
+    ecs::{entity::EntityHashSet, system::SystemParam},
     prelude::*,
     tasks::{ComputeTaskPool, TaskPool},
 };
@@ -26,13 +26,76 @@ use crate::habitat::habitat_region_derivation::{
 use crate::habitat::habitat_terrain_summary_calculation::calculate_habitat_terrain_summary_from_topology_cells;
 use crate::habitat::habitat_terrain_summary_refresh::derive_dominant_habitat_climate;
 use crate::habitat::habitat_terrain_summary_refresh::read_terrain_fact_for_topology_cell;
+use openzt2_zoo_state::habitat::habitat_cell_ownership_changes::HabitatCellOwnershipChanged;
 use openzt2_zoo_state::habitat::habitat_topology_cell_queries::sorted_topology_cells_contain_cell;
 use openzt2_zoo_state::habitat::habitat_types::HabitatChanged;
 use openzt2_zoo_state::habitat::habitat_types::HabitatClimate;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
 use openzt2_zoo_state::habitat::habitat_types::RebuildHabitatRegionsWithinTopologyBounds;
-use openzt2_zoo_state::habitat::habitat_types::{Habitat, HabitatBoundaryFence};
+use openzt2_zoo_state::habitat::habitat_types::{
+    Habitat, HabitatBoundaryFence, HabitatCellOf, HabitatGridCell, HabitatIndex,
+};
+
+#[derive(Component)]
+pub(super) struct HabitatSectorCell(usize);
+
+pub(super) fn publish_animal_award_traversable_area(
+    habitats: Query<(Ref<HabitatRegion>, Ref<HabitatSummary>)>,
+    worlds: Query<&TopologyGrid, With<WorldRoot>>,
+    mut animals: Query<
+        (
+            Entity,
+            Ref<WorldMember>,
+            Option<Ref<openzt2_zoo_state::habitat::habitat_types::HabitatMember>>,
+            Option<&mut openzt2_progression::progression::AwardTraversableArea>,
+        ),
+        With<openzt2_zoo_state::animal_lifecycle::types::Animal>,
+    >,
+    mut commands: Commands,
+) {
+    use openzt2_progression::progression::AwardTraversableArea;
+    for (entity, world, membership, area) in &mut animals {
+        let Some((member, region, summary, grid)) = membership.as_ref().and_then(|member| {
+            let (region, summary) = habitats.get(member.habitat_entity).ok()?;
+            Some((member, region, summary, worlds.get(world.root).ok()?))
+        }) else {
+            if area.is_some() {
+                commands.entity(entity).remove::<AwardTraversableArea>();
+            }
+            continue;
+        };
+        if area.is_some()
+            && !world.is_changed()
+            && !member.is_changed()
+            && !region.is_changed()
+            && !summary.is_changed()
+        {
+            continue;
+        }
+        let cell_area = grid.spacing_m * grid.spacing_m;
+        if cell_area <= 0.0 {
+            continue;
+        }
+        let next = AwardTraversableArea {
+            total_cells: (region.area_square_metres / cell_area).round() as u32,
+            biome_cells: summary
+                .biome_areas_square_metres
+                .iter()
+                .map(|&(biome, area)| (biome, (area / cell_area).round() as u32))
+                .collect(),
+        };
+        if let Some(mut area) = area {
+            area.reborrow()
+                .map_unchanged(|area| &mut area.total_cells)
+                .set_if_neq(next.total_cells);
+            area.map_unchanged(|area| &mut area.biome_cells)
+                .set_if_neq(next.biome_cells);
+        } else {
+            commands.entity(entity).insert(next);
+        }
+    }
+}
 
 /// Seeds the first regional rebuild from topology already hydrated with the map.
 pub(super) fn request_initial_habitat_region_rebuild_from_loaded_topology(
@@ -70,6 +133,15 @@ pub(super) fn request_habitat_region_rebuilds_after_topology_changes(
     }
 }
 
+#[derive(SystemParam)]
+pub(super) struct HabitatOwnershipQueries<'w, 's> {
+    children: Query<'w, 's, &'static Children>,
+    cell_owners: Query<'w, 's, &'static HabitatCellOf>,
+    sector_owners: Query<'w, 's, &'static mut HabitatCellSectors>,
+    linked_sectors: Query<'w, 's, (&'static HabitatSectorCell, &'static HabitatCellOf)>,
+    boundary_links: Query<'w, 's, &'static HabitatBoundaryFence>,
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
     mut commands: Commands,
@@ -91,10 +163,7 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
         ),
         With<WorldRoot>,
     >,
-    habitat_children: Query<&Children>,
-    cell_owners: Query<&HabitatCellOf>,
-    mut sector_owners: Query<&mut HabitatCellSectors>,
-    boundary_links: Query<&HabitatBoundaryFence>,
+    mut ownership: HabitatOwnershipQueries,
     mut existing_habitats: Query<
         (
             Entity,
@@ -108,6 +177,13 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
     mut habitat_changes: MessageWriter<HabitatChanged>,
     mut cell_changes: MessageWriter<HabitatCellOwnershipChanged>,
 ) {
+    let HabitatOwnershipQueries {
+        children: habitat_children,
+        cell_owners,
+        sector_owners,
+        linked_sectors,
+        boundary_links,
+    } = &mut ownership;
     let Some(changed_topology_bounds) =
         merge_requested_habitat_region_rebuild_bounds(&mut habitat_rebuild_requests)
     else {
@@ -367,7 +443,33 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
             }
             None => continue,
         };
+        let mut proxies = [None; 4];
+        if let Ok(children) = habitat_children.get(cell) {
+            for child in children.iter() {
+                let Ok((sector, owner)) = linked_sectors.get(child) else {
+                    continue;
+                };
+                if !uniform && desired[sector.0] == Some(owner.0) {
+                    proxies[sector.0] = Some(child);
+                } else {
+                    commands.entity(child).try_despawn();
+                }
+            }
+        }
         if !uniform {
+            for (sector, owner) in desired.into_iter().enumerate() {
+                if let Some(owner) = owner.filter(|_| proxies[sector].is_none()) {
+                    proxies[sector] = Some(
+                        commands
+                            .spawn((
+                                ChildOf(cell),
+                                HabitatSectorCell(sector),
+                                HabitatCellOf(owner),
+                            ))
+                            .id(),
+                    );
+                }
+            }
             let updated = HabitatCellSectors(desired);
             if let Ok(mut current) = sector_owners.get_mut(cell) {
                 if current.set_if_neq(updated) {
@@ -377,8 +479,10 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
                 commands.entity(cell).insert(updated);
                 changed_cells.push(coordinate);
             }
+            habitat_index.set_cell_partition(coordinate, Some(proxies));
         } else if sector_owners.contains(cell) {
             commands.entity(cell).remove::<HabitatCellSectors>();
+            habitat_index.set_cell_partition(coordinate, None);
             changed_cells.push(coordinate);
         }
         // Whole-cell consumers use the centre sector when querying a cut cell.

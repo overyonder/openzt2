@@ -37,18 +37,25 @@ pub(super) fn prepare_snapshot_baseline(
         return;
     };
     let result = if decoded.profile == profile.profile_identifier {
-        preparation.prepare(
-            &decoded.world,
-            decoded.terrain.as_ref(),
-            &mut pending.saved_world_document,
-        )
+        preparation.mode_document(&decoded.world).and_then(|mode| {
+            preparation
+                .prepare(
+                    &decoded.world,
+                    decoded.terrain.as_ref(),
+                    &mut pending.saved_world_document,
+                )
+                .map(|terrain| (mode, terrain))
+        })
     } else {
         Err(Failure::SnapshotProfileMismatch)
     };
     let mut operation = commands.entity(operation);
     operation.remove::<PrepareSnapshotBaseline>();
     match result {
-        Ok(terrain) => {
+        Ok((mode, terrain)) => {
+            if let Some(mode) = mode {
+                operation.insert(mode);
+            }
             if let Some(terrain) = terrain {
                 operation.insert(terrain);
             }
@@ -68,6 +75,7 @@ pub(super) fn retire_world_once_saved_assets_are_ready(
         &DecodedSnapshot,
         &PendingSnapshotApplication,
         Option<&SnapshotTerrainAsset>,
+        Option<&SnapshotModeDocument>,
     )>,
     server: Res<AssetServer>,
     mut documents: MessageReader<AssetEvent<WorldScenarioDocumentAsset>>,
@@ -79,15 +87,20 @@ pub(super) fn retire_world_once_saved_assets_are_ready(
     mut phase: ResMut<NextState<GamePhase>>,
 ) {
     let asset_failed = failed_assets.read().last().is_some();
-    let Ok((operation, stage, decoded, pending, terrain)) = operations.single() else {
+    let Ok((operation, stage, decoded, pending, terrain, mode)) = operations.single() else {
         documents.clear();
         terrains.clear();
         return;
     };
     let document = pending.saved_world_document.as_ref().map(Handle::id);
     let terrain = terrain.map(|terrain| terrain.0.id());
+    let mode = mode.map(|mode| mode.0.id());
     let document_ready = documents.read().fold(false, |ready, event| {
-        ready || document.is_some_and(|id| event.is_loaded_with_dependencies(id))
+        ready
+            || document
+                .into_iter()
+                .chain(mode)
+                .any(|id| event.is_loaded_with_dependencies(id))
     });
     let terrain_ready = terrains.read().fold(false, |ready, event| {
         ready || terrain.is_some_and(|id| event.is_loaded_with_dependencies(id))
@@ -101,7 +114,8 @@ pub(super) fn retire_world_once_saved_assets_are_ready(
         let ids = document
             .map(bevy::asset::AssetId::untyped)
             .into_iter()
-            .chain(terrain.map(bevy::asset::AssetId::untyped));
+            .chain(terrain.map(bevy::asset::AssetId::untyped))
+            .chain(mode.map(bevy::asset::AssetId::untyped));
         if ids.clone().any(|id| {
             matches!(server.load_state(id), LoadState::Failed(_))
                 || matches!(
@@ -136,13 +150,18 @@ pub(super) fn retire_world_once_saved_assets_are_ready(
 pub(super) fn begin_snapshot_baseline_load(
     mut commands: Commands,
     operations: Query<
-        (Entity, &DecodedSnapshot, &PendingSnapshotApplication),
+        (
+            Entity,
+            &DecodedSnapshot,
+            &PendingSnapshotApplication,
+            Option<&SnapshotModeDocument>,
+        ),
         With<AwaitingWorldRetirement>,
     >,
     roots: Query<(), With<WorldRoot>>,
     mut loads: MessageWriter<BeginWorldLoad>,
 ) {
-    let Ok((operation, decoded, pending)) = operations.single() else {
+    let Ok((operation, decoded, pending, mode)) = operations.single() else {
         return;
     };
     if !roots.is_empty() {
@@ -150,7 +169,7 @@ pub(super) fn begin_snapshot_baseline_load(
     }
     loads.write(BeginWorldLoad {
         saved_world_document: pending.saved_world_document.as_ref().map(Handle::id),
-        mode_document: None,
+        mode_document: mode.map(|mode| mode.0.id()),
         operation: Some(operation),
         scenario: decoded.world.scenario_definition_identifier,
         mode: decoded.world.session_mode,

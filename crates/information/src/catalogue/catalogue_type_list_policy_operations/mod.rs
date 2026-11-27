@@ -3,8 +3,8 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::{
-    AssetId,
     world_definitions::catalogue_and_progression::catalogue_definition_types::CatalogueEntry,
+    AssetId,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
@@ -13,7 +13,9 @@ use openzt2_zoo_state::progression::adoption_and_content_availability_types::Sce
 use openzt2_zoo_state::progression::catalogue_entry_availability::catalogue_entry_is_available;
 use openzt2_zoo_state::progression::catalogue_entry_availability::catalogue_entry_is_visible;
 use openzt2_zoo_state::progression::unlock_types::UnlockedCatalogueDefinitionSet;
-use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiTypeListPolicy;
+use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::{
+    CatalogueTypeListMemoryPolicy, UiTypeListPolicy,
+};
 
 use openzt2_interface_state::information::catalogue_types::{
     ScenarioCatalogueRestriction, ScenarioCatalogueRestrictions, TypeListFilter,
@@ -89,16 +91,6 @@ pub(crate) fn catalogue_entry_is_included_by_authored_type_list(
             scenario_availability,
             unlocked_catalogue_definitions,
         ))
-}
-
-/// Authored kinds that can be selected without replacing list memory.
-#[derive(Component)]
-pub struct CatalogueTypeListMemoryPolicy(pub Box<[AssetId]>);
-
-impl CatalogueTypeListMemoryPolicy {
-    pub(super) fn remembers(&self, entry: &CatalogueEntry) -> bool {
-        !catalogue_entry_contains_any_authored_kind(entry, &self.0)
-    }
 }
 
 fn catalogue_entry_contains_any_authored_kind(

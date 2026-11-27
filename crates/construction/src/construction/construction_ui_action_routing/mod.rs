@@ -149,7 +149,7 @@ pub(super) fn route_authored_construction_tool_activations(
 }
 
 #[derive(SystemParam)]
-pub(super) struct ConstructionUiIntents<'w, 's> {
+pub(crate) struct ConstructionUiIntents<'w, 's> {
     animals: Query<'w, 's, (), With<openzt2_zoo_state::animal_lifecycle::types::Animal>>,
     crated: Query<'w, 's, (), CratedWorldEntity>,
     scripted_crating: Query<'w, 's, (), With<ScriptedCrating>>,
@@ -174,7 +174,7 @@ pub(super) struct ConstructionUiIntents<'w, 's> {
     fence_previews: Query<'w, 's, (Entity, &'static mut FencePreview), With<ConstructionPreview>>,
     rotations: MessageWriter<'w, openzt2_interface_state::input::input_types::ActionRequest>,
 }
-pub(super) fn route_construction_ui_actions(
+pub(crate) fn route_construction_ui_actions(
     mut activations: MessageReader<UiNodeActivated>,
     selected_tool: Res<ConstructionTool>,
     documents: Res<Assets<UiDocumentAsset>>,
@@ -202,7 +202,7 @@ pub(super) fn route_construction_ui_actions(
     mut commands: Commands,
 ) {
     let mut new_rotations = bevy::ecs::entity::EntityHashMap::<i8>::default();
-    let mut new_relocation = None;
+    let mut requested_relocation = None;
     let mut new_crating = bevy::ecs::entity::EntityHashSet::default();
     for activation in activations.read() {
         let Ok((range, owner)) = action_nodes.get(activation.node) else {
@@ -267,24 +267,7 @@ pub(super) fn route_construction_ui_actions(
                             .ok()
                             .map(|placeable| (entity, placeable))
                     }) {
-                        for previous in &relocating {
-                            if previous != entity {
-                                commands
-                                    .entity(previous)
-                                    .remove::<(RelocatingPlacedObject, PlacementRotationRequest)>();
-                            }
-                        }
-                        if new_relocation != Some(entity) {
-                            if let Some(previous) = new_relocation.replace(entity) {
-                                commands
-                                    .entity(previous)
-                                    .remove::<(RelocatingPlacedObject, PlacementRotationRequest)>();
-                                new_rotations.remove(&previous);
-                            }
-                            if !relocating.contains(entity) {
-                                commands.entity(entity).insert(RelocatingPlacedObject);
-                            }
-                        }
+                        requested_relocation = Some(entity);
                         intents
                             .tools
                             .write(SelectConstructionTool(ConstructionTool::Place(
@@ -293,7 +276,8 @@ pub(super) fn route_construction_ui_actions(
                     }
                 }
                 UiConstructionAction::RotateSelected { steps } => {
-                    if matches!(*selected_tool, ConstructionTool::Fence(_))
+                    if requested_relocation.is_none()
+                        && matches!(*selected_tool, ConstructionTool::Fence(_))
                         && policy.fence_shape != FencePlacementShape::Freeform
                     {
                         let step = if policy.fence_shape == FencePlacementShape::Octagon {
@@ -311,8 +295,12 @@ pub(super) fn route_construction_ui_actions(
                         continue;
                     }
                     let purchasing = matches!(*selected_tool, ConstructionTool::Place(_))
-                        && relocating.is_empty();
-                    let rotation_selection = selected.subject().filter(|_| !purchasing);
+                        && relocating.is_empty()
+                        && requested_relocation.is_none();
+                    let rotation_selection = requested_relocation
+                        .or_else(|| selected.subject())
+                        .or_else(|| relocating.iter().next())
+                        .filter(|_| !purchasing);
                     if let Some((entity, placeable)) = rotation_selection.and_then(|entity| {
                         let entity = if let Ok(link) = intents.animal_crates.get(entity) {
                             link.0
@@ -327,24 +315,7 @@ pub(super) fn route_construction_ui_actions(
                             .ok()
                             .map(|placeable| (entity, placeable))
                     }) {
-                        for previous in &relocating {
-                            if previous != entity {
-                                commands
-                                    .entity(previous)
-                                    .remove::<(RelocatingPlacedObject, PlacementRotationRequest)>();
-                            }
-                        }
-                        if new_relocation != Some(entity) {
-                            if let Some(previous) = new_relocation.replace(entity) {
-                                commands
-                                    .entity(previous)
-                                    .remove::<(RelocatingPlacedObject, PlacementRotationRequest)>();
-                                new_rotations.remove(&previous);
-                            }
-                            if !relocating.contains(entity) {
-                                commands.entity(entity).insert(RelocatingPlacedObject);
-                            }
-                        }
+                        requested_relocation = Some(entity);
                         if let Ok(mut rotation) = pending_rotations.get_mut(entity) {
                             let steps = rotation.0.wrapping_add(*steps);
                             rotation.set_if_neq(PlacementRotationRequest(steps));
@@ -687,9 +658,21 @@ pub(super) fn route_construction_ui_actions(
             }
         }
     }
-    for (entity, steps) in new_rotations {
-        commands
-            .entity(entity)
-            .insert(PlacementRotationRequest(steps));
+    if let Some(entity) = requested_relocation {
+        for previous in &relocating {
+            if previous != entity {
+                commands
+                    .entity(previous)
+                    .remove::<(RelocatingPlacedObject, PlacementRotationRequest)>();
+            }
+        }
+        if !relocating.contains(entity) {
+            commands.entity(entity).insert(RelocatingPlacedObject);
+        }
+        if let Some(steps) = new_rotations.remove(&entity) {
+            commands
+                .entity(entity)
+                .insert(PlacementRotationRequest(steps));
+        }
     }
 }

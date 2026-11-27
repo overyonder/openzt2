@@ -17,9 +17,6 @@ define_immersive_mode_control_markers!(
     ShowEditControl,
 );
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct GuestViewTileCount(pub(crate) u32);
-
 /// Entity-local view angles applied to the subject-relative Bevy camera. The
 /// subject transform remains the locomotion authority.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq)]

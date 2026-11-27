@@ -22,6 +22,29 @@ use super::{
     money_types::Money,
 };
 
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct AdmissionSettlement<'w, 's> {
+    payments: Query<'w, 's, &'static AdmissionPaymentPending>,
+    guests: Query<'w, 's, (&'static GuestPhase, &'static PendingGuestAdmission), With<Guest>>,
+}
+
+impl AdmissionSettlement<'_, '_> {
+    pub(super) fn can_transfer(&self, request: TransactionRequest) -> bool {
+        let Ok(payment) = self.payments.get(request.operation) else {
+            return true;
+        };
+        request.debit == Account::Entity(payment.guest)
+            && request.credit == Account::Zoo
+            && self
+                .guests
+                .get(payment.guest)
+                .is_ok_and(|(phase, pending)| {
+                    *phase == GuestPhase::Arriving
+                        && pending.iter().next() == Some(request.operation)
+                })
+    }
+}
+
 pub(super) fn request_guest_admission_payment_after_entrance_reached(
     mut arrivals: MessageReader<GuestReachedEntrance>,
     admission: Query<(&AdmissionPrice, &ZooAdmissionsOpen)>,

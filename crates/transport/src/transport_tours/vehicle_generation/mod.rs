@@ -122,7 +122,7 @@ pub(super) fn start_transport_vehicle_purchases(
             VehiclePurchase {
                 object: vehicle.object,
                 prefab,
-                cost: Money(vehicle.purchase_cost_cents),
+                cost: Money::from_cents(vehicle.purchase_cost_cents),
             },
             *world,
         ));

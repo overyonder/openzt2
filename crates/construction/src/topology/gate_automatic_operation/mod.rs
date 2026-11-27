@@ -1,3 +1,4 @@
+use openzt2_zoo_state::topology::gate_operation_types::{AuthoredGateVariant, Gate};
 use std::time::Duration;
 
 use bevy::prelude::*;
@@ -5,8 +6,8 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_zoo_state::locomotion::locomotion_types::{SpatialGrid, SpatialGridMembership};
 
+use super::topology_prefab_presentation::authored_gate_definition;
 use openzt2_zoo_state::topology::gate_actor_type_queries::GateActorTypeQueries;
-use openzt2_zoo_state::topology::gate_operation_types::Gate;
 use openzt2_zoo_state::topology::gate_operation_types::GateAutoClose;
 use openzt2_zoo_state::topology::gate_operation_types::GateMechanism;
 use openzt2_zoo_state::topology::gate_operation_types::SetGateState;
@@ -68,6 +69,7 @@ pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
         &WorldMember,
         &mut GateMechanism,
         &FenceEdge,
+        Option<&AuthoredGateVariant>,
         &GlobalTransform,
         Option<&mut GateAutoClose>,
     )>,
@@ -76,7 +78,9 @@ pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
     let Some(definitions) = actor_types.definitions() else {
         return;
     };
-    for (gate_entity, gate, member, mut mechanism, edge, transform, automatic_close) in &mut gates {
+    for (gate_entity, gate, member, mut mechanism, edge, variant, transform, automatic_close) in
+        &mut gates
+    {
         let Ok(spatial_grid) = grids.get(member.root) else {
             continue;
         };
@@ -98,7 +102,8 @@ pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
             continue;
         }
 
-        let Some(definition) = definitions.find_gate_fence(edge.definition) else {
+        let Some(definition) = authored_gate_definition(definitions, edge.definition, variant)
+        else {
             continue;
         };
         let policy = &definition.gate_policy;

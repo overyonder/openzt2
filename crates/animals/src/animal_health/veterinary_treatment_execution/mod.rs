@@ -1,7 +1,9 @@
 use bevy::ecs::entity::EntityHashSet;
 use bevy::{platform::collections::HashSet, prelude::*};
 use openzt2_game_data::world_definitions::staff_management::StaffJobKind;
-use openzt2_game_data::{AssetId, world_definitions::staff_management::StaffRoleKind};
+use openzt2_game_data::{world_definitions::staff_management::StaffRoleKind, AssetId};
+use openzt2_progression::progression::{AwardHistoryOutcome, RecordAwardOutcome};
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::staff::staff_job_types::{
     CurrentJob, JobClaim, StaffJob, StaffJobBehaviorTask,
 };
@@ -55,7 +57,7 @@ pub(super) fn validate_veterinary_treatment_requests_and_begin_treatment(
 ) {
     let definitions = active_world_definitions.get(&world_definition_assets);
     let mut admitted = EntityHashSet::default();
-    let mut seen = HashSet::default();
+    let mut seen = HashSet::<(Entity, Entity, u64)>::default();
     for request in treatment_requests.read() {
         if let Some(correlation) = request.correlation {
             let duplicate =
@@ -72,7 +74,7 @@ pub(super) fn validate_veterinary_treatment_requests_and_begin_treatment(
             let job = job?.job();
             let (request_job, claim, behavior) = jobs.get(job).ok()?;
             if request_job.kind != Some(StaffJobKind::Treat)
-                || request_job.target != request.animal
+                || request_job.target != Some(request.animal)
                 || claim.staff != request.provider
             {
                 return None;
@@ -99,7 +101,7 @@ pub(super) fn validate_veterinary_treatment_requests_and_begin_treatment(
                     .any(|identifier| identifier.0 == request.treatment.0)
                 && staff_role_can_apply_treatment(
                     definitions,
-                    provider?.0.0,
+                    provider?.0 .0,
                     &treatment.required_staff,
                 ))
             .then_some(treatment.duration_ticks)
@@ -138,6 +140,7 @@ pub(super) fn advance_active_veterinary_treatments_and_apply_completed_results(
             &mut Vitality,
             Option<&mut Disease>,
             Has<Dead>,
+            Option<&WorldMember>,
         ),
         With<Animal>,
     >,
@@ -153,7 +156,7 @@ pub(super) fn advance_active_veterinary_treatments_and_apply_completed_results(
         .read()
         .map(|request| request.job)
         .collect::<EntityHashSet>();
-    for (animal, treatment, mut clock, mut vitality, disease, dead) in &mut animals {
+    for (animal, treatment, mut clock, mut vitality, disease, dead, member) in &mut animals {
         let provider = live_treatment_providers.get(treatment.provider);
         let invalid_claim = treatment.correlation.is_some_and(|correlation| {
             cancelled.contains(&correlation.job)
@@ -201,6 +204,12 @@ pub(super) fn advance_active_veterinary_treatments_and_apply_completed_results(
             .remove::<Treatment>();
         if disease_cleared {
             commands.entity(animal).remove::<Disease>();
+            if let Some(member) = member {
+                commands.write_message(RecordAwardOutcome {
+                    root: member.root,
+                    outcome: AwardHistoryOutcome::DiseaseCured,
+                });
+            }
         }
         if let Some(correlation) = correlation {
             commands.write_message(AnimalTreatmentSettled {

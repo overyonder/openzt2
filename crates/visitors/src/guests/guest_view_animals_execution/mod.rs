@@ -4,10 +4,7 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     BehaviorTaskReplaced, RunBehaviorViewAnimals, RunningBehaviorInstruction, SelectedBehaviorSet,
 };
 
-use crate::donations::{
-    authored_view_donation_tokens::offer_view_donations,
-    donation_opportunity_observation::SpeciesDonationCandidateLifetimes,
-};
+use crate::donations::authored_view_donation_tokens::offer_view_donations;
 use bevy::prelude::*;
 use openzt2_game_assets::behavior::behavior_asset_types::{
     BehaviorDocumentAsset, LoadedBehaviorDocumentCollection,
@@ -16,8 +13,11 @@ use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAss
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::{
     animal_behavior::behavior_token_types::EducationDonationBonus,
-    donations::donation_guest_decision_types::GuestDonationMeters,
-    economy::facility_economy_types::Wallet, guests::guest_simulation_types::GuestSatisfaction,
+    donations::donation_guest_decision_types::{
+        GuestDonationMeters, SpeciesDonationCandidateLifetimes,
+    },
+    economy::facility_economy_types::Wallet,
+    guests::guest_simulation_types::GuestSatisfaction,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -26,7 +26,6 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_beha
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
-use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
@@ -97,7 +96,11 @@ pub(super) fn watch_animals_for_current_view_actions(
     >,
     animals: Query<
         (Entity, &GlobalTransform, &Visibility, &WorldMember),
-        (With<Animal>, With<HabitatMember>),
+        (
+            With<Animal>,
+            Without<openzt2_zoo_state::animal_health::types::Dead>,
+            openzt2_world_state::world_spawn::world_entity_crating::UncratedWorldEntity,
+        ),
     >,
     viewpoints: Query<(
         Entity,
@@ -166,19 +169,25 @@ pub(super) fn watch_animals_for_current_view_actions(
             })
         };
         let origin = transform.translation().xz();
+        let viewpoint = task.target();
+        let supports = viewpoint
+            .and_then(|point| viewpoints.get(point).ok())
+            .map(|(_, _, _, supports)| supports.0.as_slice())
+            .unwrap_or_default();
         let in_view = |animal: Entity| {
-            animals
-                .get(animal)
-                .is_ok_and(|(_, animal, visibility, animal_world)| {
-                    animal_world.root == world.root
-                        && *visibility != Visibility::Hidden
-                        && animal.translation().xz().distance_squared(origin) <= range_m * range_m
-                })
+            supports.contains(&animal)
+                && animals
+                    .get(animal)
+                    .is_ok_and(|(_, animal, visibility, animal_world)| {
+                        animal_world.root == world.root
+                            && *visibility != Visibility::Hidden
+                            && animal.translation().xz().distance_squared(origin)
+                                <= range_m * range_m
+                    })
         };
         let viewing = viewing.filter(|viewing| {
-            viewing.area == task.target() && viewing.task_execution_id == Some(task.execution_id)
+            viewing.area == viewpoint && viewing.task_execution_id == Some(task.execution_id)
         });
-        let viewpoint = task.target();
         let assigned_subject = || {
             viewpoint
                 .and_then(|point| viewpoints.get(point).ok())
@@ -194,9 +203,14 @@ pub(super) fn watch_animals_for_current_view_actions(
                     mark_behavior_task_for_failure_and_stop_navigation(guest, &mut commands);
                     continue;
                 };
+                if let Some(meter) = meter.as_deref_mut() {
+                    for _ in supports.iter().copied().filter(|&animal| in_view(animal)) {
+                        meter.apply_view_score(1.0);
+                    }
+                }
                 commands.entity(guest).insert(Viewing {
                     subject,
-                    area: task.target(),
+                    area: viewpoint,
                     started_tick: clock.tick,
                     task_execution_id: Some(task.execution_id),
                 });
@@ -208,7 +222,12 @@ pub(super) fn watch_animals_for_current_view_actions(
                     completed
                 });
                 let subject_visible = in_view(viewing.subject);
-                if !watched && subject_visible {
+                if !watched
+                    && subject_visible
+                    && meter
+                        .as_ref()
+                        .is_some_and(|meter| meter.emote_score.is_some())
+                {
                     let target = animals
                         .get(viewing.subject)
                         .ok()
@@ -329,7 +348,7 @@ pub(super) fn watch_animals_for_current_view_actions(
                 depth: task.depth,
                 remaining: start,
                 maximum: start,
-                emote_score: None,
+                emote_score: viewing.is_none().then_some(1.0),
             });
         }
     }

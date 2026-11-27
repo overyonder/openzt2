@@ -1,6 +1,39 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
+#[derive(Component, Clone, Copy)]
+pub enum StaffAssignmentRecord {
+    Point(Vec3),
+    Animal,
+}
+
+#[derive(Component, Default)]
+pub struct DisabledTrainerTricks(std::collections::BTreeSet<AssetId>);
+
+impl DisabledTrainerTricks {
+    pub fn is_disabled(&self, trick: AssetId) -> bool {
+        self.0.contains(&trick)
+    }
+
+    pub fn set_disabled(&mut self, trick: AssetId, disabled: bool) {
+        if disabled {
+            self.0.insert(trick);
+        } else {
+            self.0.remove(&trick);
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = AssetId> + '_ {
+        self.0.iter().copied()
+    }
+}
+
+impl FromIterator<AssetId> for DisabledTrainerTricks {
+    fn from_iter<T: IntoIterator<Item = AssetId>>(tricks: T) -> Self {
+        Self(tricks.into_iter().collect())
+    }
+}
+
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 #[relationship(relationship_target = StaffAssignedToArea)]
 pub struct StaffAssignmentArea(pub Entity);

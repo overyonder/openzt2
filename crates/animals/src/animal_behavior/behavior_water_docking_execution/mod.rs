@@ -31,6 +31,7 @@ use openzt2_zoo_state::{
     behavior_task_execution_types::{
         BehaviorTaskExecutionState, PendingBehaviorTaskFailure, SamplingBehaviorDockPose,
     },
+    habitat::habitat_cell_ownership_changes::HabitatCellOwnershipChanged,
     locomotion::locomotion_types::{
         Arrived, Destination, DockAt, Docking, NavigationFailed, NavigationRequestGeneration,
     },
@@ -112,9 +113,7 @@ pub(super) fn register(application: &mut App) {
         )
         .add_systems(
             PostUpdate,
-            sample_started_docking_poses
-                .after(super::behavior_named_nodes::ProjectBehaviorNamedNodes)
-                .run_if(in_state(GamePhase::InGame)),
+            sample_started_docking_poses.run_if(in_state(GamePhase::InGame)),
         );
 }
 
@@ -441,6 +440,7 @@ fn execute_water_docking(
 fn revalidate_moving_water_docks(
     mut commands: Commands,
     shores: NaturalWaterTargets,
+    mut habitat_changes: Option<MessageReader<HabitatCellOwnershipChanged>>,
     clocks: Query<&ZooClock>,
     movement: Query<Ref<Destination>>,
     escapes: Query<Ref<Escaped>>,
@@ -448,6 +448,10 @@ fn revalidate_moving_water_docks(
     mut docks: Query<(Entity, &WorldMember, &MovingWaterDock, &mut WaterDock)>,
 ) {
     let removed_escapes = removed_escapes.read().collect::<EntityHashSet>();
+    let changed_worlds: EntityHashSet = habitat_changes
+        .iter_mut()
+        .flat_map(|changes| changes.read().map(|change| change.root))
+        .collect();
     for (actor, member, moving, mut dock) in &mut docks {
         if clocks
             .get(member.root)
@@ -462,6 +466,7 @@ fn revalidate_moving_water_docks(
             let revalidate = destination.is_changed()
                 || escape.as_ref().is_some_and(DetectChanges::is_changed)
                 || removed_escapes.contains(&actor)
+                || changed_worlds.contains(&member.root)
                 || shores.docking_inputs_changed(member.root, actor, point, &dock.shore, escaped);
             destination.request_id == moving.request
                 && (!revalidate

@@ -85,39 +85,117 @@ mod tests {
     }
 }
 
-#[derive(Component)]
-pub struct GuestDeparturePressurePolicy {
-    pub low_happiness_cutoff_q16: i32,
-    pub low_happiness_delta_q16: i32,
-    pub low_cash_delta_q16: i32,
+#[derive(Component, Default)]
+pub(super) struct GuestDepartureFailureDelta(f32);
+
+use openzt2_game_assets::world_definitions::{
+    world_definition_asset_set_state_and_borrowing_queries::{
+        WorldDefinitions, WorldDefinitionsView,
+    },
+    world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+};
+use openzt2_game_data::AssetId;
+use openzt2_zoo_state::{
+    authored_float_attributes::AuthoredFloatAttributes,
+    behavior_task_execution_types::BehaviorTaskFailed,
+    economy::facility_economy_types::Wallet,
+    guests::guest_simulation_types::{
+        GuestArchetype, GuestDeparturePoints, GuestNeedAdjustmentDue,
+    },
+};
+
+fn guest_number(
+    definitions: WorldDefinitionsView<'_>,
+    archetype: AssetId,
+    attributes: Option<&AuthoredFloatAttributes>,
+    property: &str,
+) -> Option<f32> {
+    let key = AssetId::from_key(property);
+    attributes
+        .and_then(|attributes| attributes.get(key))
+        .or_else(|| {
+            let object = definitions.find_guest(archetype)?.object;
+            definitions
+                .find_object(object)?
+                .authored_runtime
+                .numeric_behavior_properties
+                .iter()
+                .find_map(|&(property, value)| (property == key).then_some(value))
+        })
 }
 
 pub(super) fn update_due_guest_departure_pressure(
-    mut updates: MessageReader<
-        openzt2_zoo_state::guests::guest_simulation_types::GuestNeedAdjustmentDue,
-    >,
+    mut updates: MessageReader<GuestNeedAdjustmentDue>,
+    active: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
     mut guests: Query<(
-        &GuestDeparturePressurePolicy,
+        &GuestArchetype,
+        Option<&AuthoredFloatAttributes>,
         &GuestSatisfaction,
-        &openzt2_zoo_state::economy::facility_economy_types::Wallet,
-        &mut openzt2_zoo_state::guests::guest_simulation_types::GuestDeparturePoints,
+        &Wallet,
+        &mut GuestDeparturePoints,
     )>,
 ) {
+    let Some(definitions) = active.get(&assets) else {
+        updates.clear();
+        return;
+    };
     for update in updates.read() {
-        let Ok((policy, happiness, bank, mut points)) = guests.get_mut(update.0) else {
+        let Ok((archetype, attributes, happiness, bank, points)) = guests.get_mut(update.0) else {
             continue;
         };
-        let mut delta = 0_i32;
-        if happiness.source_q16() > policy.low_happiness_cutoff_q16 {
-            delta = delta.saturating_add(policy.low_happiness_delta_q16);
+        let property = |key| guest_number(definitions, archetype.0, attributes, key);
+        let mut delta = 0.0;
+        if property("f_lowhappiness")
+            .is_some_and(|cutoff| happiness.source_q16() as f32 > cutoff * 65_536.0)
+        {
+            delta += property("f_lowhappydepartpts").unwrap_or_default();
         }
         if !bank.0.is_positive() {
-            delta = delta.saturating_add(policy.low_cash_delta_q16);
+            delta += property("f_lowcashdepartpts").unwrap_or_default();
         }
-        let next = points.0.saturating_add(delta).max(0);
-        points
-            .reborrow()
-            .map_unchanged(|points| &mut points.0)
-            .set_if_neq(next);
+        add_departure_delta(points, delta);
     }
+}
+
+pub(super) fn apply_guest_task_failure_departure_delta(
+    mut failures: MessageReader<BehaviorTaskFailed>,
+    active: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    mut guests: Query<
+        (
+            &GuestArchetype,
+            Option<&AuthoredFloatAttributes>,
+            &mut GuestDeparturePoints,
+            &mut GuestDepartureFailureDelta,
+        ),
+        With<Guest>,
+    >,
+) {
+    let Some(definitions) = active.get(&assets) else {
+        failures.clear();
+        return;
+    };
+    for failure in failures.read() {
+        let Ok((archetype, attributes, points, mut delta)) = guests.get_mut(failure.actor) else {
+            continue;
+        };
+        let Some(velocity) =
+            guest_number(definitions, archetype.0, attributes, "f_failuredepartvel")
+        else {
+            continue;
+        };
+        add_departure_delta(points, delta.0);
+        delta.0 += velocity;
+    }
+}
+
+fn add_departure_delta(points: Mut<GuestDeparturePoints>, delta: f32) {
+    let next = points
+        .0
+        .saturating_add((delta * 65_536.0).round() as i32)
+        .max(0);
+    points
+        .map_unchanged(|points| &mut points.0)
+        .set_if_neq(next);
 }

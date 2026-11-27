@@ -23,7 +23,9 @@ use openzt2_game_data::ui_document::{
     document::{UiDocument, UiDocumentRole},
     widget::UiWidgetRecord,
 };
-use openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions;
+use openzt2_interface_state::information::catalogue_types::{
+    ScenarioCatalogueRestriction, ScenarioCatalogueRestrictionOf, ScenarioCatalogueRestrictions,
+};
 use openzt2_interface_state::information::{
     entity_selection_types::SelectionRequest,
     zoo_message_types::{ZooMessage, ZooMessages},
@@ -79,6 +81,36 @@ pub(super) fn bind_challenge_result_panels(
     }
 }
 
+pub(super) fn present_awarded_challenge_results(
+    mut effects: MessageReader<
+        openzt2_interface_state::information::award_presentation_types::AwardProgramEffect,
+    >,
+    worlds: Query<Entity, With<WorldRoot>>,
+    mut ui: MessageWriter<ScenarioUiCommand>,
+) {
+    use openzt2_interface_state::information::award_presentation_types::AwardProgramEffect;
+    let world = worlds.single().ok();
+    for effect in effects.read() {
+        let AwardProgramEffect::ShowChallengeWon { root, arguments } = effect else {
+            continue;
+        };
+        if Some(*root) != world {
+            continue;
+        }
+        let panel = "Challenge Won Layout".to_owned();
+        if let Some(text) = arguments.first() {
+            ui.write(ScenarioUiCommand::Node {
+                path: vec![panel.clone(), "challenge text".into()],
+                operation: NodeOperation::Localized(AssetId::from_key(text)),
+            });
+        }
+        ui.write(ScenarioUiCommand::Node {
+            path: vec![panel],
+            operation: NodeOperation::Visible(true),
+        });
+    }
+}
+
 #[derive(Component, Default)]
 pub(in crate::scenario) struct ScenarioUiState {
     nodes: VecDeque<(Vec<String>, NodeOperation)>,
@@ -106,20 +138,31 @@ pub(super) struct ScenarioUiNodeOverride {
 #[derive(SystemParam)]
 pub(super) struct ScenarioUiNodeOverrideProjection<'w, 's> {
     members: Query<'w, 's, &'static ScenarioUiNodeOverrides>,
-    nodes: Query<'w, 's, (Entity, &'static mut ScenarioUiNodeOverride)>,
-    changed_nodes:
-        Query<'w, 's, &'static ScenarioUiNodeOverrideOf, Changed<ScenarioUiNodeOverride>>,
+    nodes: ParamSet<
+        'w,
+        's,
+        (
+            Query<'w, 's, (Entity, &'static mut ScenarioUiNodeOverride)>,
+            Query<'w, 's, &'static ScenarioUiNodeOverrideOf, Changed<ScenarioUiNodeOverride>>,
+        ),
+    >,
 }
 
 impl ScenarioUiNodeOverrideProjection<'_, '_> {
-    fn changes(&self, owner: Entity) -> bool {
-        self.changed_nodes.iter().any(|target| target.0 == owner)
+    fn changes(&mut self, owner: Entity) -> bool {
+        self.nodes.p1().iter().any(|target| target.0 == owner)
     }
 
-    fn read(&self, owner: Entity) -> super::ScenarioUiSavedState {
+    fn read(&mut self, owner: Entity) -> super::ScenarioUiSavedState {
         let mut saved = super::ScenarioUiSavedState::default();
         if let Ok(members) = self.members.get(owner) {
-            for (_, node) in self.nodes.as_readonly().iter_many(members.iter()).flatten() {
+            for (_, node) in self
+                .nodes
+                .p0()
+                .as_readonly()
+                .iter_many(members.iter())
+                .flatten()
+            {
                 saved.capture_override(node);
             }
         }
@@ -133,7 +176,8 @@ impl ScenarioUiNodeOverrideProjection<'_, '_> {
         mut values: super::ScenarioUiSavedState,
     ) {
         if let Ok(members) = self.members.get(owner) {
-            let mut nodes = self.nodes.iter_many_mut(members.iter());
+            let mut nodes = self.nodes.p0();
+            let mut nodes = nodes.iter_many_mut(members.iter());
             while let Some(node) = nodes.fetch_next() {
                 let Ok((entity, mut node)) = node else {
                     continue;
@@ -183,10 +227,13 @@ pub(super) fn preload_scenario_ui_documents(
     use openzt2_game_assets::ui_document::ui_document_role_asset_path_selection::select_bevy_asset_path_for_canonical_ui_document_role;
     for owner in &worlds {
         let documents = [
+            UiDocumentRole::MainMenu,
             UiDocumentRole::Tutorial,
             UiDocumentRole::Scenario,
             UiDocumentRole::ChallengeOffer,
+            UiDocumentRole::ChallengeWon,
             UiDocumentRole::InstantChallengeOffer,
+            UiDocumentRole::PhotoMode,
         ]
         .into_iter()
         .filter_map(select_bevy_asset_path_for_canonical_ui_document_role)
@@ -290,6 +337,12 @@ fn ancestors(
     .take(document.nodes.len())
 }
 
+#[derive(Component)]
+pub(in crate::scenario) struct NamedScenarioUiInteraction;
+
+#[derive(Component)]
+pub(in crate::scenario) struct DirectScenarioUiInteraction;
+
 #[derive(SystemParam)]
 pub(super) struct ScenarioUiProjectionEvents<'w, 's> {
     activations: MessageReader<'w, 's, UiNodeActivated>,
@@ -297,20 +350,42 @@ pub(super) struct ScenarioUiProjectionEvents<'w, 's> {
     selection_completed: MessageReader<'w, 's, ScenarioUiSelectionCompleted>,
     timed_completed: MessageWriter<'w, TimedScenarioUiActionCompleted>,
     authored: Query<'w, 's, (&'static UiDocumentOwner, &'static UiPresentationActions)>,
+    changed_scopes: Query<
+        'w,
+        's,
+        (),
+        Changed<openzt2_interface_state::ui::ui_document_lifecycle_contracts::UiRoleScope>,
+    >,
+    changed_mode_overrides: Query<
+        'w,
+        's,
+        (),
+        Changed<
+            crate::scenario::scenario_ui_modification_presentation::AppliedScenarioUiModification,
+        >,
+    >,
+    retired_mode_overrides: RemovedComponents<
+        'w,
+        's,
+        crate::scenario::scenario_ui_modification_presentation::AppliedScenarioUiModification,
+    >,
 }
 
 pub(super) fn apply_scenario_ui_commands(
     mut requests: MessageReader<ScenarioUiCommand>,
-    mut state: Query<&mut ScenarioUiState>,
-    worlds: Query<Entity, With<WorldRoot>>,
+    (mut state, worlds, owners): (
+        Query<&mut ScenarioUiState>,
+        Query<Entity, With<WorldRoot>>,
+        Query<Entity, With<InGameUiOwner>>,
+    ),
     mut events: ScenarioUiProjectionEvents,
     mut roles: MessageWriter<ShowUiRole>,
-    owners: Query<Entity, With<InGameUiOwner>>,
     (roots, document_owners, challenge_offers): (
         Query<(Entity, &UiDocumentRoot)>,
         Query<&ChildOf, With<UiDocumentRoot>>,
-        Query<(), With<crate::scenario::challenge_offer_types::ScenarioChallengeOffer>>,
+        Query<Entity, With<crate::scenario::challenge_offer_types::ScenarioChallengeOffer>>,
     ),
+    photo_scopes: openzt2_interface_state::ui::ui_document_lifecycle_contracts::ScopedUiRoleDocuments,
     added_nodes: Query<(&UiNodeId, &UiDocumentOwner), Added<UiNodeId>>,
     documents: Res<Assets<UiDocumentAsset>>,
     mut presentation: ParamSet<(
@@ -322,9 +397,16 @@ pub(super) fn apply_scenario_ui_commands(
         MessageWriter<ScenarioConstructionRequest>,
         MessageWriter<SelectionRequest>,
     ),
-    (mut sounds, mut disabled_catalogue, mut research_durations, mut unlocks): (
+    (
+        mut sounds,
+        catalogue_restriction_rows,
+        mut catalogue_restrictions,
+        mut research_durations,
+        mut unlocks,
+    ): (
         MessageWriter<PlayAudioCue>,
-        Query<&mut ScenarioDisabledCatalogueDefinitions, With<WorldRoot>>,
+        Query<&ScenarioCatalogueRestrictions, With<WorldRoot>>,
+        Query<(Entity, &mut ScenarioCatalogueRestriction)>,
         MessageWriter<openzt2_zoo_state::progression::research_types::SetResearchDuration>,
         MessageWriter<
             openzt2_zoo_state::progression::unlock_types::ApplyCatalogueDefinitionUnlockRequest,
@@ -340,9 +422,15 @@ pub(super) fn apply_scenario_ui_commands(
         Query<(Entity, &UiNodeId, &UiDocumentOwner, &Visibility)>,
         Query<&UiDocumentMembers>,
     ),
-    (mut panels, mut overrides): (
+    (mut panels, mut overrides, mut interaction): (
         Query<&mut ScenarioPanelMessages>,
         ScenarioUiNodeOverrideProjection,
+        Query<(
+            Option<&mut openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiScenarioInteractionOverride>,
+            Has<NamedScenarioUiInteraction>,
+            Has<DirectScenarioUiInteraction>,
+            Option<&crate::scenario::scenario_ui_modification_presentation::AppliedScenarioUiModification>,
+        )>,
     ),
     mut commands: Commands,
 ) {
@@ -447,7 +535,9 @@ pub(super) fn apply_scenario_ui_commands(
 
     let projected = !added_nodes.is_empty();
     let assets_changed = events.document_assets.read().count() > 0;
-    let restrictions_changed = overrides.changes(owner);
+    let restrictions_changed = overrides.changes(owner)
+        || !events.changed_mode_overrides.is_empty()
+        || events.retired_mode_overrides.read().count() != 0;
     let mut values = if projected
         || assets_changed
         || restrictions_changed
@@ -460,10 +550,11 @@ pub(super) fn apply_scenario_ui_commands(
         super::ScenarioUiSavedState::default()
     };
     let mut visibility_updated = false;
-    if projected || assets_changed {
+    if projected || assets_changed || !events.changed_scopes.is_empty() {
         pending.nodes.append(&mut pending.hidden);
     }
     let mut changed_enabled = Vec::new();
+    let mut catalogue_updates = BTreeMap::new();
     for request in requests.read() {
         match request {
             ScenarioUiCommand::Node { path, operation } => {
@@ -486,21 +577,26 @@ pub(super) fn apply_scenario_ui_commands(
                 .push_back((Vec::new(), NodeOperation::SelectSubject(*entity))),
             ScenarioUiCommand::Enabled { name, enabled } => {
                 let key = name.to_ascii_lowercase();
-                for (_, asset) in documents.iter() {
-                    let document = asset.canonical_ui_document();
-                    for (index, node) in document.nodes.iter().enumerate() {
-                        if node.name.eq_ignore_ascii_case(name) {
-                            continue;
-                        }
-                        if ancestors(document, index)
-                            .any(|ancestor| ancestor.name.eq_ignore_ascii_case(name))
-                        {
-                            values.enabled.remove(&node.name.to_ascii_lowercase());
-                        }
-                    }
+                let found_node = documents.iter().any(|(_, asset)| {
+                    asset
+                        .canonical_ui_document()
+                        .nodes
+                        .iter()
+                        .any(|node| node.name.eq_ignore_ascii_case(name))
+                });
+                if found_node {
+                    values.enabled.insert(key.clone(), *enabled);
+                    changed_enabled.push(key);
+                } else {
+                    catalogue_updates.insert((None, AssetId::from_key(&key)), *enabled);
                 }
-                values.enabled.insert(key.clone(), *enabled);
-                changed_enabled.push(key);
+            }
+            ScenarioUiCommand::CatalogueEnabled {
+                list,
+                definition,
+                enabled,
+            } => {
+                catalogue_updates.insert((Some(*list), *definition), *enabled);
             }
             ScenarioUiCommand::ResearchDuration {
                 definition,
@@ -553,55 +649,31 @@ pub(super) fn apply_scenario_ui_commands(
                 continue;
             };
             let document = asset.canonical_ui_document();
-            for (index, node) in document.nodes.iter().enumerate() {
+            for node in &document.nodes {
                 let key = node.name.to_ascii_lowercase();
                 let added = || {
                     added_nodes
                         .iter()
                         .any(|(id, owner)| owner.0 == root_entity && id.id == node.id)
                 };
-                let restriction = std::iter::once(node)
-                    .chain(ancestors(document, index))
-                    .find_map(|restricted| {
-                        let key = restricted.name.to_ascii_lowercase();
-                        values.enabled.get(&key).map(|enabled| (key, *enabled))
-                    });
-                // A buy-panel row enabled by name is no node of the document, so the
-                // list that holds it stays usable inside a disabled group.
-                let holds_enabled_row = values.enabled.iter().any(|(name, enabled)| {
-                    *enabled
-                        && !document
-                            .nodes
-                            .iter()
-                            .any(|node| node.name.eq_ignore_ascii_case(name))
-                }) && std::iter::once(node)
-                    .chain(ancestors(document, index))
-                    .any(|node| node.name.eq_ignore_ascii_case("buy area"));
-                if let Some((_, enabled)) = restriction {
-                    if !changed_enabled.is_empty() || state_added || added() {
-                        presentation.write(RequestUiPresentationAction {
-                            document_root: root_entity,
-                            action: UiPresentationAction::SetTargetNodeInteractionEnabled {
-                                target_node: node.id,
-                                enabled: enabled || holds_enabled_row,
-                            },
-                        });
-                    }
-                }
-                // Pointer input stops at a disabled ancestor, and a child enabled
-                // on its own has to work inside its disabled group. Its siblings
-                // stay disabled through their own flags.
-                if holds_enabled_row
-                    || values.enabled.get(&key) == Some(&true) && changed_enabled.contains(&key)
-                {
-                    for ancestor in ancestors(document, index) {
-                        presentation.write(RequestUiPresentationAction {
-                            document_root: root_entity,
-                            action: UiPresentationAction::SetTargetNodeInteractionEnabled {
-                                target_node: ancestor.id,
-                                enabled: true,
-                            },
-                        });
+                if let Some((live, _)) = find_node(root_entity, node.id) {
+                    if let Ok((current, named_override, false, mode_override)) =
+                        interaction.get_mut(live)
+                    {
+                        let mut entity = commands.entity(live);
+                        if let Some(&enabled) = values.enabled.get(&key) {
+                            set_scenario_interaction_override(&mut entity, current, Some(enabled));
+                            if !named_override {
+                                entity.insert_if_new(NamedScenarioUiInteraction);
+                            }
+                        } else if named_override && !changed_enabled.is_empty() {
+                            entity.remove::<NamedScenarioUiInteraction>();
+                            set_scenario_interaction_override(
+                                &mut entity,
+                                current,
+                                mode_override.and_then(|mode| mode.active_override()),
+                            );
+                        }
                     }
                 }
                 if let Some(&visible) = values.shown.get(&key) {
@@ -618,16 +690,28 @@ pub(super) fn apply_scenario_ui_commands(
             }
         }
     }
-    // Scripts also address buy-panel rows, by the name of what each one sells.
-    if !changed_enabled.is_empty() || state_added || restrictions_changed {
-        if let Ok(mut disabled) = disabled_catalogue.get_mut(owner) {
-            let definitions = values
-                .enabled
-                .iter()
-                .filter(|(_, enabled)| !**enabled)
-                .map(|(name, _)| AssetId::from_key(name))
-                .collect();
-            disabled.set_if_neq(ScenarioDisabledCatalogueDefinitions(definitions));
+    if worlds.contains(owner) && !catalogue_updates.is_empty() {
+        if let Ok(rows) = catalogue_restriction_rows.get(owner) {
+            let mut rows = catalogue_restrictions.iter_many_mut(rows.iter()).matched();
+            while let Some((_, restriction)) = rows.fetch_next() {
+                if let Some(enabled) =
+                    catalogue_updates.remove(&(restriction.list, restriction.definition))
+                {
+                    restriction
+                        .map_unchanged(|restriction| &mut restriction.enabled)
+                        .set_if_neq(enabled);
+                }
+            }
+        }
+        for ((list, definition), enabled) in catalogue_updates {
+            commands.spawn((
+                ScenarioCatalogueRestrictionOf(owner),
+                ScenarioCatalogueRestriction {
+                    list,
+                    definition,
+                    enabled,
+                },
+            ));
         }
     }
     let count = pending.nodes.len();
@@ -662,7 +746,11 @@ pub(super) fn apply_scenario_ui_commands(
                 .write(TimedScenarioUiActionCompleted(action));
             continue;
         }
+        let (document_scope, node_path) = super::scoped_document(&path);
         let target = roots.iter().find_map(|(entity, root)| {
+            if document_scope.is_some_and(|scope| scope != entity) {
+                return None;
+            }
             let document = documents.get(&root.document)?.canonical_ui_document();
             if matches!(
                 document.role,
@@ -673,7 +761,14 @@ pub(super) fn apply_scenario_ui_commands(
             {
                 return None;
             }
-            let id = resolve_node(document, &path)?;
+            if document.role == UiDocumentRole::PhotoMode {
+                if let Ok(offer) = challenge_offers.single() {
+                    if photo_scopes.document(offer) != Some(entity) {
+                        return None;
+                    }
+                }
+            }
+            let id = resolve_node(document, node_path)?;
             let ready = members.get(entity).is_ok_and(|members| {
                 all_nodes
                     .iter_many(members.iter())
@@ -683,7 +778,14 @@ pub(super) fn apply_scenario_ui_commands(
             ready.then_some((entity, id))
         });
         let Some((root, target_node)) = target else {
-            if let Some(role) = role_for(&documents, &path) {
+            if document_scope.is_some_and(|root| !roots.contains(root)) {
+                continue;
+            }
+            if let Some(role) = document_scope
+                .is_none()
+                .then(|| role_for(&documents, &path))
+                .flatten()
+            {
                 if matches!(
                     role,
                     UiDocumentRole::ChallengeOffer | UiDocumentRole::InstantChallengeOffer
@@ -704,6 +806,18 @@ pub(super) fn apply_scenario_ui_commands(
             continue;
         };
         let action = match operation {
+            NodeOperation::InteractionEnabled(enabled) => {
+                if let Some((entity, _)) = find_node(root, target_node) {
+                    if let Ok((current, _, direct, _)) = interaction.get_mut(entity) {
+                        let mut target = commands.entity(entity);
+                        set_scenario_interaction_override(&mut target, current, Some(enabled));
+                        if !direct {
+                            target.insert_if_new(DirectScenarioUiInteraction);
+                        }
+                    }
+                }
+                continue;
+            }
             NodeOperation::Visible(visible) => UiPresentationAction::SetTargetNodeVisible {
                 target_node,
                 visible,
@@ -917,6 +1031,26 @@ pub(super) fn apply_scenario_ui_commands(
         if !queue.draft.is_empty() || !queue.entries.is_empty() {
             commands.entity(entity).insert(queue);
         }
+    }
+}
+
+fn set_scenario_interaction_override(
+    entity: &mut bevy::ecs::system::EntityCommands,
+    current: Option<Mut<openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiScenarioInteractionOverride>>,
+    enabled: Option<bool>,
+) {
+    use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiScenarioInteractionOverride;
+    match (current, enabled) {
+        (Some(mut current), Some(enabled)) => {
+            current.set_if_neq(UiScenarioInteractionOverride(enabled));
+        }
+        (None, Some(enabled)) => {
+            entity.insert(UiScenarioInteractionOverride(enabled));
+        }
+        (Some(_), None) => {
+            entity.remove::<UiScenarioInteractionOverride>();
+        }
+        (None, None) => {}
     }
 }
 

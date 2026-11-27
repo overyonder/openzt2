@@ -3,14 +3,13 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
 };
 
 use bevy::{gltf::Gltf, prelude::*};
 use openzt2_game_data::{
-    AssetId,
     world_definitions::{
         animal_health::*,
         animal_shows_and_training::*,
@@ -43,6 +42,7 @@ use openzt2_game_data::{
         transportation_and_tours::*,
         world_objects::*,
     },
+    AssetId,
 };
 
 use crate::{effect::ParticleEffectDocumentAsset, scene_prefab::ScenePrefabAsset};
@@ -132,6 +132,7 @@ pub(super) enum SingletonKind {
     FossilPlacement,
     SimulationTiming,
     GuestGeneration,
+    GuestInfluence,
     GuestFavouriteAnimalTrend,
     BehaviorSelection,
     NeedAdjustment,
@@ -389,6 +390,88 @@ macro_rules! singleton {
 }
 
 impl<'a> WorldDefinitionsView<'a> {
+    pub fn collision_scores(
+        self,
+        object: AssetId,
+    ) -> Option<&'a openzt2_game_data::world_definitions::world_objects::WorldObjectCollisionScores>
+    {
+        self.find_object(object)?.collision_scores.as_ref()
+    }
+
+    pub fn staff_interactions(
+        self,
+        object: AssetId,
+    ) -> Option<&'a [super::interaction_policies::StaffInteraction]> {
+        let row = self.records.get(&(DefinitionKind::Object, object))?;
+        self.assets
+            .get(&row.handle)?
+            .metadata
+            .staff_interactions
+            .get(&object)
+            .map(Vec::as_slice)
+    }
+
+    pub fn object_influences(
+        self,
+        object: AssetId,
+    ) -> Option<&'a [super::interaction_policies::InfluenceSource]> {
+        let row = self.records.get(&(DefinitionKind::Object, object))?;
+        self.assets
+            .get(&row.handle)?
+            .metadata
+            .object_influences
+            .get(&object)
+            .map(Vec::as_slice)
+    }
+
+    pub fn guest_influence_watches(
+        self,
+        guest: AssetId,
+    ) -> Option<&'a [super::interaction_policies::GuestInfluenceWatch]> {
+        let row = self.records.get(&(DefinitionKind::Guest, guest))?;
+        self.assets
+            .get(&row.handle)?
+            .metadata
+            .guest_influence_watches
+            .get(&guest)
+            .map(Vec::as_slice)
+    }
+
+    pub fn guest_influence_policy(
+        self,
+    ) -> Option<&'a super::interaction_policies::GuestInfluencePolicy> {
+        self.assets
+            .get(self.singletons.get(&SingletonKind::GuestInfluence)?)?
+            .metadata
+            .guest_influence_policy
+            .as_ref()
+    }
+    pub fn guest_locomotion_tables(self, guest: AssetId) -> Option<&'a [StaffLocomotionTable]> {
+        Some(&self.find_guest(guest)?.locomotion.tables)
+    }
+
+    pub fn guest_locomotion_directions(self, guest: AssetId) -> Option<&'a [openzt2_game_data::world_definitions::guest_simulation_definitions::GuestDirectionalLocomotionClip]>{
+        Some(&self.find_guest(guest)?.locomotion.directions)
+    }
+
+    pub fn ambient_locomotion_tables(
+        self,
+        definition: AssetId,
+    ) -> Option<&'a [StaffLocomotionTable]> {
+        let row = self.records.get(&(DefinitionKind::Object, definition))?;
+        self.assets
+            .get(&row.handle)?
+            .metadata
+            .ambient_locomotion
+            .get(&definition)
+            .map(Vec::as_slice)
+    }
+
+    pub fn sky_station_stop_nodes(self, station: AssetId) -> Option<[Option<AssetId>; 4]> {
+        let stops = self.find_station(station)?.sky_stop_nodes;
+        stops.iter().any(Option::is_some).then_some(stops)
+    }
+
     pub fn authored_timekeeper_policy(self) -> Option<super::timing::AuthoredTimekeeperPolicy> {
         self.assets
             .get(self.singletons.get(&SingletonKind::SimulationTiming)?)?
@@ -544,14 +627,13 @@ impl<'a> WorldDefinitionsView<'a> {
     );
     finder!(find_guest, Guest, guests, GuestDefinition);
 
-    pub fn guest_show_need(self, guest: AssetId) -> Option<super::world_definition_document_asset_and_demand_loaded_dependency_paths::AuthoredGuestShowNeed>{
-        let row = self.records.get(&(DefinitionKind::Guest, guest))?;
-        self.assets
-            .get(&row.handle)?
-            .metadata
-            .guest_show_needs
-            .get(&guest)
-            .copied()
+    pub fn guest_show_need(
+        self,
+        guest: AssetId,
+    ) -> Option<
+        openzt2_game_data::world_definitions::guest_simulation_definitions::GuestShowNeedDefinition,
+    > {
+        self.find_guest(guest)?.show_need
     }
     finder!(
         find_entity_naming,
@@ -592,6 +674,11 @@ impl<'a> WorldDefinitionsView<'a> {
             .filter_map(move |(_, row)| {
                 self.assets.get(&row.handle)?.document.guests.get(row.first)
             })
+    }
+    pub fn ordinary_guest_definitions(self) -> impl Iterator<Item = &'a GuestDefinition> {
+        let test_binder = AssetId::from_key("guest_adult_m");
+        self.guest_definitions()
+            .filter(move |guest| guest.id != test_binder)
     }
     finder!(
         find_viewing_opportunity,
@@ -1366,6 +1453,14 @@ impl<'a> WorldDefinitionsView<'a> {
             .records
             .get(&(DefinitionKind::TankWaterMaterialDependency, id))?;
         self.assets.get(&row.handle)?.tank_water_material_path(id)
+    }
+
+    pub fn tank_water_material_paths(self) -> impl Iterator<Item = &'a str> {
+        self.records
+            .range(kind_range(DefinitionKind::TankWaterMaterialDependency))
+            .filter_map(move |(&(_, id), row)| {
+                self.assets.get(&row.handle)?.tank_water_material_path(id)
+            })
     }
 
     pub fn model(self, id: AssetId) -> Option<Handle<Gltf>> {

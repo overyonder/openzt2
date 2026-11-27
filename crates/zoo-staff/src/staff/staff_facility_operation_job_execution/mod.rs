@@ -32,11 +32,12 @@ pub(super) fn apply_completed_tank_maintenance_work(
         {
             continue;
         }
+        let Some(target) = job.target else { continue };
         completed.write(StaffJobCompleted {
             staff: outcome.actor,
             job: current.job(),
             kind: StaffJobKind::MaintainTank,
-            target: job.target,
+            target,
         });
     }
 }

@@ -78,7 +78,7 @@ struct ChallengeSnapshot {
     rng: [u64; 2],
     next_evaluation: Option<u64>,
     instant_decided: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pending_validation: Option<AssetId>,
     candidates: BTreeMap<AssetId, ScenarioLuaSavedState>,
     offer: Option<ChallengeOfferSnapshot>,
@@ -350,12 +350,21 @@ pub(super) fn encode(snapshot: Option<&ScenarioSnapshot>) -> Result<Vec<u8>, Fai
         bytes.extend_from_slice(b"SCL1");
         bytes
             .extend(postcard::to_allocvec(challenge).map_err(|_| Failure::CorruptSnapshotSection)?);
+        if let Some(pending) = challenge.pending_validation {
+            bytes.extend_from_slice(b"SCV1");
+            bytes.extend_from_slice(&pending.0);
+        }
     }
     if snapshot.groups != ScenarioGroupSnapshots::default() {
         bytes.extend_from_slice(b"SGP1");
         bytes.extend(
             postcard::to_allocvec(&snapshot.groups).map_err(|_| Failure::CorruptSnapshotSection)?,
         );
+    }
+    if let Some(catalogue) = &snapshot.ui.catalogue {
+        bytes.extend_from_slice(b"SCT1");
+        bytes
+            .extend(postcard::to_allocvec(catalogue).map_err(|_| Failure::CorruptSnapshotSection)?);
     }
     if bytes.len() > MAX_PAYLOAD_BYTES {
         return Err(Failure::CapacityExceeded);
@@ -399,8 +408,15 @@ pub(super) fn decode(
         remaining = &remaining[12..];
     }
     if let Some(payload) = remaining.strip_prefix(b"SCL1") {
-        let (challenge, tail): (ChallengeSnapshot, _) =
+        let (mut challenge, mut tail): (ChallengeSnapshot, _) =
             postcard::take_from_bytes(payload).map_err(|_| Failure::CorruptSnapshotSection)?;
+        if let Some(payload) = tail.strip_prefix(b"SCV1") {
+            let (identifier, rest) = payload
+                .split_first_chunk::<16>()
+                .ok_or(Failure::CorruptSnapshotSection)?;
+            challenge.pending_validation = Some(AssetId(*identifier));
+            tail = rest;
+        }
         snapshot.challenge = Some(challenge);
         remaining = tail;
     }
@@ -408,6 +424,12 @@ pub(super) fn decode(
         let (groups, tail): (ScenarioGroupSnapshots, _) =
             postcard::take_from_bytes(payload).map_err(|_| Failure::CorruptSnapshotSection)?;
         snapshot.groups = groups;
+        remaining = tail;
+    }
+    if let Some(payload) = remaining.strip_prefix(b"SCT1") {
+        let (catalogue, tail) =
+            postcard::take_from_bytes(payload).map_err(|_| Failure::CorruptSnapshotSection)?;
+        snapshot.ui.catalogue = Some(catalogue);
         remaining = tail;
     }
     if !remaining.is_empty() {

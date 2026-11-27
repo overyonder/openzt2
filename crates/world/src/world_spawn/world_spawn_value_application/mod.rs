@@ -14,7 +14,7 @@ use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIden
 use openzt2_world_state::world_spawn::world_load_completion_marker::{
     StartingPrefabsHydrated, StartingSpawnValuesApplied,
 };
-use openzt2_zoo_state::progression::research_duration_calculation::resolve_research_duration_to_simulation_ticks;
+use openzt2_zoo_state::progression::research_duration_calculation::resolve_research_duration;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -183,11 +183,13 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
                 let target = entity_at_source_ordinal(*entity)
                     .expect("validated authored cash-register target");
                 if let Ok(mut wallet) = wallets.get_mut(target) {
-                    if wallet.0 != Money(*cents) {
-                        wallet.0 = Money(*cents);
+                    if wallet.0 != Money::from_cents(*cents) {
+                        wallet.0 = Money::from_cents(*cents);
                     }
                 } else {
-                    commands.entity(target).insert(Wallet(Money(*cents)));
+                    commands
+                        .entity(target)
+                        .insert(Wallet(Money::from_cents(*cents)));
                 }
             }
             StartingZooSpawnValue::Research { item, progress } => {
@@ -198,24 +200,21 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
                 let id = allocator
                     .allocate()
                     .expect("validated persistent-ID allocator capacity");
-                let required_ticks = resolve_research_duration_to_simulation_ticks(
+                let duration = resolve_research_duration(
                     research.duration,
-                    definitions.timing().fixed_hz,
+                    definitions
+                        .simulation_timestep()
+                        .expect("validated world definitions provide the simulation timestep"),
                     *seed,
                     id,
                 );
-                let elapsed_ticks =
-                    u64::try_from(u128::from(required_ticks) * u128::from(*progress) / 1_000)
-                        .unwrap_or(required_ticks);
-                commands.spawn((
-                    ResearchProject {
-                        definition,
-                        elapsed_ticks,
-                        required_ticks,
-                    },
-                    WorldMember { root },
-                    id,
+                let elapsed = duration.as_nanos() * u128::from(*progress) / 1_000;
+                let mut project = ResearchProject::new(definition, duration);
+                project.timer.set_elapsed(std::time::Duration::new(
+                    (elapsed / 1_000_000_000) as u64,
+                    (elapsed % 1_000_000_000) as u32,
                 ));
+                commands.spawn((project, WorldMember { root }, id));
             }
         }
     }

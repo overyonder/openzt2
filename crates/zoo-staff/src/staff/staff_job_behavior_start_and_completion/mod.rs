@@ -21,17 +21,18 @@ use super::{
     staff_employment_types::Staff,
     staff_job_types::{
         CurrentJob, JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask,
-        StaffJobCancellationPending, UnsuccessfulStaffJobCandidates,
+        StaffJobCancellationPending, StaffJobTarget, UnsuccessfulStaffJobCandidates,
     },
     staff_lifecycle_messages::StaffJobCompleted,
 };
 
-pub(crate) fn start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs(
+pub(super) fn start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs(
     mut commands: Commands,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     mut behavior_generations: Query<&mut BehaviorTaskGeneration>,
+    clocks: Query<&openzt2_world_state::simulation_time::simulation_clock_types::ZooClock>,
     staff: Query<
-        (Entity, &CurrentJob),
+        (Entity, &CurrentJob, Option<&WorldMember>),
         (
             With<Staff>,
             Without<BehaviorTaskExecutionState>,
@@ -40,10 +41,19 @@ pub(crate) fn start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs(
             >,
         ),
     >,
-    mut jobs: Query<(&StaffJob, &mut StaffJobBehaviorTask)>,
+    mut jobs: Query<(
+        &StaffJob,
+        Option<&StaffJobTarget>,
+        &mut StaffJobBehaviorTask,
+        Option<&super::staff_request_token_delivery::StaffRequestExecutionToken>,
+    )>,
+    tokens: Query<(
+        &openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken,
+        &openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorTokenContext,
+    )>,
 ) {
-    for (staff_entity, current_job) in &staff {
-        let Ok((job, mut behavior_task)) = jobs.get_mut(current_job.job()) else {
+    for (staff_entity, current_job, member) in &staff {
+        let Ok((job, target, mut behavior_task, dispatch)) = jobs.get_mut(current_job.job()) else {
             continue;
         };
         if behavior_task.execution_id.is_some() {
@@ -72,6 +82,24 @@ pub(crate) fn start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs(
 
             continue;
         };
+        let tick = member
+            .and_then(|member| clocks.get(member.root).ok())
+            .map_or(0, |clock| clock.tick);
+        let delivered_token = if let Some(dispatch) = dispatch {
+            let Ok((token, context)) = tokens.get(dispatch.0) else {
+                commands.entity(current_job.job()).remove::<JobClaim>();
+                continue;
+            };
+            if !token.is_available_at(tick) {
+                if tick >= token.expires_at {
+                    commands.entity(current_job.job()).remove::<JobClaim>();
+                }
+                continue;
+            }
+            Some((dispatch.0, token.payload, context.force))
+        } else {
+            None
+        };
         behavior_task.declaration_index = declaration_index;
         let execution_id = allocate_behavior_execution_id(
             staff_entity,
@@ -79,26 +107,35 @@ pub(crate) fn start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs(
             &mut commands,
         );
         behavior_task.execution_id = Some(execution_id);
+        if let Some((entity, _, _)) = delivered_token {
+            commands.entity(entity).insert(
+                openzt2_zoo_state::animal_behavior::behavior_token_types::ClaimedBehaviorSelfToken {
+                    execution_id,
+                }
+            );
+        }
         commands
             .entity(staff_entity)
             .insert(BehaviorTaskEffectiveScore {
                 execution_id,
                 template_score: Some(behavior_task_definition.priority.unwrap_or_default()),
-                linked_score: Some(f32::from_bits(u32::MAX - job.urgency))
+                linked_score: Some(job.priority)
                     .filter(|priority| priority.is_finite() && *priority > 0.0),
-                selected_candidate_score: None,
+                selected_candidate_score: delivered_token
+                    .and_then(|(_, _, force)| force.then_some(1_000_000_000.0)),
             })
             .insert(BehaviorTaskExecutionState {
                 execution_id,
                 program: behavior_task_definition.id,
-                target: Some(job.target),
+                target: delivered_token
+                    .map_or_else(|| target.map(|target| target.0), |(_, payload, _)| payload),
                 document: behavior_task.document.clone(),
                 declaration: behavior_task.declaration_index,
                 phase: BehaviorTaskExecutionPhase::Execution,
                 action: 0,
                 repetitions: 0,
                 next_action_tick: 0,
-                object: None,
+                object: delivered_token.map(|(entity, _, _)| entity),
                 interaction_slot: None,
                 depth: 0,
             })
@@ -114,6 +151,7 @@ pub(super) fn release_staff_assignment_after_authored_behavior_failure_finishes(
         (
             &JobClaim,
             &StaffJobBehaviorTask,
+            &mut StaffJob,
             Option<&mut UnsuccessfulStaffJobCandidates>,
         ),
         (
@@ -126,7 +164,8 @@ pub(super) fn release_staff_assignment_after_authored_behavior_failure_finishes(
         let Ok(current_job) = staff.get(failed_behavior_task.actor) else {
             continue;
         };
-        let Ok((claim, behavior_task, unsuccessful)) = jobs.get_mut(current_job.job()) else {
+        let Ok((claim, behavior_task, mut job, unsuccessful)) = jobs.get_mut(current_job.job())
+        else {
             continue;
         };
         if claim.staff != failed_behavior_task.actor
@@ -134,6 +173,9 @@ pub(super) fn release_staff_assignment_after_authored_behavior_failure_finishes(
         {
             continue;
         }
+        job.reborrow()
+            .map_unchanged(|job| &mut job.first_attempt)
+            .set_if_neq(false);
         if let Some(mut unsuccessful) = unsuccessful {
             unsuccessful.record(claim.staff);
         } else {
@@ -186,7 +228,10 @@ pub(crate) fn settle_staff_jobs_after_authored_behavior_finishes(
             || (kind == StaffJobKind::Capture
                 && job.token == Some(AssetId::from_key("t_crateanimal")))
         {
-            if cancelling.contains(current_job.job()) || !live_animals.contains(job.target) {
+            let Some(target) = job.target.filter(|&target| live_animals.contains(target)) else {
+                continue;
+            };
+            if cancelling.contains(current_job.job()) {
                 continue;
             }
             // The authored cure, heal, food placement or dart already applied
@@ -197,7 +242,7 @@ pub(crate) fn settle_staff_jobs_after_authored_behavior_finishes(
                 staff: claim.staff,
                 job: current_job.job(),
                 kind,
-                target: job.target,
+                target,
             });
         } else if kind == StaffJobKind::CleanHabitat
             || (kind == StaffJobKind::Feed

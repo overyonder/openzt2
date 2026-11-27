@@ -21,9 +21,10 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::TankEditKind;
 use openzt2_zoo_state::economy::money_types::Money;
-use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
+use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_topology_cell;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
+use openzt2_zoo_state::habitat::habitat_types::{HabitatCellOf, HabitatIndex};
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
 use super::{
@@ -52,6 +53,7 @@ pub(super) fn update_tank_geometry_gesture(
     ),
     grid: Single<&TopologyGrid>,
     habitat_index: Single<&HabitatIndex>,
+    cell_owners: Query<&HabitatCellOf>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     cursors: Query<&ConstructionCursor>,
@@ -205,7 +207,7 @@ pub(super) fn update_tank_geometry_gesture(
             }
         }
         preview.validity = if edit.before != edit.after && edit.after.is_valid() {
-            PlacementValidity::Valid { cost: Money(0) }
+            PlacementValidity::Valid { cost: Money::ZERO }
         } else {
             PlacementValidity::Invalid(PlacementFailure::InvalidHabitat)
         };
@@ -236,12 +238,12 @@ pub(super) fn update_tank_geometry_gesture(
     let cell = ((cursor.world.xz() - grid.origin) / grid.spacing_m)
         .floor()
         .as_ivec2();
-    let Some((habitat, (tank, geometry, region, _, member))) = habitat_index
-        .habitat_for_topology_cell(cell)
-        .and_then(|habitat| tanks.get(habitat).ok().map(|facts| (habitat, facts)))
-        .filter(|(_, (_, geometry, _, summary, member))| {
-            member.root == root && !summary.boundary_is_breached && geometry.is_valid()
-        })
+    let Some((habitat, (tank, geometry, region, _, member))) =
+        locate_habitat_at_topology_cell(habitat_index, &cell_owners, cell)
+            .and_then(|habitat| tanks.get(habitat).ok().map(|facts| (habitat, facts)))
+            .filter(|(_, (_, geometry, _, summary, member))| {
+                member.root == root && !summary.boundary_is_breached && geometry.is_valid()
+            })
     else {
         return;
     };

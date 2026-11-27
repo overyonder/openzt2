@@ -7,6 +7,10 @@ use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_assets::{
     asset_source::AssetArchives,
     terrain::canonical_terrain_asset_loading::add_restored_terrain_asset,
+    world_definitions::{
+        world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+        world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+    },
     world_scenario::saved_world_scenario_asset_construction::add_restored_world_scenario_asset,
     world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
 };
@@ -15,9 +19,29 @@ use openzt2_game_assets::{
 pub(in crate::persistence) struct SavedWorldSnapshotPreparation<'w> {
     server: Option<Res<'w, AssetServer>>,
     archives: Option<Res<'w, AssetArchives>>,
+    definitions: Option<Res<'w, WorldDefinitions>>,
+    definition_assets: Option<Res<'w, Assets<WorldDefinitionAsset>>>,
 }
 
 impl SavedWorldSnapshotPreparation<'_> {
+    pub(super) fn mode_document(
+        &self,
+        world: &WorldSnapshotRecord,
+    ) -> Result<Option<super::pending_snapshot_application_types::SnapshotModeDocument>, Failure>
+    {
+        let Some(path) = &world.mode_document_path else {
+            return Ok(None);
+        };
+        let server = self
+            .server
+            .as_deref()
+            .ok_or(Failure::UnknownAssetIdentifier)?;
+        let handle = server.load(path.clone());
+        Ok(Some(
+            super::pending_snapshot_application_types::SnapshotModeDocument(handle),
+        ))
+    }
+
     pub(super) fn prepare(
         &self,
         world: &WorldSnapshotRecord,
@@ -76,8 +100,22 @@ impl SavedWorldSnapshotPreparation<'_> {
             .find(|terrain| terrain.id == map.terrain)
             .map(|terrain| std::path::PathBuf::from(terrain.path.as_ref()))
             .ok_or(Failure::UnknownAssetIdentifier)?;
-        let terrain =
-            add_restored_terrain_asset(server, archives, terrain.grid.clone(), declaring_path);
+        let tank_water_source_paths = self
+            .definitions
+            .as_deref()
+            .zip(self.definition_assets.as_deref())
+            .and_then(|(definitions, assets)| definitions.get(assets))
+            .into_iter()
+            .flat_map(|definitions| definitions.tank_water_material_paths())
+            .map(std::path::PathBuf::from)
+            .collect();
+        let terrain = add_restored_terrain_asset(
+            server,
+            archives,
+            terrain.grid.clone(),
+            declaring_path,
+            tank_water_source_paths,
+        );
         let scenario = add_restored_world_scenario_asset(
             server,
             archives,

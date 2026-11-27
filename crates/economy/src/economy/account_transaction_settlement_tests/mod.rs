@@ -27,8 +27,8 @@ fn create_application_with_account_transaction_settlement() -> App {
     application
         .add_message::<TransactionRequest>()
         .init_resource::<super::account_transaction_settlement::AccountRequestCursor>()
-        .add_message::<super::account_transaction_settlement::RecordedAccountMovement<true>>()
-        .add_message::<super::account_transaction_settlement::RecordedAccountMovement<false>>()
+        .add_message::<openzt2_zoo_state::economy::account_transaction_types::RecordedAccountMovement<true>>()
+        .add_message::<openzt2_zoo_state::economy::account_transaction_types::RecordedAccountMovement<false>>()
         .add_message::<TransactionCompleted>()
         .add_message::<TransactionRejected>()
         .add_systems(
@@ -91,12 +91,10 @@ fn entity_to_zoo_transaction_commits_both_account_balances_once() {
             .len(),
         1
     );
-    assert!(
-        application
-            .world()
-            .resource::<Messages<TransactionRejected>>()
-            .is_empty()
-    );
+    assert!(application
+        .world()
+        .resource::<Messages<TransactionRejected>>()
+        .is_empty());
 }
 
 #[test]
@@ -132,12 +130,10 @@ fn rejected_transaction_leaves_every_account_balance_unchanged() {
             .0,
         Money::from_cents(1_000)
     );
-    assert!(
-        application
-            .world()
-            .resource::<Messages<TransactionCompleted>>()
-            .is_empty()
-    );
+    assert!(application
+        .world()
+        .resource::<Messages<TransactionCompleted>>()
+        .is_empty());
     assert_eq!(
         application
             .world()
@@ -171,7 +167,7 @@ fn transaction_request_order_controls_competing_debits() {
 
     assert_eq!(
         application.world().get::<Wallet>(guest),
-        Some(&Wallet(Money::from_cents(20)))
+        Some(&Wallet(Money::from_dollars(1.0 - 0.8).unwrap()))
     );
     assert_eq!(
         application
@@ -361,14 +357,12 @@ fn source_global_operations_preserve_independent_ledger_and_atomic_replay() {
             .finance_metric_value(FinanceMetric::TotalUsers, FinancePeriod::Lifetime),
         FinanceValue::Users(0)
     );
-    assert!(
-        ledger
-            .history()
-            .retained_month_finance_records()
-            .all(|month| month.construction == Money::ZERO
-                && month.active_users == 0
-                && month.total_users == 0)
-    );
+    assert!(ledger
+        .history()
+        .retained_month_finance_records()
+        .all(|month| month.construction == Money::ZERO
+            && month.active_users == 0
+            && month.total_users == 0));
 
     let maximum = Money::from_dollars(f32::MAX).unwrap();
     application

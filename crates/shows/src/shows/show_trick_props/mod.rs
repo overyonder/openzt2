@@ -10,20 +10,22 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
-    AssetId,
     world_definitions::{
         animal_shows_and_training::TrickDefinition,
         object_placement::{FootprintCellFlags, PlaceableDefinition},
     },
+    AssetId,
 };
 use openzt2_world::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
 use openzt2_world_state::world_spawn::{
     persistent_id_types::PersistentIdAllocator,
     prefab_model_readiness::first_missing_prefab_collider_model_asset_id,
-    world_membership_types::{WorldMember, WorldRoot},
+    world_membership_types::{DefinitionId, WorldMember, WorldRoot},
 };
 use openzt2_zoo_state::{
-    animal_behavior::behavior_token_types::BehaviorTrickPropOrigin,
+    animal_behavior::behavior_token_types::{
+        BehaviorSelfToken, BehaviorTrickDestination, BehaviorTrickPropOrigin,
+    },
     aquatic::aquatic_simulation_types::{Tank, TankGeometry},
     habitat::habitat_types::{HabitatMember, HabitatRegion},
     placement::{
@@ -35,22 +37,26 @@ use openzt2_zoo_state::{
         },
     },
     shows::{
-        running_show_types::{RunningShow, ShowPhase},
+        running_show_types::{RunningShow, RunningShowTrick, ShowPhase},
         show_stage_types::ShowStage,
     },
     topology::topology_graph_types::TopologyGrid,
 };
 
-use super::running_show_schedule::ShowRunSlotOrder;
+use super::{
+    running_show_schedule::{ActiveShowTrickOf, ShowRunSlotOrder},
+    ShowTrickTokens,
+};
+use bevy::ecs::relationship::RelationshipTarget;
 use openzt2_zoo_state::shows::show_schedule_types::ScheduledShowTrickPerformance;
 
 #[derive(Component)]
 #[relationship(relationship_target = ShowTrickProp)]
-pub(super) struct ShowTrickPropOf(Entity);
+pub struct ShowTrickPropOf(pub Entity);
 
 #[derive(Component)]
 #[relationship_target(relationship = ShowTrickPropOf, linked_spawn)]
-pub(super) struct ShowTrickProp(Entity);
+pub struct ShowTrickProp(Entity);
 
 #[derive(Component)]
 pub(super) struct ShowPropAssets(HashMap<AssetId, Handle<ScenePrefabAsset>>);
@@ -82,6 +88,65 @@ pub(super) fn load_scheduled_prop_prefabs(
             })
             .collect();
         commands.entity(entity).insert(ShowPropAssets(handles));
+    }
+}
+
+pub(super) fn reconnect_restored_show_trick_props(
+    actions: Query<
+        (
+            Entity,
+            &ActiveShowTrickOf,
+            &RunningShowTrick,
+            &ShowTrickTokens,
+        ),
+        Without<ShowTrickProp>,
+    >,
+    shows: Query<&WorldMember, With<RunningShow>>,
+    tokens: Query<(&BehaviorSelfToken, &BehaviorTrickDestination)>,
+    mut props: Query<
+        (
+            &DefinitionId,
+            &WorldMember,
+            Option<&mut BehaviorTrickPropOrigin>,
+        ),
+        Without<ShowTrickPropOf>,
+    >,
+    definitions: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    mut commands: Commands,
+) {
+    let Some(definitions) = definitions.get(&assets) else {
+        return;
+    };
+    for (action, run, trick, action_tokens) in &actions {
+        let (Some(definition), Ok(show)) = (
+            definitions
+                .find_trick(trick.definition)
+                .and_then(|trick| prop_definition(definitions, trick.target)),
+            shows.get(run.0),
+        ) else {
+            continue;
+        };
+        for (token, destination) in tokens.iter_many(action_tokens.iter()).flatten() {
+            let Some(prop) = token.payload else {
+                continue;
+            };
+            let Ok((object, world, origin)) = props.get_mut(prop) else {
+                continue;
+            };
+            if world.root != show.root || object.0 != definition.id {
+                continue;
+            }
+            let mut entity = commands.entity(prop);
+            entity.insert(ShowTrickPropOf(action));
+            let position = BehaviorTrickPropOrigin(destination.0);
+            if let Some(mut origin) = origin {
+                origin.set_if_neq(position);
+            } else {
+                entity.insert(position);
+            }
+            break;
+        }
     }
 }
 

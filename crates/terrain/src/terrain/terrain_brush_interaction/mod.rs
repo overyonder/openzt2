@@ -122,7 +122,7 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
                         _ => AssetId::default(),
                     },
                     transform,
-                    validity: PlacementValidity::Valid { cost: Money(0) },
+                    validity: PlacementValidity::Valid { cost: Money::ZERO },
                 },
                 transform,
                 WorldMember { root },

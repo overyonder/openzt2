@@ -38,7 +38,7 @@ fn matching_completed_payment_emits_one_trip_and_consumes_fare_operation() {
                 score: 420.0,
                 rating: 0.42,
             },
-            QueuedFare::pending(Money(250)),
+            QueuedFare::pending(Money::from_cents(250)),
         ))
         .id();
     application.world_mut().write_message(TransactionCompleted {
@@ -47,7 +47,7 @@ fn matching_completed_payment_emits_one_trip_and_consumes_fare_operation() {
         operation: fare_operation,
         debit: Account::Entity(guest_entity),
         credit: Account::Zoo,
-        amount: Money(250),
+        amount: Money::from_cents(250),
         kind: TransactionKind::Service,
         subject: Some(circuit_entity),
     });
@@ -78,7 +78,7 @@ fn unrelated_completed_payment_does_not_complete_transport_trip() {
                 score: 100.0,
                 rating: 0.1,
             },
-            QueuedFare::pending(Money(250)),
+            QueuedFare::pending(Money::from_cents(250)),
         ))
         .id();
     application.world_mut().write_message(TransactionCompleted {
@@ -87,7 +87,7 @@ fn unrelated_completed_payment_does_not_complete_transport_trip() {
         operation: fare_operation,
         debit: Account::Entity(guest_entity),
         credit: Account::Zoo,
-        amount: Money(1),
+        amount: Money::from_cents(1),
         kind: TransactionKind::Service,
         subject: Some(circuit_entity),
     });

@@ -16,12 +16,12 @@ use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::resolved_source_record_index::SourceIndex;
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::species::ConservationStatus;
 use openzt2_game_data::species::Species;
 use openzt2_game_data::species::SpeciesDocument;
 use openzt2_game_data::species::SpeciesFlags;
 use openzt2_game_data::species::SpeciesVariantBinding;
+use openzt2_game_data::AssetId;
 use std::collections::BTreeSet;
 
 pub mod adoption;
@@ -90,7 +90,7 @@ pub(super) fn lower_resolved_species_source_document_closure_to_canonical_docume
     source_documents: &[OrderedSourceDocument],
     actor_manifest_resolution_index: &BlueFangActorManifestModelAndSceneResolutionIndex,
     primary_path: &str,
-    variant_need_adjustments: &mut Box<[(AssetId, i32)]>,
+    binder: &mut super::species_asset_types::SpeciesBinderPolicies,
 ) -> Result<SpeciesDocument, BindError> {
     let species_source_documents = source_documents.iter().filter(|source_document| {
         source_document
@@ -159,9 +159,6 @@ pub(super) fn lower_resolved_species_source_document_closure_to_canonical_docume
         variant,
     })
     .collect::<Vec<_>>();
-    if !variants.is_empty() {
-        *variant_need_adjustments = needs::lower_variant_need_adjustments(&current, &species)?;
-    }
     if purchase_family.is_some() && current.key == species.key && variants.is_empty() {
         variants.extend(
             lower_species_root_actor_to_fallback_canonical_variant(
@@ -175,6 +172,10 @@ pub(super) fn lower_resolved_species_source_document_closure_to_canonical_docume
                 variant,
             }),
         );
+    }
+    if !variants.is_empty() || current.key == species.key {
+        binder.variant_need_adjustments = needs::lower_variant_need_adjustments(&current)?;
+        binder.donation = donation::lower_animal_donation_policy(&current)?;
     }
     Ok(SpeciesDocument {
         species: species_record,

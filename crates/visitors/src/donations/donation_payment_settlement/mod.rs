@@ -12,7 +12,9 @@ use openzt2_zoo_state::behavior_task_execution_types::{
 };
 use openzt2_zoo_state::{
     animal_lifecycle::types::SpeciesHandle,
-    progression::fame_types::{GuestSpeciesFameViews, ZooSpeciesFameViews},
+    progression::fame_types::{
+        GuestSpeciesFameContribution, GuestSpeciesFameViews, ZooSpeciesFameViews,
+    },
     shows::show_stage_types::ShowStage,
     transport_tours::transport_circuit_types::TransportCircuit,
 };
@@ -28,6 +30,7 @@ use super::{
     donation_payment_calculations::{
         accumulate_completed_donation_total, completed_transaction_matches_pending_donation_payment,
     },
+    donation_payment_submission::TourDonationInstruction,
     donation_payment_types::{
         DonationCategoryTotals, DonationCompleted, DonationPaymentRequested, DonationPaymentState,
         DonationRejected, DonationRejection, DonationTotal, PendingDonationPayment,
@@ -47,7 +50,10 @@ pub(super) fn settle_completed_donation_transactions_and_update_acceptor_totals(
     species: Query<&SpeciesHandle>,
     attributed_subjects: Query<(), Or<(With<ShowStage>, With<TransportCircuit>)>>,
     (mut fame_views, mut zoo_views): (
-        Query<&mut GuestSpeciesFameViews>,
+        Query<(
+            &mut GuestSpeciesFameViews,
+            Option<&GuestSpeciesFameContribution>,
+        )>,
         Query<&mut ZooSpeciesFameViews>,
     ),
     mut donation_totals: Query<&mut DonationTotal>,
@@ -181,15 +187,17 @@ pub(super) fn settle_completed_donation_transactions_and_update_acceptor_totals(
         } else {
             new_donation_totals.insert(pending_payment.acceptor, updated_total);
         }
-        if let (Ok(species), Ok(mut views), Ok(guest)) = (
+        if let (Ok(species), Ok((mut views, contribution))) = (
             species.get(pending_payment.subject),
             fame_views.get_mut(pending_payment.guest),
-            guests.get(pending_payment.guest),
         ) {
             let view = views.0.entry(species.species).or_default();
             let previous = *view;
             view.donation += pending_payment.amount.dollars();
-            if let Ok(mut zoo) = zoo_views.get_mut(guest.root) {
+            if let Some(mut zoo) = contribution
+                .and_then(GuestSpeciesFameContribution::root)
+                .and_then(|root| zoo_views.get_mut(root).ok())
+            {
                 zoo.replace_contribution(species.species, previous, *view);
             }
         }

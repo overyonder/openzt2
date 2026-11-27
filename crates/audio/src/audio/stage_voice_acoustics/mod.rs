@@ -102,13 +102,16 @@ struct RoomMixControls {
     eight_bit: AtomicU32,
 }
 
-const DIRECT_MIX: usize = 0;
+pub(super) const DIRECT_MIX: usize = 0;
 const STAGE_FLAT_MIX: usize = 1;
 const STAGE_SPATIAL_MIX: usize = 2;
 const MIX_INPUTS: usize = 3;
 
 pub(super) fn install_room_mix(app: &mut App) {
     app.init_resource::<RoomMixOutput>();
+    if !app.is_plugin_added::<bevy::audio::AudioPlugin>() {
+        return;
+    }
     let controls = app.world().resource::<RoomMixOutput>().0.clone();
     install_audio_output_mix::<MIX_INPUTS, _>(app, move |_, rate| {
         let mut room = RoomReverb::new(rate.get() as f32);

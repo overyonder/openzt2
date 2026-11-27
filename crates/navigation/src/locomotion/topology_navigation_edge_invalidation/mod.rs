@@ -94,12 +94,6 @@ pub(super) fn synchronize_fence_navigation_crossings(
     let mut refresh_roots: EntityHashSet = installations
         .read()
         .map(|event| event.0)
-        .chain(
-            path_changes
-                .read()
-                .filter(|change| !change.changes.elevated_nodes.is_empty())
-                .map(|change| change.root),
-        )
         .chain(removed_graphs.read())
         .collect();
     refresh_roots.extend(
@@ -112,6 +106,42 @@ pub(super) fn synchronize_fence_navigation_crossings(
         .iter()
         .chain(sources.removed_nodes.read());
     let mut affected: EntityHashSet = sources.changed_fences.iter().collect();
+    for change in path_changes.read() {
+        if change.changes.elevated_nodes.is_empty() || refresh_roots.contains(&change.root) {
+            continue;
+        }
+        let Ok((_, Some(graph), grid, _, Some(index))) = roots.get(change.root) else {
+            continue;
+        };
+        if grid.spacing_m <= 0.0 {
+            continue;
+        }
+        let graph = graph.terrain_derived_navigation_graph();
+        let cell_size = f32::from(graph.terrain_cell_size_centimetres) * 0.01;
+        let cells = change.changes.affected_cells.iter().copied().map(|[x, z]| {
+            let corner = Vec2::new(x as f32, -(z as f32)) * cell_size;
+            (corner - Vec2::Y * cell_size, corner + Vec2::X * cell_size)
+        });
+        let edges = change
+            .changes
+            .affected_edges
+            .keys()
+            .filter_map(|&[from, to]| {
+                let position = |node| {
+                    let [x, _, z] =
+                        graph.calculate_navigation_node_world_position_centimetres(node)?;
+                    Some(Vec2::new(x as f32, z as f32) * 0.01)
+                };
+                let a = position(from)?;
+                let b = position(to)?;
+                Some((a.min(b), a.max(b)))
+            });
+        for (first, last) in cells.chain(edges) {
+            let min = ((first - grid.origin) / grid.spacing_m).floor().as_ivec2() - IVec2::ONE;
+            let max = ((last - grid.origin) / grid.spacing_m).ceil().as_ivec2() + IVec2::ONE;
+            affected.extend(index.fences_within(min, max));
+        }
+    }
     for edit in terrain_changes.read() {
         let Ok((_, graph, grid, _, index)) = roots.get(edit.root) else {
             continue;

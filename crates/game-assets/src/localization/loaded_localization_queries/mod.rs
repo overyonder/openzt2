@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 use openzt2_game_data::{
     localization::{
@@ -14,7 +14,46 @@ use super::{
     },
     localization_asset_types::LocalizationAsset,
     localization_precedence_index::LocalizationPrecedenceIndex,
+    windows_locale_conventions::bundled_locale_conventions,
 };
+
+#[derive(SystemParam)]
+pub struct CurrencyLocalization<'w> {
+    index: Option<Res<'w, LocalizationPrecedenceIndex>>,
+    assets: Option<Res<'w, Assets<LocalizationAsset>>>,
+}
+
+impl CurrencyLocalization<'_> {
+    pub fn is_changed(&self) -> bool {
+        self.index.as_ref().is_some_and(|index| index.is_changed())
+            || self
+                .assets
+                .as_ref()
+                .is_some_and(|assets| assets.is_changed())
+    }
+
+    pub fn loaded_text(&self) -> Option<LoadedLocalizationView<'_>> {
+        self.index
+            .as_deref()?
+            .borrow_loaded_localization_view(self.assets.as_deref()?)
+    }
+
+    pub fn write_amount(
+        &self,
+        cents: i64,
+        include_cents: bool,
+        target: &mut impl std::fmt::Write,
+    ) -> std::fmt::Result {
+        if let Some(localization) = self.loaded_text() {
+            return localization.write_localized_currency_amount(cents, include_cents, target);
+        }
+        let currency = self.index.as_ref().map_or_else(
+            || &bundled_locale_conventions(1033).currency,
+            |index| &index.configuration().locale_conventions().currency,
+        );
+        currency.write_amount(&currency.symbol, cents, include_cents, target)
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct LoadedLocalizationView<'a> {

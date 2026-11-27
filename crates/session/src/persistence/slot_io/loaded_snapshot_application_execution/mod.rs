@@ -83,7 +83,8 @@ use super::{
         PendingSnapshotApplication, PrepareSnapshotBaseline, RestoreRuntimeContinuation,
         RestoreSavedFenceEdges, RestoreSnapshotSections, RestoreSnapshotTerrain,
         RestoreTransportIdentities, RestoreTransportState, ResumeSnapshotActors, SnapshotBytes,
-        SnapshotRestoreFailed, SnapshotRestored, SnapshotSectionRestore, SnapshotTerrainAsset,
+        SnapshotModeDocument, SnapshotRestoreFailed, SnapshotRestored, SnapshotSectionRestore,
+        SnapshotTerrainAsset,
     },
     persistence_failure_message_publication::publish_persistence_failure_for_slot_operation,
     photo_snapshot_application::restore_snapshot_photo_challenge_completion,
@@ -186,54 +187,94 @@ pub(in crate::persistence) fn restore_pending_snapshots() -> ScheduleConfigs<Sch
                 .run_if(any_with_component::<AwaitingSnapshotDomainBaseline>),
             sections::apply_snapshot_sections
                 .run_if(sections::snapshot_section_dependencies_changed),
-            (
-                sections::prepare_transport_identities
-                    .run_if(any_with_component::<RestoreTransportIdentities>),
-                sections::apply_saved_fence_edges
-                    .run_if(any_with_component::<AttachSavedWorldState>),
-            ),
-            (
-                sections::attach_saved_economy,
-                sections::attach_saved_maintenance,
-                sections::attach_saved_donations,
-            )
-                .run_if(any_with_component::<AttachSavedWorldState>),
-            sections::distribute_saved_snapshot_sections
-                .run_if(any_with_component::<AttachSavedWorldState>),
-            (
-                domains::restore_snapshot_clock,
-                domains::restore_world_metadata,
-                domains::restore_snapshot_animal_links,
-                domains::restore_snapshot_adoption,
-                domains::restore_snapshot_progression,
-                domains::restore_snapshot_shows,
-                domains::restore_snapshot_images,
-            )
-                .run_if(any_with_component::<RestoreRuntimeContinuation>),
-            (
-                sections::restore_transport_state
-                    .run_if(any_with_component::<RestoreTransportState>),
-                sections::restore_research_projects
-                    .run_if(any_with_component::<SavedResearchProjects>),
-            ),
-            domains::restore_snapshot_scenario
-                .run_if(any_with_component::<RestoreRuntimeContinuation>),
-            (
-                continuation::restore_runtime_continuation,
-                continuation::restore_fossil_continuation
-                    .after(continuation::restore_runtime_continuation)
-                    .before(continuation::restore_snapshot_names)
-                    .before(continuation::restore_snapshot_name_registration),
-                continuation::restore_snapshot_names,
-                continuation::restore_snapshot_name_registration,
-                continuation::restore_snapshot_audio,
-                continuation::restore_photo_challenge_completion,
-            )
-                .run_if(any_with_component::<RestoreRuntimeContinuation>),
-            continuation::runtime_continuation_is_restored
-                .run_if(any_with_component::<RestoreRuntimeContinuation>),
         )
             .chain(),
+        (
+            sections::prepare_transport_identities
+                .run_if(any_with_component::<RestoreTransportIdentities>),
+            sections::apply_saved_fence_edges
+                .run_if(any_with_component::<AttachSavedWorldState>),
+        )
+            .after(sections::apply_snapshot_sections),
+        (
+            sections::attach_saved_economy,
+            sections::attach_saved_maintenance,
+            sections::attach_saved_donations,
+        )
+            .run_if(any_with_component::<AttachSavedWorldState>)
+            .after(sections::apply_snapshot_sections)
+            .after(sections::prepare_transport_identities),
+        sections::distribute_saved_snapshot_sections
+            .run_if(any_with_component::<AttachSavedWorldState>)
+            .after(sections::apply_saved_fence_edges)
+            .after(sections::prepare_transport_identities)
+            .after(sections::attach_saved_economy)
+            .after(sections::attach_saved_maintenance)
+            .after(sections::attach_saved_donations),
+        (
+            domains::restore_snapshot_clock,
+            domains::restore_world_metadata,
+            domains::restore_snapshot_animal_links,
+            domains::restore_snapshot_adoption,
+            domains::restore_snapshot_progression,
+            domains::restore_snapshot_shows,
+            domains::restore_snapshot_images,
+            domains::restore_snapshot_scenario,
+            sections::restore_transport_state
+                .run_if(any_with_component::<RestoreTransportState>),
+            continuation::restore_snapshot_audio,
+        )
+            .run_if(any_with_component::<RestoreRuntimeContinuation>)
+            .after(sections::distribute_saved_snapshot_sections),
+        sections::restore_research_projects
+            .run_if(any_with_component::<SavedResearchProjects>)
+            .after(domains::restore_snapshot_progression),
+        continuation::restore_photo_challenge_completion
+            .run_if(any_with_component::<RestoreRuntimeContinuation>)
+            .after(domains::restore_snapshot_images),
+        continuation::restore_runtime_continuation
+            .run_if(any_with_component::<RestoreRuntimeContinuation>)
+            .after(domains::restore_snapshot_clock)
+            .after(domains::restore_snapshot_shows)
+            .after(domains::restore_snapshot_images)
+            .after(domains::restore_snapshot_scenario)
+            .after(sections::restore_research_projects)
+            .after(sections::restore_transport_state),
+        continuation::restore_fossil_continuation
+            .run_if(any_with_component::<RestoreRuntimeContinuation>)
+            .after(continuation::restore_runtime_continuation),
+        continuation::restore_staff_jobs
+            .run_if(any_with_component::<RestoreRuntimeContinuation>)
+            .after(continuation::restore_fossil_continuation),
+        continuation::restore_staff_continuation
+            .run_if(any_with_component::<RestoreRuntimeContinuation>)
+            .after(continuation::restore_fossil_continuation)
+            .after(domains::restore_snapshot_animal_links),
+        (
+            continuation::restore_authored_float_attributes
+                .after(continuation::restore_staff_jobs),
+            continuation::restore_cloning_center_occupancy
+                .after(continuation::restore_authored_float_attributes)
+                .after(domains::restore_snapshot_animal_links),
+        )
+            .run_if(any_with_component::<RestoreRuntimeContinuation>),
+        (
+            continuation::restore_snapshot_names,
+            continuation::restore_snapshot_name_registration,
+        )
+            .run_if(any_with_component::<RestoreRuntimeContinuation>)
+            .after(domains::restore_world_metadata)
+            .after(continuation::restore_fossil_continuation),
+        continuation::runtime_continuation_is_restored
+            .run_if(any_with_component::<RestoreRuntimeContinuation>)
+            .after(domains::restore_snapshot_adoption)
+            .after(domains::restore_snapshot_animal_links)
+            .after(continuation::restore_snapshot_audio)
+            .after(continuation::restore_cloning_center_occupancy)
+            .after(continuation::restore_staff_continuation)
+            .after(continuation::restore_photo_challenge_completion)
+            .after(continuation::restore_snapshot_names)
+            .after(continuation::restore_snapshot_name_registration),
         (
             continuation::resume_snapshot_actors
                 .run_if(any_with_component::<ResumeSnapshotActors>),
@@ -245,7 +286,11 @@ pub(in crate::persistence) fn restore_pending_snapshots() -> ScheduleConfigs<Sch
         super::animal_snapshot_application::restore_animal_treatments
             .after(continuation::resume_snapshot_actors)
             .run_if(any_with_component::<super::animal_snapshot_application::PendingSavedAnimalTreatment>),
+        super::show_snapshot_application::bind_restored_show_trick_tokens
+            .after(continuation::resume_snapshot_actors)
+            .run_if(any_with_component::<super::show_snapshot_application::RestoredShowTrickTokens>),
         finish_snapshot_restore
+            .after(super::show_snapshot_application::bind_restored_show_trick_tokens)
             .after(super::animal_snapshot_application::restore_animal_treatments)
             .after(baseline::retire_world_once_saved_assets_are_ready)
             .after(super::behavior_snapshot_application::state_application::bind_restored_behavior_instruction_state),

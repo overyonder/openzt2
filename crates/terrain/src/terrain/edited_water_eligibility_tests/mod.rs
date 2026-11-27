@@ -127,6 +127,9 @@ fn edited_water_world() -> (World, Entity, Handle<TerrainAsset>) {
     );
     world.insert_resource(MembershipProjection(projection));
     world.init_resource::<Messages<TerrainChanged>>();
+    world.init_resource::<Messages<
+        openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterCellsChanged,
+    >>();
     world.init_resource::<Messages<AssetEvent<TerrainAsset>>>();
     world.init_resource::<Messages<crate::terrain::water_regions::authored_membership::WaterRegionFactsDiscarded>>();
     world.add_observer(

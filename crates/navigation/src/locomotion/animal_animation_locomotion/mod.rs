@@ -10,10 +10,6 @@ use openzt2_game_assets::animation::animation_set_asset_types::{
 };
 use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
 use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
-use openzt2_game_assets::world_definitions::{
-    world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
-    world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
-};
 use openzt2_game_data::behavior::action::wander::BehaviorGroundLocomotionSpeed;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use openzt2_world_state::animation_graph::animation_graph_transition_operations::select_preferred_animation_clip_from_graph_node;
@@ -53,9 +49,6 @@ pub(super) struct AnimalLocomotionRuntime<'w, 's> {
     random_streams: Query<'w, 's, &'static mut openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream>,
     unprojected: Query<'w, 's, &'static mut AnimalAnimationProjectionPending>,
     caffeine_flags: Query<'w, 's, &'static CaffeineFlags>,
-    binders: Query<'w, 's, &'static DefinitionId>,
-    definitions: Option<Res<'w, WorldDefinitions>>,
-    definition_assets: Option<Res<'w, Assets<WorldDefinitionAsset>>>,
 }
 
 pub(super) fn project_animal_animation_motion_to_navigation(
@@ -110,14 +103,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
         mut random_streams,
         mut unprojected,
         caffeine_flags,
-        binders,
-        definitions,
-        definition_assets,
     } = runtime;
-    let catalogue = definitions
-        .as_deref()
-        .zip(definition_assets.as_deref())
-        .and_then(|(index, assets)| index.get(assets));
     let diagnostics = bevy::log::tracing::enabled!(bevy::log::Level::DEBUG);
     let mut wait = |commands: &mut Commands,
                     animal: Entity,
@@ -204,7 +190,8 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             );
             continue;
         }
-        let Some(variant) = species.find_variant(selected_variant.0) else {
+        let Some((definition, variant)) = species.find_variant_with_species(selected_variant.0)
+        else {
             wait(
                 &mut commands,
                 animal_entity,
@@ -444,12 +431,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             .unwrap_or_default()
             .apply_to_rate(
                 f32::from(ownership.playback_speed_permille),
-                super::authored_caffeine_factors(
-                    binders
-                        .get(animal_entity)
-                        .ok()
-                        .and_then(|binder| catalogue?.find_object(binder.0)),
-                ),
+                definition.caffeine_factors,
             )
             .round()
             .clamp(1.0, f32::from(i16::MAX)) as i16;

@@ -73,6 +73,11 @@ pub(crate) fn request_authored_initial_staff_animation_for_newly_resolved_prefab
         let Some(staff_role_definition) = staff_role_definition else {
             continue;
         };
+        let repetition = if staff_role_definition.initial_animation_loops {
+            AnimationPlaybackRepetitionPolicy::Loop
+        } else {
+            AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
+        };
         if animation_playback_controller.is_none() {
             let Some(animation_set_asset_handle) = definitions
                 .load_staff_model_animation_set::<AnimationSetAsset>(
@@ -108,6 +113,7 @@ pub(crate) fn request_authored_initial_staff_animation_for_newly_resolved_prefab
                     requested_initial_animation_clip_asset_key: staff_role_definition
                         .initial_animation_clip_asset_key
                         .clone(),
+                    requested_initial_repetition_policy: Some(repetition),
                 })
                 .remove::<ModelAnimationAttachmentResolved>();
             continue;
@@ -123,11 +129,7 @@ pub(crate) fn request_authored_initial_staff_animation_for_newly_resolved_prefab
             animation_clip_asset_key: animation_clip_asset_key.clone(),
             blend_duration_milliseconds: 0,
             playback_speed_permille: 1000,
-            playback_repetition_policy: if staff_role_definition.initial_animation_loops {
-                AnimationPlaybackRepetitionPolicy::Loop
-            } else {
-                AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
-            },
+            playback_repetition_policy: repetition,
             action_settings: None,
         });
     }

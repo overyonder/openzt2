@@ -24,22 +24,30 @@ pub struct Disease {
 pub struct Treatment {
     pub definition: AssetId,
     pub provider: Entity,
-    pub remaining_ticks: u32,
+    pub correlation: Option<TreatmentCorrelation>,
+}
+
+#[derive(Component, Debug, Clone)]
+pub struct TreatmentClock {
+    pub timer: Timer,
 }
 
 // Tranquilization, escape, rampage, immobilization, and death state.
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Tranquilized {
-    pub remaining_ticks: u32,
-    pub recovery_ticks: u32,
+    pub recovery_duration: std::time::Duration,
 }
+
+#[derive(Component, Debug, Clone)]
+pub struct TranquilizerDoseTimer(pub Timer);
 
 /// The animal has regained locomotion but remains in the authored recovery period.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RecoveringFromTranquilizer {
-    pub remaining_ticks: u32,
-}
+pub struct RecoveringFromTranquilizer;
+
+#[derive(Component, Debug, Clone)]
+pub struct TranquilizerRecoveryTimer(pub Timer);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Escaped {
@@ -47,9 +55,7 @@ pub struct Escaped {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Rampaging {
-    pub elapsed_ticks: u64,
-}
+pub struct Rampaging;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Dead {
@@ -86,6 +92,28 @@ pub struct TreatmentRequest {
     pub animal: Entity,
     pub treatment: AssetId,
     pub provider: Entity,
+    pub correlation: Option<TreatmentCorrelation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreatmentCorrelation {
+    pub job: Entity,
+    pub execution_id: u64,
+}
+
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnimalTreatmentSettled {
+    pub animal: Entity,
+    pub provider: Entity,
+    pub correlation: TreatmentCorrelation,
+    pub outcome: TreatmentOutcome,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreatmentOutcome {
+    Completed,
+    Rejected,
+    Cancelled,
 }
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]

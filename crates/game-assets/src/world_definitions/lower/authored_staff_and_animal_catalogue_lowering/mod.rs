@@ -19,19 +19,19 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::catalogue_and_progression::catalogue_definition_types::{
     CatalogueCategory, CatalogueEntry, CatalogueFilterFlags,
 };
 use openzt2_game_data::world_definitions::staff_management::{
     StaffHeadPresentation, StaffPresentationVariant, StaffRoleDefinition, StaffRoleKind,
-    StaffStateVariable, StaffSwimmingDepths, StaffVirtualNode,
+    StaffSwimmingDepths, StaffVirtualNode,
 };
 use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectAffordanceFlags, WorldObjectDefinition, WorldObjectKind, WorldObjectPropertyFlags,
     WorldObjectTextureReplacement, WorldObjectTextureReplacementGroup,
     WorldObjectTextureReplacementSet,
 };
+use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
 #[cfg(test)]
@@ -46,8 +46,8 @@ mod tests {
     use crate::world_definitions::world_definition_source_document_lowering::lower_resolved_world_definition_source_document_closure_to_canonical_document;
 
     #[test]
-    fn staff_portrait_uses_authored_head_scene_without_changing_world_body()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn staff_portrait_uses_authored_head_scene_without_changing_world_body(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let sources = [
             (
                 "staff.xml",
@@ -125,18 +125,16 @@ mod tests {
             assert_eq!(object.preview_offset_cm, [0, 0, 49]);
             assert!((object.preview_scale - 3.954_455).abs() < 0.000_001);
             // Behavior Lua compares the authored binder type case-sensitively.
-            assert!(
-                document
-                    .object_binder_types
-                    .contains(&(object.id, "Worker".into()))
-            );
+            assert!(document
+                .object_binder_types
+                .contains(&(object.id, "Worker".into())));
         }
         Ok(())
     }
 
     #[test]
-    fn staff_state_variable_with_an_empty_value_starts_at_its_range_minimum()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn staff_state_variable_with_an_empty_value_starts_at_its_range_minimum(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // The paleontologist authors `Value=""` with a `ValueMin`/`ValueMax` range.
         let sources = [
             (
@@ -202,8 +200,8 @@ mod tests {
     }
 
     #[test]
-    fn staff_role_lowers_each_concrete_look_with_head_and_texture_sets()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn staff_role_lowers_each_concrete_look_with_head_and_texture_sets(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let sources = [
             (
                 "staff.xml",
@@ -526,86 +524,36 @@ fn lower_authored_staff_swimming_depths(
 
 /// `ZTAIStateThinker` `BFAIStateVar` rows: `Name`, `Value` and
 /// `TriggerThreshold`, each value defaulting to zero, or `Value` to `ValueMin`.
-fn lower_authored_staff_state_variables(
-    record: &RecordView<'_, '_>,
-) -> Result<Vec<StaffStateVariable>, BindError> {
-    let lowered = super::source_element_tree_search::authored_type_family_elements_named(
-        record,
-        "ZTAIStateThinker",
-    )
-    .into_iter()
-    .flat_map(|thinker| thinker.element_children())
-    .filter(|variable| variable.name == "BFAIStateVar")
-    .map(|variable| {
-        let name = variable
-            .attribute("Name")
-            .filter(|name| !name.trim().is_empty())
-            .ok_or_else(|| BindError::record(record, "staff state variable has no Name"))?;
-        let number = |attribute| {
-            variable
-                .attribute(attribute)
-                .filter(|value| !value.trim().is_empty())
-                .map(|value| {
-                    parse_blue_fang_source_numeric_lexeme::<f32>(value)
-                        .filter(|value| value.is_finite())
-                        .ok_or_else(|| {
-                            BindError::record(record, "invalid staff state variable number")
-                        })
-                })
-                .transpose()
-        };
-        // An empty Value with ValueMin/ValueMax (the paleontologist's rows)
-        // starts at the range minimum; staff state keeps one starting value.
-        let value = match number("Value")? {
-            Some(value) => value,
-            None => number("ValueMin")?.unwrap_or_default(),
-        };
-        Ok(StaffStateVariable {
-            name: AssetId::from_key(&name.trim().to_ascii_lowercase()),
-            value,
-            trigger_threshold: number("TriggerThreshold")?.unwrap_or_default(),
-        })
-    })
-    .collect::<Result<Vec<_>, BindError>>()?;
-    let mut variables: Vec<StaffStateVariable> = Vec::new();
-    for variable in lowered {
-        if !variables
-            .iter()
-            .any(|existing| existing.name == variable.name)
-        {
-            variables.push(variable);
-        }
-    }
-    Ok(variables)
-}
-
-fn lower_authored_staff_locomotion_tables(
+pub(super) fn lower_authored_staff_locomotion_tables(
     record: &RecordView<'_, '_>,
 ) -> Result<
     Vec<openzt2_game_data::world_definitions::staff_management::StaffLocomotionTable>,
     BindError,
 > {
+    use super::source_element_tree_search::authored_type_family_elements_named;
     use openzt2_game_data::world_definitions::staff_management::{
         StaffLocomotionRow, StaffLocomotionTable,
     };
+    let named = authored_type_family_elements_named(record, "BFNamedBinder")
+        .into_iter()
+        .filter_map(|binder| {
+            let name = binder.attribute_named_any(&["binderName"])?;
+            Some((
+                AssetId::from_key(name),
+                find_descendant(binder, "BFLocoAnimate")?,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let unnamed = authored_type_family_elements_named(record, "BFLocoAnimate")
+        .into_iter()
+        .filter(|component| {
+            !named
+                .iter()
+                .any(|(_, other)| std::ptr::eq(*component, *other))
+        })
+        .map(|component| (AssetId::default(), component));
     let mut tables: Vec<StaffLocomotionTable> = Vec::new();
-    for binder in super::source_element_tree_search::authored_type_family_elements_named(
-        record,
-        "BFNamedBinder",
-    )
-    .into_iter()
-    .rev()
-    {
-        let Some(name) = binder
-            .attribute_named_any(&["binderName"])
-            .filter(|name| matches!(*name, "ground" | "groundcarry" | "water" | "underwater"))
-        else {
-            continue;
-        };
-        let Some(loco) = find_descendant(binder, "BFLocoAnimate") else {
-            continue;
-        };
-        let key = AssetId::from_key(name);
+    for (key, loco) in named.iter().copied().rev().chain(unnamed.rev()) {
         let index = tables
             .iter()
             .position(|table| table.binder == key)
@@ -621,12 +569,17 @@ fn lower_authored_staff_locomotion_tables(
         if let Some(clip) = loco.attribute_named_any(&["stationaryAnim"]) {
             table.stationary_clip = Some(clip.to_owned());
         }
-        for row in loco.element_children().filter(|row| {
-            matches!(
-                row.name.as_str(),
-                "stop" | "slow" | "medium" | "med" | "fast" | "glide" | "clean"
-            )
-        }) {
+        for row in loco.element_children() {
+            let key = AssetId::from_key(&row.name.to_ascii_lowercase());
+            let prior = table.rows.iter().position(|existing| existing.key == key);
+            let inherited = prior.map(|index| &table.rows[index]);
+            let Some(node) = row
+                .attribute_named_any(&["name"])
+                .filter(|name| !name.is_empty())
+                .or_else(|| inherited.map(|row| row.node.as_str()))
+            else {
+                continue;
+            };
             let number = |name, default| -> Result<f32, BindError> {
                 row.attribute_named_any(&[name])
                     .map_or(Ok(default), |value| {
@@ -646,11 +599,18 @@ fn lower_authored_staff_locomotion_tables(
                 .transpose()?;
             let rates = match fixed_rate {
                 Some(rate) => [rate; 2],
-                None => [number("minAnimSpeed", 1.0)?, number("maxAnimSpeed", 1.0)?],
+                None => {
+                    let old = inherited.map_or([1.0; 2], |row| row.playback_speed_range);
+                    [
+                        number("minAnimSpeed", old[0])?,
+                        number("maxAnimSpeed", old[1])?,
+                    ]
+                }
             };
+            let previous_reset = inherited.map_or([0.0; 2], |row| row.reset_seconds_range);
             let resets = [
-                number("minResetPeriod", 0.0)?,
-                number("maxResetPeriod", 0.0)?,
+                number("minResetPeriod", previous_reset[0])?,
+                number("maxResetPeriod", previous_reset[1])?,
             ];
             if rates[1] < rates[0] || resets[1] < resets[0] {
                 return Err(BindError::record(
@@ -659,23 +619,13 @@ fn lower_authored_staff_locomotion_tables(
                 ));
             }
             let lowered = StaffLocomotionRow {
-                key: AssetId::from_key(row.name.as_str()),
-                node: row
-                    .attribute_named_any(&["name"])
-                    .filter(|name| !name.is_empty())
-                    .ok_or_else(|| {
-                        BindError::record(record, "staff locomotion row has no node name")
-                    })?
-                    .to_owned(),
+                key,
+                node: node.to_owned(),
                 playback_speed_range: rates,
                 reset_seconds_range: resets,
             };
-            if let Some(existing) = table
-                .rows
-                .iter_mut()
-                .find(|existing| existing.key == lowered.key)
-            {
-                *existing = lowered;
+            if let Some(index) = prior {
+                table.rows[index] = lowered;
             } else {
                 table.rows.push(lowered);
             }
@@ -1035,6 +985,7 @@ pub(super) fn bind_authored_staff_catalogue(
         record.key.to_string(),
     ));
     output.document.objects.push(WorldObjectDefinition {
+        collision_scores: super::interaction_policy_lowering::collision_scores(record)?,
         authored_runtime: super::object_and_placeable_source_lowering::lower_authored_world_object_runtime(record)?,
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
         audio_stage_volumes: Vec::new(),
@@ -1116,7 +1067,7 @@ pub(super) fn bind_authored_staff_catalogue(
             actor_scene_paths,
         ),
         virtual_nodes: lower_authored_staff_virtual_nodes(record)?,
-        state_variables: lower_authored_staff_state_variables(record)?,
+        state_variables: super::interaction_policy_lowering::staff_state_variables(record)?,
         swimming: lower_authored_staff_swimming_depths(record)?,
         locomotion_tables: lower_authored_staff_locomotion_tables(record)?,
         tank_gate_animations: lower_authored_staff_tank_gate_animations(record),
@@ -1286,6 +1237,7 @@ pub(super) fn bind_authored_animal_catalogue(
         record.key.to_string(),
     ));
     output.document.objects.push(WorldObjectDefinition {
+        collision_scores: super::interaction_policy_lowering::collision_scores(record)?,
         authored_runtime: super::object_and_placeable_source_lowering::lower_authored_world_object_runtime(record)?,
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
         audio_stage_volumes: Vec::new(),

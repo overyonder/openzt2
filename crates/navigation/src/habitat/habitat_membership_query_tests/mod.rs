@@ -71,7 +71,7 @@ fn world_position_habitat_lookup_uses_the_topology_grid_origin_and_spacing() {
     let mut habitat_index = HabitatIndex::default();
     habitat_index.record_cell(IVec2::new(1, 2), cell);
     let mut state = bevy::ecs::system::SystemState::<Query<&HabitatCellOf>>::new(&mut world);
-    let owners = state.get(&world);
+    let owners = state.get(&world).unwrap();
     let topology_grid = TopologyGrid {
         origin: Vec2::new(10.0, -20.0),
         spacing_m: 0.75,

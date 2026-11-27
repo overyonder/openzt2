@@ -11,9 +11,7 @@ use super::{
     localization_configuration::{LocalizationConfiguration, LocalizationConfigurationLoader},
 };
 use crate::{
-    asset_source::archive_entry_asset_path::{
-        archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION,
-    },
+    asset_source::archive_entry_asset_path::archive_entry_asset_source_path,
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
     },
@@ -64,10 +62,6 @@ impl AssetLoader for LocalizationAssetLoader {
             },
             person_name_pools,
         })
-    }
-
-    fn extensions(&self) -> &[&str] {
-        &["xml", ARCHIVE_ENTRY_ASSET_EXTENSION]
     }
 }
 

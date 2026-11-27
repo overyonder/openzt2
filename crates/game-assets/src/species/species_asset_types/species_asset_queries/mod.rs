@@ -1,10 +1,10 @@
 use super::{
-    SpeciesAsset, SpeciesAssets, SpeciesDocumentRow, SpeciesView, normalized_species_model_path,
+    normalized_species_model_path, SpeciesAsset, SpeciesAssets, SpeciesDocumentRow, SpeciesView,
 };
 use bevy::prelude::*;
 use openzt2_game_data::{
-    AssetId,
     species::{NeedKind, Species, SpeciesVariant, SpeciesVariantBinding},
+    AssetId,
 };
 
 impl SpeciesAssets {
@@ -46,11 +46,9 @@ impl<'a> SpeciesView<'a> {
 
     pub fn species(self) -> impl Iterator<Item = &'a Species> {
         self.index
-            .loaded_handles
+            .species_rows
             .iter()
-            .rev()
-            .filter_map(|handle| self.assets.get(handle))
-            .flat_map(|asset| asset.document.species.iter())
+            .filter_map(move |row| self.document(row.document)?.document.species.get(row.index))
     }
 
     pub fn variants(self, species: AssetId) -> impl Iterator<Item = &'a SpeciesVariant> {
@@ -91,12 +89,38 @@ impl<'a> SpeciesView<'a> {
 
     /// Reads a binder-specific adjustment in wellness permille Q16 per update.
     pub fn variant_need_adjustment_by_name(self, variant: AssetId, need: AssetId) -> Option<i32> {
-        let row = self.index.by_variant.get(&variant)?.row;
-        let adjustments = &self.document(row.document)?.variant_need_adjustments;
+        let row = self
+            .index
+            .by_variant
+            .get(&variant)
+            .map(|location| location.row)
+            .or_else(|| self.index.by_species.get(&variant).copied())?;
+        let adjustments = &self.document(row.document)?.binder.variant_need_adjustments;
         let index = adjustments
             .binary_search_by_key(&need, |(id, _)| *id)
             .ok()?;
         Some(adjustments[index].1)
+    }
+
+    /// All winning concrete binders, including those excluded from purchase.
+    pub fn exact_variant_bindings(self) -> impl Iterator<Item = &'a SpeciesVariantBinding> {
+        self.index
+            .by_variant
+            .values()
+            .filter_map(move |location| self.variant_at(location.row))
+    }
+
+    pub fn donation_terms(
+        self,
+        binder: AssetId,
+    ) -> Option<openzt2_game_data::species::AnimalDonationPolicy> {
+        let row = self
+            .index
+            .by_variant
+            .get(&binder)
+            .map(|location| location.row)
+            .or_else(|| self.index.by_species.get(&binder).copied())?;
+        self.document(row.document)?.binder.donation
     }
 
     pub fn find_variant_by_model_path(self, model_path: &str) -> Option<&'a SpeciesVariant> {

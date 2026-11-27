@@ -20,10 +20,12 @@ struct SimParams {
     /// effects to process.
     num_effects: u32,
     particle_budget: u32,
+    budget_groups: u32,
 }
 
 struct SpawnPoint {
-    position: vec4<f32>,
+    position: vec3<f32>,
+    group_budget: atomic<u32>,
     velocity: vec4<f32>,
 }
 
@@ -69,7 +71,7 @@ struct Spawner {
     particle_size_scale: f32,
     properties_array_index: u32,
     simulation_delta_time: f32,
-    spawn_padding: f32,
+    group_budget_offset: u32,
 
     {{SPAWNER_PADDING}}
 }

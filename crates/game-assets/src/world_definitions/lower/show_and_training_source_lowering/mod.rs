@@ -4,12 +4,12 @@ use super::world_definition_source_value_reading_and_conversion::{
 };
 use crate::source_document::resolved_source_record_index::{BindError, RecordView};
 use crate::world_definitions::behavior_auxiliary_source_types::LoweredBehaviorAuxiliary;
-use openzt2_game_data::AssetId;
-use openzt2_game_data::world_definitions::UNAUTHORED_TRICK_DISPLAY_ORDER;
 use openzt2_game_data::world_definitions::animal_shows_and_training::{
     ShowRuleDefinition, ShowStageDefinition, TrickDefinition, TrickOutcomeTokens,
 };
 use openzt2_game_data::world_definitions::extinct_animal_recovery::FossilPlacementPolicy;
+use openzt2_game_data::world_definitions::UNAUTHORED_TRICK_DISPLAY_ORDER;
+use openzt2_game_data::AssetId;
 
 pub(super) fn bind_show_stage(
     record: &RecordView<'_, '_>,

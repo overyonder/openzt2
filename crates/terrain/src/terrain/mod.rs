@@ -148,6 +148,8 @@ impl Plugin for TerrainPlugin {
             .add_message::<TerrainNavigationChanged>()
             .add_message::<TerrainWaterChanged>()
             .add_message::<water_regions::authored_membership::TerrainWaterMembershipChanged>()
+            .add_message::<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterCellsChanged>()
+            .add_observer(water_regions::authored_membership::publish_retired_terrain_water_cells)
             .add_message::<water_regions::authored_membership::WaterRegionFactsDiscarded>()
             .add_observer(water_regions::authored_membership::invalidate_discarded_water_region_facts)
             .add_observer(terrain_water_caustics::scene_projection::invalidate_bounds_after_dependency_discard)
@@ -353,7 +355,8 @@ impl Plugin for TerrainPlugin {
                         .in_set(ModelRenderPresentationSet::VisibilityInputs),
                     terrain_water_caustics::scene_projection::update_scene_caustic_bindings
                         .after(terrain_water_caustics::scene_projection::project_scene_caustic_passes)
-                        .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+                        .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
+                        .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
                     bevy::transform::systems::propagate_transforms_for::<With<
                         openzt2_zoo_state::terrain::terrain_water_caustic_types::TerrainWaterCausticScenePass,
                     >>

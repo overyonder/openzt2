@@ -3,11 +3,10 @@ use std::io;
 use bevy::asset::{io::Reader, AssetLoader, LoadContext};
 use bevy::prelude::*;
 use openzt2_game_assets::source_document::{
-    blue_fang_source_document_parsing::parse_blue_fang_source_document,
-    blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme, path::AssetPath,
+    blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
 };
 
-pub const CHALLENGE_MODE_DOCUMENT: &str = "config/challenge_mode.xml";
+pub const CHALLENGE_MODE_DOCUMENT: &str = "ui/modes/modes.xml";
 
 #[derive(Asset, TypePath)]
 pub struct ChallengeEconomyInitializer {
@@ -32,50 +31,31 @@ impl AssetLoader for ChallengeEconomyInitializerLoader {
         &self,
         reader: &mut dyn Reader,
         _: &(),
-        context: &mut LoadContext<'_>,
+        _context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
         let document =
             parse_blue_fang_source_document(AssetPath::new(CHALLENGE_MODE_DOCUMENT), &bytes)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        let economy = document
-            .root
-            .element_children()
-            .find(|node| node.name.eq_ignore_ascii_case("ZTEconomyMgr"))
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "missing Challenge economy")
-            })?;
-        let config_data = if let Some(path) = economy.attribute_named_any(&["configData"]) {
-            let bytes = context
-                .read_asset_bytes(path.to_owned())
-                .await
-                .map_err(io::Error::other)?;
-            Some(
-                parse_blue_fang_source_document(AssetPath::new(path), &bytes)
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
-            )
+        let mode = if document.root.name.eq_ignore_ascii_case("ZTMainMode") {
+            &document.root
         } else {
-            None
+            document
+                .root
+                .element_children()
+                .find(|node| node.name.eq_ignore_ascii_case("ZTMainMode"))
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing ZTMainMode"))?
         };
-        let starting_cash_cents = economy
-            .attribute_named_any(&["initialCash"])
-            .or_else(|| {
-                config_data
-                    .as_ref()?
-                    .root
-                    .attribute_named_any(&["initialCash"])
-            })
-            .map(|value| {
-                parse_blue_fang_source_numeric_lexeme::<f64>(value)
-                    .map(|amount| (100.0 * amount).round())
-                    .filter(|amount| amount.is_finite() && amount.abs() < i64::MAX as f64)
-                    .map(|amount| amount as i64)
+        let starting_cash_cents = mode
+            .attribute("startingCash")
+            .map(|amount| {
+                amount
+                    .parse::<i64>()
+                    .ok()
+                    .and_then(|amount| amount.checked_mul(100))
                     .ok_or_else(|| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "invalid Challenge starting cash",
-                        )
+                        io::Error::new(io::ErrorKind::InvalidData, "invalid startingCash")
                     })
             })
             .transpose()?;

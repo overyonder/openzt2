@@ -91,6 +91,15 @@ pub struct SpawnCompleteParticleEffectDocument {
     pub manual_particle_count: u32,
 }
 
+#[derive(Event)]
+pub struct PlayAuthoredParticleDictionaryEffect {
+    pub effect: AssetId,
+    pub subject: Entity,
+    pub attach: bool,
+    pub inherit_parent_rotation: bool,
+    pub transform: Transform,
+}
+
 #[derive(Message, Clone, Copy, Debug)]
 pub struct StopParticleEffectsAttachedToEntity {
     pub attached_entity: Entity,

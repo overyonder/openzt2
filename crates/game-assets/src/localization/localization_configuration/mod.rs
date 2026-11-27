@@ -175,10 +175,4 @@ impl AssetLoader for LocalizationConfigurationLoader {
         }
         Ok(configuration)
     }
-    fn extensions(&self) -> &[&str] {
-        &[
-            "xml",
-            crate::asset_source::archive_entry_asset_path::ARCHIVE_ENTRY_ASSET_EXTENSION,
-        ]
-    }
 }

@@ -20,6 +20,8 @@ mod weather_transition_lifecycle;
 mod weather_types;
 mod world_environment_initialization;
 
+pub use world_environment_initialization::AdditionalAmbientActors;
+
 use bevy::prelude::*;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
@@ -36,6 +38,13 @@ pub struct EnvironmentPlugin;
 impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<SetWeather>()
+            .add_message::<openzt2_interface_state::information::award_presentation_types::AwardProgramEffect>()
+            .register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, AdditionalAmbientActors>()
+            .add_systems(
+                Update,
+                world_environment_initialization::register_award_ambient_actors
+                    .run_if(on_message::<openzt2_interface_state::information::award_presentation_types::AwardProgramEffect>),
+            )
             .register_required_components::<ambient_animal_types::AmbientSpawnCadence, ambient_animal_lifecycle::WorldAmbientCandidates>()
             .add_message::<openzt2_interface_state::camera::camera_control_message_types::ScriptedOverheadCameraMotion>()
             .add_message::<WeatherRequestApplied>()

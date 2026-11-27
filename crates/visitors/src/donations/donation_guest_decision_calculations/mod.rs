@@ -1,32 +1,8 @@
-use bevy::prelude::Entity;
 use openzt2_zoo_state::donations::donation_guest_decision_types::{
-    DonationCandidate, DonationObservation, DonationProgress,
+    DonationCandidate, DonationProgress,
 };
 
-use openzt2_zoo_state::economy::money_types::Money;
-
 use super::donation_payment_types::DonationRejection;
-
-pub(super) fn calculate_eligible_donation_amount(
-    wallet: Money,
-    observation: DonationObservation,
-) -> Option<Money> {
-    (observation.amount.is_positive() && wallet >= observation.amount).then_some(observation.amount)
-}
-
-pub(super) fn create_donation_candidate_from_observation(
-    observation: DonationObservation,
-    acceptor: Entity,
-    amount: Money,
-    navigation_request_id: u64,
-) -> DonationCandidate {
-    DonationCandidate {
-        navigation_request_id,
-        acceptor,
-        subject: observation.viewing.subject,
-        amount,
-    }
-}
 
 pub(super) fn begin_donation_progress_from_candidate(
     candidate: DonationCandidate,

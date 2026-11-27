@@ -214,6 +214,9 @@ impl AssetLoader for MaterialAssetLoader {
         Ok(MaterialAsset {
             netimmerse_material_animations: Default::default(),
             netimmerse_texture_binding: None,
+            authored_effect: Some(openzt2_game_data::AssetId::from_virtual_path(
+                &effect_source_path.to_string_lossy(),
+            )),
             evaluated_d3d9_effect,
             _source_dependencies: source_dependencies,
             evaluated_technique_pass_material_assets,
@@ -255,9 +258,9 @@ fn resolve_material_texture_parameter_asset_paths(
         if let Some(resolved_texture_asset_path) =
             asset_archives.resolve_model_texture_reference(material_asset_path, texture_asset_path)
         {
-            *texture_asset_path = resolved_texture_asset_path
-                .to_string_lossy()
-                .replace('\\', "/");
+            *texture_asset_path = crate::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(
+                &resolved_texture_asset_path.to_string_lossy(),
+            );
         }
     }
 }

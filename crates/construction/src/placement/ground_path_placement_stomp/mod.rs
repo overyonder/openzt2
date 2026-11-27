@@ -45,7 +45,7 @@ impl GroundPathStompRemovals {
             });
             prepared.write(TopologyEditPrepared {
                 transaction,
-                cost: Money(0),
+                cost: Money::ZERO,
             });
         }
     }

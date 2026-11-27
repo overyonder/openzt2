@@ -1,6 +1,7 @@
 use super::panel_binding_families::*;
 use super::text_replacement_operations::currency_cents;
 use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
+use openzt2_game_assets::localization::loaded_localization_queries::CurrencyLocalization;
 use openzt2_game_data::ui_document::node_property_binding::UiIntegerPropertyBindingSource;
 
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue;
@@ -18,6 +19,7 @@ use openzt2_zoo_state::economy::service_types::FacilityReservations;
 use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
 
 pub(crate) fn project_selected_facility_status_to_visible_information_panels(
+    currency: CurrencyLocalization,
     information_panels: Query<
         (
             &ChildOf,
@@ -44,6 +46,7 @@ pub(crate) fn project_selected_facility_status_to_visible_information_panels(
     >,
 ) {
     let zoo_clock = zoo_clock.into_inner();
+    let localization_changed = currency.is_changed();
     for (parent, inherited_visibility, fields) in &information_panels {
         let Ok(selection) = selections.get(parent.parent()) else {
             continue;
@@ -109,14 +112,15 @@ pub(crate) fn project_selected_facility_status_to_visible_information_panels(
                 continue;
             };
             if projected_value.0 == next_value
+                && !localization_changed
                 && !projected_value.is_added()
                 && text.as_ref().is_none_or(|text| !text.is_added())
             {
                 continue;
             }
             projected_value.set_if_neq(UiValue(next_value));
-            if let Some(mut text) = text {
-                text.0.clear();
+            if let Some(text) = text {
+                let mut formatted = String::new();
                 if matches!(
                     property_binding.0,
                     UiIntegerPropertyBindingSource::FacilityPriceCents
@@ -125,11 +129,12 @@ pub(crate) fn project_selected_facility_status_to_visible_information_panels(
                         | UiIntegerPropertyBindingSource::FacilityAverageProfitCents
                         | UiIntegerPropertyBindingSource::DonationTotalCents
                 ) {
-                    openzt2_zoo_state::economy::currency_formatting::write_whole_dollar_currency_with_thousands_separators(&mut text.0, next_value);
+                    let _ = currency.write_amount(next_value, false, &mut formatted);
                 } else {
                     use std::fmt::Write;
-                    write!(text.0, "{next_value}").expect("writing to a String cannot fail");
+                    write!(formatted, "{next_value}").expect("writing to a String cannot fail");
                 }
+                text.map_unchanged(|text| &mut text.0).set_if_neq(formatted);
             }
         }
     }

@@ -1,7 +1,7 @@
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use openzt2_world_state::animation_playback::model_joint_attachment_binding::{
-    ModelInstanceJoints, ModelJointAttachment,
+    ModelInstanceAttachments, ModelInstanceJoints, ModelJointAttachment,
 };
 
 pub(super) fn project_model_joint_indexes(
@@ -47,25 +47,32 @@ pub(super) fn project_model_joint_indexes(
 pub(super) fn bind_model_joint_attachments(
     mut commands: Commands,
     mut attachments: Query<(Entity, Ref<ModelJointAttachment>, Option<&mut Transform>)>,
-    indexes: Query<Ref<ModelInstanceJoints>>,
+    indexes: Query<&ModelInstanceJoints>,
+    changed_indexes: Query<&ModelInstanceAttachments, Changed<ModelInstanceJoints>>,
+    changes: Query<
+        Entity,
+        (
+            With<ModelJointAttachment>,
+            Or<(Changed<ModelJointAttachment>, Changed<ChildOf>)>,
+        ),
+    >,
+    mut removed_parents: RemovedComponents<ChildOf>,
     parents: Query<&ChildOf>,
-    changed_parents: Query<(), Changed<ChildOf>>,
 ) {
-    if changed_parents.is_empty()
-        && !indexes.iter().any(|index| index.is_changed())
-        && !attachments
-            .iter()
-            .any(|(_, attachment, _)| attachment.is_changed())
-    {
-        return;
-    }
-    for (entity, attachment, transform) in &mut attachments {
+    let affected = changes
+        .iter()
+        .chain(removed_parents.read())
+        .chain(
+            changed_indexes
+                .iter()
+                .flat_map(ModelInstanceAttachments::iter),
+        )
+        .collect::<EntityHashSet>();
+    let mut attachments = attachments.iter_many_mut(affected).matched();
+    while let Some((entity, attachment, transform)) = attachments.fetch_next() {
         let Ok(index) = indexes.get(attachment.instance) else {
             continue;
         };
-        if !attachment.is_changed() && !index.is_changed() && !changed_parents.contains(entity) {
-            continue;
-        }
         let joint = attachment.resolve(entity, &index, &parents);
         let target = joint.unwrap_or(attachment.instance);
         if parents

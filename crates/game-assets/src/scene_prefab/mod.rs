@@ -64,6 +64,7 @@ pub fn select_prefab_render_lod_tier(
 #[derive(Asset, TypePath, Debug)]
 pub struct ScenePrefabAsset {
     document: ScenePrefabDocument,
+    model_source_digest: Option<[u8; 32]>,
     attachment_transforms: BTreeMap<AssetId, Option<Mat4>>,
     model_paths: Box<[(AssetId, Box<str>)]>,
     collider_models: Box<[(AssetId, Handle<Gltf>)]>,
@@ -99,6 +100,7 @@ impl ScenePrefabAsset {
         Self {
             attachment_transforms: collect_prefab_attachment_transforms(&document),
             document,
+            model_source_digest: None,
             model_paths: Box::new([]),
             collider_models: Box::new([]),
             material_paths: Box::new([]),
@@ -112,6 +114,16 @@ impl ScenePrefabAsset {
 
     pub fn canonical_scene_prefab_document(&self) -> &ScenePrefabDocument {
         &self.document
+    }
+
+    /// Identifies the source content of a prefab published by a model loader.
+    pub fn model_source_digest(&self) -> Option<[u8; 32]> {
+        self.model_source_digest
+    }
+
+    pub fn with_model_source_digest(mut self, digest: [u8; 32]) -> Self {
+        self.model_source_digest = Some(digest);
+        self
     }
 
     pub fn prefab_attachment_transform(&self, attachment_id: AssetId) -> Option<Mat4> {
@@ -254,6 +266,7 @@ pub fn create_scene_prefab_asset_and_load_dependencies(
     ScenePrefabAsset {
         attachment_transforms: collect_prefab_attachment_transforms(&document),
         document,
+        model_source_digest: None,
         model_paths,
         collider_models,
         material_paths,

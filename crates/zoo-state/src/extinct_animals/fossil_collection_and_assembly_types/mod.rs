@@ -77,11 +77,13 @@ pub struct FossilAssemblySlotOccupant(Entity);
 #[derive(Component)]
 pub struct FossilAssemblyCompleted;
 
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Message, Debug, Clone, Copy, PartialEq)]
 pub struct PlaceFossilPieceInAssemblyRequest {
     pub assembly_entity: Entity,
     pub global_piece_index: u16,
     pub authored_slot_index: u16,
+    pub piece: Entity,
+    pub released_pose: Transform,
 }
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]

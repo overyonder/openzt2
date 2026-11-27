@@ -28,7 +28,7 @@ pub(super) fn request_monthly_wages(
             .saturating_add(u32::from(day.calendar.month.saturating_sub(1)));
         for (employee, employment, member, mut last_request) in &mut staff {
             if member.root != day.root
-                || employment.wage.0 <= 0
+                || !employment.wage.is_positive()
                 || employment.hired_month_ordinal >= month_ordinal
                 || last_request
                     .0
@@ -39,6 +39,7 @@ pub(super) fn request_monthly_wages(
             last_request.0 = Some((day.root, day.current_day));
             let operation = commands.spawn((WagePaymentOperation, *member)).id();
             transactions.write(TransactionRequest {
+                domain: openzt2_zoo_state::economy::account_transaction_types::TransactionDomain::Simulation,
                 operation,
                 debit: Account::Zoo,
                 credit: Account::External,

@@ -70,6 +70,14 @@ pub struct BehaviorPlacementTravelTargets<'w, 's> {
 
 impl BehaviorPlacementTravelTargets<'_, '_> {
     pub fn for_actor(&self, actor: Entity, task: &BehaviorTaskExecutionState) -> Option<Entity> {
+        self.delivery_point(actor, task).or(task.target)
+    }
+
+    pub fn delivery_point(
+        &self,
+        actor: Entity,
+        task: &BehaviorTaskExecutionState,
+    ) -> Option<Entity> {
         self.placements
             .get(actor)
             .into_iter()
@@ -80,7 +88,6 @@ impl BehaviorPlacementTravelTargets<'_, '_> {
                     .then(|| points.iter().next())
                     .flatten()
             })
-            .or(task.target)
     }
 }
 

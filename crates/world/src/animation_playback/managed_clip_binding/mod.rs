@@ -23,6 +23,8 @@ use openzt2_world_state::{
 };
 
 use crate::animation_graph::animation_graph_blend_timer_advancement::FrozenAnimationPoseBlend;
+use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::SplashAnimationSeek;
 use std::time::Duration;
 
 use super::standard_bevy_animation_player_projection_types::StandardBevyAnimationJointBlendPose;
@@ -30,8 +32,8 @@ use openzt2_world_state::animation_playback::locomotion_root_motion::ConsumedLoc
 
 #[derive(Component, Debug)]
 pub(crate) struct ManagedAnimationClip {
-    pub(super) generation: u64,
-    pub(super) node: AnimationNodeIndex,
+    pub(crate) generation: u64,
+    pub(crate) node: AnimationNodeIndex,
     pub(super) clip: Handle<AnimationClip>,
     graph: Handle<AnimationGraph>,
     pub(super) root_motion: Option<BoundLocomotionRootMotion>,
@@ -118,26 +120,34 @@ pub(crate) fn bind_selected_clips<Lane: Component>(
     )>,
     mut changed_sets: MessageReader<AssetEvent<AnimationSetAsset>>,
     mut changed_sources: MessageReader<AssetEvent<AnimationClipSourceAsset>>,
-    mut invalidation: ClipBindingInvalidation<Lane>,
-    mut controllers: Query<
-        (
-            Entity,
-            Ref<AnimationPlaybackController>,
-            &mut AnimationPlayer,
-            Option<&mut ManagedAnimationClip>,
-            Option<&mut AnimationGraphHandle>,
-            Option<&mut RetainedAnimationClipSource>,
-            Option<&mut AnimationGraphPlaybackState>,
-            Option<&AnimationRigJoints>,
-            Option<&ActiveAnimationClipOptions>,
-            Has<StockRenderAnimationAdvance>,
-            Has<ConsumedLocomotionRootMotion>,
-            Option<&mut FrozenAnimationPoseBlend>,
-            Option<&mut AnimationTransitions>,
-            Option<&InitialAnimationSeek>,
-        ),
-        With<Lane>,
+    presentation_owners: Query<&AnimationPresentationOwner>,
+    splash_seeks: Query<&SplashAnimationSeek>,
+    graph_seeks: Query<
+        &crate::animation_graph::animation_graph_route_selection::GraphTransitionOptions,
     >,
+
+    mut bindings: ParamSet<(
+        ClipBindingInvalidation<Lane>,
+        Query<
+            (
+                Entity,
+                Ref<AnimationPlaybackController>,
+                &mut AnimationPlayer,
+                Option<&mut ManagedAnimationClip>,
+                Option<&mut AnimationGraphHandle>,
+                Option<&mut RetainedAnimationClipSource>,
+                Option<&mut AnimationGraphPlaybackState>,
+                Option<&AnimationRigJoints>,
+                Option<&ActiveAnimationClipOptions>,
+                Has<StockRenderAnimationAdvance>,
+                Has<ConsumedLocomotionRootMotion>,
+                Option<&mut FrozenAnimationPoseBlend>,
+                Option<&mut AnimationTransitions>,
+                Option<&InitialAnimationSeek>,
+            ),
+            With<Lane>,
+        >,
+    )>,
 ) {
     let changed_sets = changed_sets
         .read()
@@ -157,6 +167,7 @@ pub(crate) fn bind_selected_clips<Lane: Component>(
             _ => None,
         })
         .collect::<HashSet<_>>();
+    let mut invalidation = bindings.p0();
     let changed_clips = invalidation
         .changed_clips
         .read()
@@ -172,6 +183,7 @@ pub(crate) fn bind_selected_clips<Lane: Component>(
         .iter()
         .chain(invalidation.removed_motion.read())
         .collect::<bevy::ecs::entity::EntityHashSet>();
+    let mut controllers = bindings.p1();
     if !changed_sets.is_empty() || !changed_sources.is_empty() || !changed_clips.is_empty() {
         affected.extend(controllers.iter().filter_map(
             |(entity, controller, _, existing, _, retained, ..)| {
@@ -239,10 +251,32 @@ pub(crate) fn bind_selected_clips<Lane: Component>(
                 .as_ref()
                 .is_some_and(|handle| changed_sources.contains(&handle.id()));
         let active = if changed {
+            let subject = presentation_owners
+                .get(entity)
+                .map_or(entity, |owner| owner.gameplay_entity);
+            let splash_seek = splash_seeks
+                .get(subject)
+                .ok()
+                .filter(|seek| controller.explicit_clip_request_id == Some(seek.request));
+            if let Some(seek) = splash_seek {
+                if seek.seconds.is_finite() {
+                    commands.entity(subject).try_remove::<SplashAnimationSeek>();
+                }
+            }
             if initial_seek.is_some() {
                 commands.entity(entity).try_remove::<InitialAnimationSeek>();
             }
-            let seek = if let Some(initial) =
+            let graph_options = graph_seeks.get(entity).ok();
+            if graph_options.is_some() {
+                commands.entity(entity).try_remove::<crate::animation_graph::animation_graph_route_selection::GraphTransitionOptions>();
+            }
+            let graph_options = graph_options
+                .filter(|options| options.generation == controller.playback_generation);
+            let seek = if let Some(seek) = splash_seek.filter(|seek| seek.seconds.is_finite()) {
+                seek.seconds
+            } else if let Some(seek) = graph_options.and_then(|options| options.seek) {
+                seek
+            } else if let Some(initial) =
                 initial_seek.filter(|_| controller.playback_generation == 0)
             {
                 initial.0
@@ -255,8 +289,12 @@ pub(crate) fn bind_selected_clips<Lane: Component>(
                 0.0
             };
             let duration = state
-                .and_then(|mut state| state.active_animation_graph_blend.take())
-                .map_or(Duration::ZERO, |blend| blend.timer.duration());
+                .and_then(|mut state| state.requested_blend_duration_milliseconds.take())
+                .map(|milliseconds| Duration::from_millis(u64::from(milliseconds)));
+            let duration = graph_options
+                .and_then(|options| options.duration)
+                .or(duration)
+                .unwrap_or_default();
             let source = source_handle
                 .as_ref()
                 .and_then(|handle| source_assets.get(handle));
@@ -374,20 +412,26 @@ pub(crate) fn bind_selected_clips<Lane: Component>(
             .as_ref()
             .and_then(|handle| source_assets.get(handle));
         let clip = clips.get(record.clip);
-        let use_stock_advance = controller.playback_clock == AnimationPlaybackClock::RealTime
-            && active.speed() > 0.0
-            && !controller.preserve_seek_on_restart
-            && initial_seek.is_none()
-            && !consumes_motion
-            && clip.is_some_and(|clip| {
-                let duration = clip.duration();
-                duration > 0.0
-                    && (!repeat
-                        || (source
-                            .and_then(|source| source.loop_bounds.as_ref())
-                            .is_none_or(|bounds| bounds.start == 0.0 && bounds.end == duration)
-                            && virtual_time.max_delta().as_secs_f32() * active.speed() < duration))
-            });
+        let use_stock_advance =
+            controller.playback_clock == AnimationPlaybackClock::RealTime
+                && active.speed() > 0.0
+                && !controller.preserve_seek_on_restart
+                && initial_seek.is_none()
+                && !consumes_motion
+                && clip.is_some_and(|clip| {
+                    let duration = clip.duration();
+                    duration > 0.0
+                        && (!repeat
+                            || (source.is_none_or(|source| {
+                                source.loop_bounds.as_ref().is_none_or(|bounds| {
+                                    bounds.start == 0.0 && bounds.end == duration
+                                }) && source
+                                    .timeline
+                                    .first()
+                                    .is_none_or(|key| key.milliseconds != 0)
+                            }) && virtual_time.max_delta().as_secs_f32() * active.speed()
+                                < duration))
+                });
         match (use_stock_advance, stock_advance) {
             (true, false) => {
                 commands
@@ -498,6 +542,7 @@ pub(super) fn retire_unbound_players(
             FixedAnimationPlayer,
             RealTimeAnimationPlayer,
             StockRenderAnimationAdvance,
+            super::locomotion_root_motion::BoundRootMotionJoints,
             FrozenAnimationPoseBlend,
             InitialAnimationSeek,
             AnimationTransitions,

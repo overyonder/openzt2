@@ -2,8 +2,8 @@
 
 use super::{
     uniform_buffer_upload::shader_buffer_from_uniform_value, D3d9FixedFunctionWorldLightContexts,
-    D3d9ScopedPrefabLight, EffectPassMaterial, D3D9_MAX_ACTIVE_DIRECTIONAL_LIGHTS,
-    FIXED_FUNCTION_SHADER,
+    D3d9ScopedPrefabLight, EffectPassMaterial, EffectPassTextureAssets,
+    D3D9_MAX_ACTIVE_DIRECTIONAL_LIGHTS, FIXED_FUNCTION_SHADER,
 };
 use bevy::{
     prelude::*,
@@ -514,9 +514,8 @@ impl EffectPassMaterial {
         self.fixed_function.values[47].x = 0.0;
         self.uniform_buffer_assets.fixed_function =
             buffers.add(shader_buffer_from_uniform_value(&self.fixed_function));
-        self.texture_assets.fixed_function_world_lights = buffers.add(
-            shader_buffer_from_uniform_value(&scoped_lighting_context(lights, draw_position)),
-        );
+        self.texture_assets
+            .bind_scoped_lights(scoped_lighting_context(lights, draw_position), buffers);
     }
 
     pub fn update_scoped_prefab_lighting(
@@ -607,6 +606,21 @@ impl EffectPassMaterial {
         }
         !texture_stages.is_empty()
     }
+
+    pub fn replace_texture_asset_for_effect_parameter(
+        &mut self,
+        parameter_name: &str,
+        texture_asset: Handle<Image>,
+    ) {
+        for stage in 0..self.texture_parameter_names.len() {
+            if self.texture_parameter_names[stage]
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(parameter_name))
+            {
+                self.replace_texture_asset_at_d3d9_stage(stage, texture_asset.clone());
+            }
+        }
+    }
 }
 
 pub(in crate::material::runtime) fn fixed_function_ambient_colour_from_argb(argb: u32) -> Vec4 {
@@ -616,6 +630,18 @@ pub(in crate::material::runtime) fn fixed_function_ambient_colour_from_argb(argb
         (argb & 255) as f32,
         (argb >> 24) as f32,
     ) / 255.0
+}
+
+impl EffectPassTextureAssets {
+    fn bind_scoped_lights(
+        &mut self,
+        lights: D3d9FixedFunctionWorldLightContexts,
+        buffers: &mut Assets<ShaderBuffer>,
+    ) {
+        let mut buffer = ShaderBuffer::default();
+        lights.write_shader_buffer(&mut buffer);
+        self.fixed_function_world_lights = buffers.add(buffer);
+    }
 }
 
 fn scoped_lighting_context(
@@ -661,3 +687,6 @@ fn scoped_lighting_context(
     registers.ambient_color_and_directional_light_count = ambient.extend(count as f32);
     contexts
 }
+
+#[cfg(test)]
+mod tests;

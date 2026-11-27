@@ -12,7 +12,7 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::{AssetId, species::NeedKind};
+use openzt2_game_data::{species::NeedKind, AssetId};
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::simulation_time::{
     deterministic_random_stream::{DeterministicRng, RngDomain, ZooSeed},
@@ -100,21 +100,25 @@ fn project_species_need_profiles(
                     good: good.into_iter().sum::<u16>() / 10,
                 },
             );
-            for variant in view.variants(species.id) {
-                let mut welfare = [None; 12];
-                for need in &species.needs {
-                    let rank = need_rank(&need.kind).unwrap_or(REPRODUCTION_TRIGGER_INDEX);
-                    welfare[rank] = view.variant_need_adjustment(variant.id, need.kind);
-                }
-                let authored = authored.map(|key| {
-                    view.variant_need_adjustment_by_name(variant.id, key)
-                        .or_else(|| view.variant_need_adjustment_by_name(species.id, key))
-                });
-                profiles
-                    .variants
-                    .insert(variant.id, VariantNeedAdjustments { welfare, authored });
-            }
         }
+    }
+    for binding in view.exact_variant_bindings() {
+        let Some(species) = view.find(binding.species) else {
+            continue;
+        };
+        let variant = binding.variant.id;
+        let mut welfare = [None; 12];
+        for need in &species.needs {
+            let rank = need_rank(&need.kind).unwrap_or(REPRODUCTION_TRIGGER_INDEX);
+            welfare[rank] = view.variant_need_adjustment(variant, need.kind);
+        }
+        let authored = authored.map(|key| {
+            view.variant_need_adjustment_by_name(variant, key)
+                .or_else(|| view.variant_need_adjustment_by_name(species.id, key))
+        });
+        profiles
+            .variants
+            .insert(variant, VariantNeedAdjustments { welfare, authored });
     }
 }
 
@@ -601,7 +605,10 @@ pub(super) fn register_animal_need_updates(app: &mut App) {
             FixedUpdate,
             (
                 project_species_need_profiles,
-                decay_due_animal_needs.after(project_species_need_profiles),
+                decay_due_animal_needs
+                    .after(project_species_need_profiles)
+                    .after(super::systems::initialize_animal_needs)
+                    .after(super::systems::initialize_missing_reproduction_needs),
             )
                 .in_set(FixedGameSet::Clock)
                 .run_if(in_state(GamePhase::InGame))
@@ -625,9 +632,11 @@ pub(super) fn register_animal_need_updates(app: &mut App) {
                     adjust_bathroom.before(super::systems::update_need_points),
                     adjust_reproduction.before(super::systems::update_need_points),
                 ),
-                publish_animal_need_crossings,
+                publish_animal_need_crossings
+                    .after(super::habitat_suitability::project_changed_habitat_suitability),
             )
                 .chain()
+                .after(decay_due_animal_needs)
                 .in_set(FixedGameSet::Act)
                 .run_if(in_state(GamePhase::InGame))
                 .run_if(simulation_is_running),

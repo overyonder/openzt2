@@ -16,7 +16,6 @@ use crate::source_document::ordered_source_document_types::{
 };
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use openzt2_game_data::{
-    AssetId,
     world_definitions::simulation_time::SimulationTimingDefinition,
     world_scenario::{
         CampaignScenarioRecord, PhotoChallengeMemberRecord, PhotoChallengeRule,
@@ -25,6 +24,7 @@ use openzt2_game_data::{
         ScenarioObjectiveGroupRecord, ScenarioObjectiveRecord, ScenarioRecordFlags,
         ScenarioScriptBinding, ScenarioScriptPhase, WorldLocationRecord, WorldScenarioDocument,
     },
+    AssetId,
 };
 
 pub(in crate::world_scenario) fn lower_documents(

@@ -185,7 +185,10 @@ pub(super) fn set_transport_circuit_fares(
     >,
     mut commands: Commands,
 ) {
-    for request in requests.read().filter(|request| request.fare.0 >= 0) {
+    for request in requests
+        .read()
+        .filter(|request| request.fare >= openzt2_zoo_state::economy::money_types::Money::ZERO)
+    {
         let Ok(fare) = fares.get_mut(request.circuit) else {
             continue;
         };

@@ -4,8 +4,8 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::{
-    AssetId,
     species::{LifeStage, Sex, SpeciesFlags},
+    AssetId,
 };
 
 use openzt2_game_assets::application_lifecycle::GamePhase;

@@ -1,6 +1,6 @@
 use super::{
     animal_entity_spawning::insert_animal_entity_from_resolved_components,
-    scripted_animal_spawning::{ScriptedAnimalInitialization, resolve_scripted_animal_spawn},
+    scripted_animal_spawning::{resolve_scripted_animal_spawn, ScriptedAnimalInitialization},
 };
 use bevy::prelude::*;
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};

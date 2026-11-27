@@ -3,7 +3,7 @@
 use std::io;
 
 use bevy::prelude::*;
-use openzt2_game_data::terrain::TerrainGrid;
+use openzt2_game_data::terrain::{TerrainBiomeWaterPresentation, TerrainGrid};
 
 use crate::{
     asset_source::{generated_asset_publication::GeneratedAssetPublication, AssetArchives},
@@ -45,31 +45,49 @@ fn create_terrain_water_fixed_detail_materials(
             materials.push(None);
             continue;
         };
-        let path = &water.texture_animations[0].texture;
-        let resolved = archives
-            .resolve_ui_reference(context.source_path(), path)
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("missing water texture {path}"),
-                )
-            })?;
-        let quality = if medium { "medium" } else { "low" };
-        let color = if medium {
-            water.vertex_colour_medium
-        } else {
-            water.vertex_colour_low
-        }
-        .map(|value| f32::from(value) / 255.0);
-        let optional_texture = |path: &str, uv_set| {
-            (!path.is_empty()).then(|| archives.resolve_ui_reference(context.source_path(), path)).flatten()
+        materials.push(Some(create_water_fixed_detail_material(
+            water,
+            archives,
+            context,
+            &format!("terrain-water-{biome_index}"),
+            medium,
+        )?));
+    }
+    Ok(materials)
+}
+
+pub(super) fn create_water_fixed_detail_material(
+    water: &TerrainBiomeWaterPresentation,
+    archives: &AssetArchives,
+    context: &mut GeneratedAssetPublication<'_, '_>,
+    name: &str,
+    medium: bool,
+) -> io::Result<Handle<MaterialAsset>> {
+    let path = &water.texture_animations[0].texture;
+    let resolved = archives
+        .resolve_ui_reference(context.source_path(), path)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("missing water texture {path}"),
+            )
+        })?;
+    let quality = if medium { "medium" } else { "low" };
+    let color = if medium {
+        water.vertex_colour_medium
+    } else {
+        water.vertex_colour_low
+    }
+    .map(|value| f32::from(value) / 255.0);
+    let optional_texture = |path: &str, uv_set| {
+        (!path.is_empty()).then(|| archives.resolve_ui_reference(context.source_path(), path)).flatten()
                 .map(|resolved| NativeTextureSource {
                     asset_path: crate::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(&resolved.to_string_lossy()),
                     uv_set, clamp_mode: 3, filter_mode: 0,
                 })
-        };
-        let material = NativeMaterialSource {
-            name: format!("terrain-water-{biome_index}-{quality}"),
+    };
+    let material = NativeMaterialSource {
+            name: format!("{name}-{quality}"),
             base_color: [0.0, 0.0, 0.0, color[3]],
             ambient: [color[0] * 0.5, color[1] * 0.5, color[2] * 0.5],
             specular: [0.0; 3],
@@ -106,17 +124,15 @@ fn create_terrain_water_fixed_detail_materials(
             stencil: None,
             cull_mode: 3,
         };
-        let lowered = lower_netimmerse_material_into_evaluated_d3d9_effect(&material)?;
-        let label = format!("water-fixed-{biome_index}-{quality}");
-        let material = publish_material_asset_from_evaluated_d3d9_effect(
-            lowered.evaluated_effect,
-            lowered.texture_asset_paths,
-            &label,
-            context,
-            &std::sync::Arc::default(),
-            &lowered.reflection_projections,
-        )?;
-        materials.push(Some(context.publish(label, material)));
-    }
-    Ok(materials)
+    let lowered = lower_netimmerse_material_into_evaluated_d3d9_effect(&material)?;
+    let label = format!("{name}-fixed-{quality}");
+    let material = publish_material_asset_from_evaluated_d3d9_effect(
+        lowered.evaluated_effect,
+        lowered.texture_asset_paths,
+        &label,
+        context,
+        &std::sync::Arc::default(),
+        &lowered.reflection_projections,
+    )?;
+    Ok(context.publish(label, material))
 }

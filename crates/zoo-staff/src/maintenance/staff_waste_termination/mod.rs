@@ -95,10 +95,14 @@ pub(super) fn apply_staff_waste_termination(
         {
             continue;
         }
+        let Some(target) = job.target else {
+            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+            continue;
+        };
         if cancelling
             || claim.staff != actor
             || assigned.execution_id != Some(task.execution_id)
-            || task.target() != Some(job.target)
+            || task.target() != Some(target)
             || (kind == StaffJobKind::CleanHabitat
                 && job.token != Some(AssetId::from_key("t_rakepoo")))
         {
@@ -114,7 +118,7 @@ pub(super) fn apply_staff_waste_termination(
             continue;
         }
         let Ok((definition, transform, litter, dung, in_world, mut consumed)) =
-            targets.get_mut(job.target)
+            targets.get_mut(target)
         else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
@@ -131,11 +135,11 @@ pub(super) fn apply_staff_waste_termination(
         consumed.0 = true;
         let killed = BehaviorKilledTarget {
             execution_id: task.execution_id,
-            entity: job.target,
+            entity: target,
             definition: definition.0,
             translation: transform.translation(),
         };
-        commands.entity(job.target).despawn();
+        commands.entity(target).despawn();
         if let Some(mut receipt) = receipt {
             receipt.set_if_neq(killed);
         } else {
@@ -176,7 +180,7 @@ pub(super) fn settle_consumed_staff_waste_jobs(
         let Ok((job, claim, assigned, litter, dung, cancelling)) = jobs.get(job_entity) else {
             continue;
         };
-        let Some(kind) = job.kind else {
+        let (Some(kind), Some(target)) = (job.kind, job.target) else {
             continue;
         };
         if !cancelling
@@ -189,7 +193,7 @@ pub(super) fn settle_consumed_staff_waste_jobs(
                 staff: actor,
                 job: job_entity,
                 kind,
-                target: job.target,
+                target,
             });
         }
     }

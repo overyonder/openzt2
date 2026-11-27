@@ -38,7 +38,7 @@ pub fn begin_deletion_transaction_preparation(
                 EditTransaction {
                     sequence: transaction_sequence,
                     state: TransactionState::Applied,
-                    cost: Money(0),
+                    cost: Money::ZERO,
                 },
                 Preparing,
                 *world_member,

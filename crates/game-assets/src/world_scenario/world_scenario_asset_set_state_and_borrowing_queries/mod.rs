@@ -164,12 +164,14 @@ impl<'a> WorldScenariosView<'a> {
     )> {
         let source =
             std::path::PathBuf::from(crate::source_document::path::AssetPath::new(path).key());
-        if let Some(winner) = archives.resolved_winning_entry(&source)
-            && winner.normalized_asset_path == source
-            && let Some(handle) = self
-                .owner
-                .sources
-                .get(&(winner.archive_priority_index, winner.zip_entry_ordinal))
+        if let Some(handle) = archives
+            .resolved_winning_entry(&source)
+            .filter(|winner| winner.normalized_asset_path == source)
+            .and_then(|winner| {
+                self.owner
+                    .sources
+                    .get(&(winner.archive_priority_index, winner.zip_entry_ordinal))
+            })
         {
             let asset = self.assets.get(handle)?;
             return Some((asset, asset.manager()?));

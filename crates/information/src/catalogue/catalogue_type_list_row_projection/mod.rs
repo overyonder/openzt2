@@ -20,8 +20,8 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use super::catalogue_type_list_policy_operations::CatalogueRestrictions;
 use super::catalogue_type_list_row_count_operations::OrderedCatalogueEntries;
 use super::catalogue_world_availability_context::{
-    CatalogueResearchAccess, catalogue_world_session_or_scenario_availability_changed,
-    resolve_catalogue_world_session_mode_and_scenario_availability,
+    catalogue_world_session_or_scenario_availability_changed,
+    resolve_catalogue_world_session_mode_and_scenario_availability, CatalogueResearchAccess,
 };
 use openzt2_interface_state::information::catalogue_types::CatalogueRowEntry;
 use openzt2_interface_state::information::catalogue_types::ScenarioCatalogueRestrictions;

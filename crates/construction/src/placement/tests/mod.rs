@@ -8,6 +8,7 @@ pub(super) fn create_object_placeable_definition_test_fixture(
     constraints: PlacementConstraints,
 ) -> PlaceableDefinition {
     PlaceableDefinition {
+        minimum_object_detail: None,
         surface_policy: Default::default(),
         id: AssetId([7; 16]),
         weight: 1.0,

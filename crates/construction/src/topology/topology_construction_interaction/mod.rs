@@ -108,7 +108,7 @@ mod tests {
             .id();
         app.world_mut().write_message(ConstructionCommitted {
             transaction,
-            cost: Money(100),
+            cost: Money::from_cents(100),
             screen_position: Vec2::ZERO,
         });
         app.update();
@@ -840,6 +840,7 @@ pub(super) fn evaluate_topology_construction_preview_validity(
                     Ok(cells) => {
                         let result = validate_path_construction_cells(
                             cells.clone(),
+                            |cell| *cell,
                             definition,
                             &index,
                             *grid,
@@ -866,7 +867,10 @@ pub(super) fn evaluate_topology_construction_preview_validity(
                     &terrain_chunks,
                 );
                 match result {
-                    Ok((cells, cost)) => (cells, validity(Ok(cost))),
+                    Ok((tiles, cost)) => (
+                        tiles.into_iter().map(|(cell, _)| cell).collect(),
+                        validity(Ok(cost)),
+                    ),
                     Err(reason) => (Vec::new(), validity(Err(reason))),
                 }
             };

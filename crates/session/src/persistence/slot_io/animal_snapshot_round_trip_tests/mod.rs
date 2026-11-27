@@ -172,10 +172,15 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
             name: AssetId::from_key("t_pregnant"),
             available_at: 1_000,
             expires_at: u64::MAX,
-            payload: None,
+            payload: Some(father),
             retain_on_failure: true,
         },
         ChildOf(mother),
+        openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorTokenContext {
+            force: true,
+            point: Some(Vec3::new(2.0, 3.0, 4.0)),
+        },
+        openzt2_zoo_state::animal_behavior::behavior_token_types::PendingBehaviorTokenReconsideration,
     ));
     source.entity_mut(mother).insert((
         EnvironmentHabitatAssessed,
@@ -301,20 +306,35 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
         .query::<(
             &openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken,
             &ChildOf,
+            &openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorTokenContext,
+            Has<openzt2_zoo_state::animal_behavior::behavior_token_types::PendingBehaviorTokenReconsideration>,
         )>()
         .iter(destination)
-        .map(|(token, holder)| {
+        .map(|(token, holder, context, reconsider)| {
             (
                 token.name,
                 token.available_at,
                 token.retain_on_failure,
                 holder.parent(),
+                token.payload,
+                context.point,
+                context.force,
+                reconsider,
             )
         })
         .collect::<Vec<_>>();
     assert_eq!(
         tokens,
-        [(AssetId::from_key("t_pregnant"), 1_000, true, restored[&51])]
+        [(
+            AssetId::from_key("t_pregnant"),
+            1_000,
+            true,
+            restored[&51],
+            Some(restored[&72]),
+            Some(Vec3::new(2.0, 3.0, 4.0)),
+            true,
+            true
+        )]
     );
     assert_eq!(
         destination

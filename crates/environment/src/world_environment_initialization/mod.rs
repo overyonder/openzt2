@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
+use openzt2_interface_state::information::award_presentation_types::AwardProgramEffect;
 use openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles;
 use openzt2_zoo_state::environment::environment_state_types::AuthoredWindShaderPresentationState;
 use openzt2_zoo_state::environment::environment_state_types::WorldEnvironment;
@@ -32,6 +33,33 @@ use super::{
     },
     weather_types::Weather,
 };
+
+#[derive(Component, Default)]
+pub struct AdditionalAmbientActors(Vec<AssetId>);
+
+impl AdditionalAmbientActors {
+    pub fn keys(&self) -> &[AssetId] {
+        &self.0
+    }
+
+    pub fn register(&mut self, actor: AssetId) {
+        self.0.push(actor);
+    }
+}
+
+pub(super) fn register_award_ambient_actors(
+    mut effects: MessageReader<AwardProgramEffect>,
+    mut worlds: Query<&mut AdditionalAmbientActors, With<WorldRoot>>,
+) {
+    for effect in effects.read() {
+        let AwardProgramEffect::AddAmbientSound { root, cue: actor } = *effect else {
+            continue;
+        };
+        if let Ok(mut ambient) = worlds.get_mut(root) {
+            ambient.register(actor);
+        }
+    }
+}
 
 pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
     mut commands: Commands,

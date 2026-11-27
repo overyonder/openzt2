@@ -22,6 +22,7 @@ pub(super) fn construction_tool_active(tool: Res<ConstructionTool>) -> bool {
 
 pub(crate) fn select_construction_tool(
     mut selections: MessageReader<SelectConstructionTool>,
+    mut commands: Commands,
     mut tool: ResMut<ConstructionTool>,
     previews: Query<Entity, With<ConstructionPreview>>,
     relocating: Query<
@@ -43,11 +44,14 @@ pub(crate) fn select_construction_tool(
             continue;
         }
         if *tool != selection.0 {
-            if !previews.is_empty()
-                || relocating
-                    .iter()
-                    .any(|object| selection.0 != ConstructionTool::Place(object.definition))
-            {
+            let entering_relocation = relocating
+                .iter()
+                .any(|object| selection.0 == ConstructionTool::Place(object.definition));
+            if entering_relocation {
+                for preview in &previews {
+                    commands.entity(preview).try_despawn();
+                }
+            } else if !previews.is_empty() || !relocating.is_empty() {
                 cancel.write(CancelConstruction);
             }
             *tool = selection.0;
@@ -159,9 +163,10 @@ pub(crate) fn cancel_preview(
     mut cancel: MessageReader<CancelConstruction>,
     previews: Query<Entity, With<ConstructionPreview>>,
 ) {
-    if cancel.read().next().is_none() {
+    if cancel.is_empty() {
         return;
     }
+    cancel.clear();
     for preview in &previews {
         commands.entity(preview).despawn();
     }

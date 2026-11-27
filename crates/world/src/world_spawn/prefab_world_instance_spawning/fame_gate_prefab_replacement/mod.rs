@@ -159,7 +159,9 @@ struct FameGatePrefabRoot {
     attachment: &'static mut PrefabAuthoredAttachmentIdentifier,
     projection: &'static mut PrefabObjectPresentationAttachmentProjection,
     source: &'static mut PrefabSourceAssetHandle,
+    renderable_source: &'static mut PrefabRenderableSource,
     rows: Option<&'static PrefabInstanceRows>,
+    joint_attachments: Option<&'static openzt2_world_state::animation_playback::model_joint_attachment_binding::ModelInstanceAttachments>,
     children: Option<&'static Children>,
     named: Option<&'static NamedPhysicalPresentations>,
     controllers: Option<&'static ObjectPhysicalPresentationControllers>,
@@ -264,6 +266,8 @@ fn replace_loaded_fame_gate_prefabs(
         gate.attachment.0 = AssetId(new_row.attachment_id.0);
         gate.projection.0 = gate.pending.definition;
         gate.source.0 = gate.pending.prefab.clone();
+        gate.renderable_source
+            .set_if_neq(PrefabRenderableSource(prefab.model_source_digest()));
 
         retire_fame_gate_prefab(
             &mut commands,
@@ -299,6 +303,8 @@ fn retire_fame_gate_prefab(
         PendingFameGatePrefab,
         PrefabLocalRenderBound,
         PrefabSkinRenderBound,
+        openzt2_world_state::model_render::prefab_render_lod_tier::PrefabRenderLodDistance,
+        openzt2_world_state::model_render::prefab_render_lod_tier::PrefabRenderLodTier,
         PrefabAuthoredBillboardOrientationMode,
         ReleasePrefabRenderable,
         NamedPhysicalPresentationsHydrated,
@@ -319,6 +325,11 @@ fn retire_fame_gate_prefab(
             bevy::animation::AnimationTargetId,
             AnimatedBy,
             PrefabMotionRotation,
+            openzt2_game_assets::scene_prefab::transform_animation_lowering::PrefabMotionVisibility,
+            bevy::mesh::morph::MorphWeights,
+            bevy::app::Propagate<
+                crate::model_render::prefab_motion_projection::PrefabMorphWeightsOwner,
+            >,
             crate::animation_playback::player_clock_lanes::PrefabRealTimeAnimation,
             PrefabTransformClocks,
         )>();
@@ -352,7 +363,17 @@ fn retire_fame_gate_prefab(
                 .into_iter()
                 .flat_map(Children::iter)
                 .filter(|&child| auxiliary_root_children.contains(child)),
-        );
+        )
+        .collect::<bevy::ecs::entity::EntityHashSet>();
+    for attachment in gate
+        .joint_attachments
+        .into_iter()
+        .flat_map(RelationshipTarget::iter)
+    {
+        if !prefab_children.contains(&attachment) {
+            commands.entity(attachment).try_insert(ChildOf(gate.entity));
+        }
+    }
     for child in prefab_children {
         commands.entity(child).try_despawn();
     }

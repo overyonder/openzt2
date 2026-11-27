@@ -23,7 +23,9 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::animal_lineage::{
     insert_animal_parentage, AnimalMate, PregnancyFather,
 };
-use openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken;
+use openzt2_zoo_state::animal_behavior::behavior_token_types::{
+    BehaviorSelfToken, PendingBehaviorTokenReconsideration,
+};
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_health::types::{
     DeathCause, RecoveringFromTranquilizer, Tranquilized, TranquilizerDoseTimer,
@@ -252,7 +254,7 @@ pub(super) fn restore_animal_relationships(
             animal.insert(AnimalMate(resolve(mate)?));
         }
         for token in &record.pending_tokens {
-            commands.spawn((
+            let mut restored = commands.spawn((
                 BehaviorSelfToken {
                     name: token.name,
                     available_at: token.available_at,
@@ -264,6 +266,12 @@ pub(super) fn restore_animal_relationships(
                 },
                 ChildOf(recipient),
             ));
+            if let Some(context) = &token.context {
+                context.restore(&mut restored);
+            }
+            if token.reconsider {
+                restored.insert(PendingBehaviorTokenReconsideration);
+            }
         }
     }
     Ok(())
@@ -304,7 +312,7 @@ pub(super) fn restore_animal_treatments(
             .and_then(|provider| {
                 let correlation = if let Some(execution_id) = saved.execution_id {
                     let job = jobs.iter().find_map(|(job, state, claim, task)| {
-                        (state.target == entity
+                        (state.target == Some(entity)
                             && claim.staff == provider
                             && task.execution_id == Some(execution_id))
                         .then_some(job)

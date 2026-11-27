@@ -10,10 +10,8 @@ use openzt2_interface_state::camera::camera_runtime_state_types::CameraMouseLook
 use openzt2_interface_state::camera::camera_runtime_state_types::StandaloneCameraSubject;
 use crate::camera::camera_execution_types::{CameraIntent, CameraTuning};
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
-use openzt2_zoo_state::locomotion::locomotion_types::DirectLocomotion;
 
 use super::first_person_mode_control_operations::apply_allowed_look_rotation_and_cancellation_to_first_person_view;
-use super::first_person_mode_control_operations::apply_allowed_navigation_axes_to_directly_controlled_subject;
 use super::immersive_mode_entry_and_policy_operations::find_authored_immersive_mode_policy;
 use super::immersive_mode_message_types::ExitImmersiveMode;
 use super::immersive_mode_policy_types::AllowedInteractionActions;
@@ -24,61 +22,28 @@ use crate::immersive_modes::immersive_control_execution_types::FirstPersonContro
 use crate::immersive_modes::immersive_control_execution_types::FirstPersonViewAngles;
 use crate::immersive_modes::immersive_control_execution_types::GuestViewControl;
 
-pub(super) fn apply_guest_view_look_and_navigation_controls(
-    mut action_requests: MessageReader<ActionRequest>,
-    modal_input: Res<
-        openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture,
-    >,
-    control_axes: Res<crate::input::input_execution_types::DeviceControlAxes>,
-    active_input: Res<openzt2_interface_state::input::input_types::ActiveInputDevice>,
-    time: Res<Time<Real>>,
-    active_modes: Query<(
-        Entity,
-        &ImmersiveCamera,
-        Option<&ImmersiveSubject>,
-        Option<&AllowedInteractionActions>,
-    )>,
-    mut view_angles: Query<&mut FirstPersonViewAngles, With<GuestViewControl>>,
-    camera_tuning: Query<(&CameraTuning, Has<CameraMouseLook>), With<ZooCamera>>,
-    mut controlled_subjects: Query<(&ControlledEntity, &mut DirectLocomotion)>,
-    mut exit_requests: MessageWriter<ExitImmersiveMode>,
+pub(super) fn cancel_guest_view(
+    mut actions: MessageReader<ActionRequest>,
+    modal: Res<openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture>,
+    controller: Single<(Entity, Option<&AllowedInteractionActions>), With<GuestViewControl>>,
+    mut exits: MessageWriter<ExitImmersiveMode>,
 ) {
-    let Ok((controller_entity, camera, subject, allowed_actions)) = active_modes.single() else {
-        return;
+    use super::immersive_mode_input_policy_operations::{
+        interaction_action_flags_allow_requested_game_action, request_cancelled_immersive_mode_exit,
     };
-    if modal_input.0.is_some() {
-        action_requests.clear();
-        apply_allowed_navigation_axes_to_directly_controlled_subject(
-            &crate::input::input_execution_types::DeviceControlAxes::default(),
-            subject.map(|subject| subject.0),
-            allowed_actions,
-            controller_entity,
-            0.0,
-            &mut controlled_subjects,
-        );
-        return;
+    use openzt2_interface_state::input::input_types::GameAction;
+
+    let (entity, allowed) = controller.into_inner();
+    let cancel = actions
+        .read()
+        .any(|action| action.action == GameAction::Cancel);
+    actions.clear();
+    if cancel
+        && modal.0.is_none()
+        && interaction_action_flags_allow_requested_game_action(allowed, GameAction::Cancel)
+    {
+        request_cancelled_immersive_mode_exit(entity, &mut exits);
     }
-    apply_allowed_look_rotation_and_cancellation_to_first_person_view(
-        &mut action_requests,
-        &control_axes,
-        time.delta_secs(),
-        camera.0,
-        allowed_actions,
-        controller_entity,
-        active_input.source,
-        &mut view_angles,
-        &camera_tuning,
-        &mut exit_requests,
-        None,
-    );
-    apply_allowed_navigation_axes_to_directly_controlled_subject(
-        &control_axes,
-        subject.map(|subject| subject.0),
-        allowed_actions,
-        controller_entity,
-        view_angles.single().map_or(0.0, |angles| angles.yaw),
-        &mut controlled_subjects,
-    );
 }
 
 pub(super) fn apply_first_person_look_and_cancellation(
@@ -146,6 +111,10 @@ pub(super) fn apply_first_person_look_and_cancellation(
 pub(super) fn update_subject_relative_first_person_camera_transform(
     active_modes: Query<(&ActiveImmersiveMode, &ImmersiveSubject, &ImmersiveCamera)>,
     view_angles: Query<&FirstPersonViewAngles>,
+    assembly_views: Query<(
+        &GlobalTransform,
+        &super::immersive_mode_state_types::FossilAssemblyView,
+    )>,
     // A ridden vehicle drives itself, so it has no `ControlledEntity`.
     controlled_subjects: Query<
         (&GlobalTransform, Has<openzt2_interface_state::camera::camera_runtime_state_types::FirstPersonLocomotionTuning>),
@@ -164,13 +133,15 @@ pub(super) fn update_subject_relative_first_person_camera_transform(
     let Ok((active_mode, subject, camera)) = active_modes.single() else {
         return;
     };
-    if !matches!(
-        active_mode.mode,
-        ImmersiveMode::GuestView
-            | ImmersiveMode::FirstPerson
-            | ImmersiveMode::FossilSearch
-            | ImmersiveMode::FossilAssembly
-    ) {
+    if active_mode.mode == ImmersiveMode::FossilAssembly {
+        if let (Ok((table, view)), Ok((mut pose, CameraMode::FirstPerson))) =
+            (assembly_views.get(subject.0), zoo_cameras.get_mut(camera.0))
+        {
+            pose.set_if_neq(table.compute_transform() * view.table_relative_camera);
+        }
+        return;
+    }
+    if !matches!(active_mode.mode, ImmersiveMode::FirstPerson) {
         return;
     }
     let subject_entity = subject.0;
@@ -194,10 +165,7 @@ pub(super) fn update_subject_relative_first_person_camera_transform(
     let camera_offset = Vec3::from_array(camera_tuning.offset_m.map(|value| value));
     let mut next_camera_transform =
         subject_transform.compute_transform() * Transform::from_translation(camera_offset);
-    if matches!(
-        active_mode.mode,
-        ImmersiveMode::GuestView | ImmersiveMode::FirstPerson
-    ) {
+    if active_mode.mode == ImmersiveMode::FirstPerson {
         if let Ok(view_angles) = view_angles.single() {
             next_camera_transform.rotation *=
                 Quat::from_rotation_y(view_angles.yaw) * Quat::from_rotation_x(view_angles.pitch);

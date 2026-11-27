@@ -324,7 +324,13 @@ fn start_or_finish_object_attachment(
         if let Some(pending) = pending.as_mut() {
             if !pending.prefab_settled {
                 if let Some(prefab) = &pending.prefab {
-                    if !settled.contains(&prefab.id()) {
+                    if !settled.contains(&prefab.id())
+                        && !assets.prefabs.contains(prefab.id())
+                        && !matches!(
+                            assets.server.get_load_state(prefab.id()),
+                            Some(LoadState::Failed(_))
+                        )
+                    {
                         continue;
                     }
                     pending.prefab_settled = true;

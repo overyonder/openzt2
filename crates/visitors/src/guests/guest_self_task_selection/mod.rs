@@ -3,9 +3,10 @@
 use openzt2_zoo_state::behavior_task_execution_types::allocate_behavior_execution_id;
 mod target_index;
 use openzt2_zoo_state::animal_behavior::behavior_token_types::{
-    BehaviorSelfToken, ClaimedBehaviorSelfToken,
+    BehaviorSelfToken, BehaviorTokenContext, ClaimedBehaviorSelfToken,
 };
 
+use openzt2_zoo_state::guests::guest_simulation_types::GuestEntranceApproach;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestNeedTriggers;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestTaskCooldowns;
 
@@ -60,7 +61,7 @@ use openzt2_zoo_state::{
 use super::guest_simulation_types::{
     Guest, GuestArchetype, GuestDeparturePoints, GuestDestination, GuestPhase, GuestRng, Viewing,
 };
-use target_index::{GuestTarget, GuestTargetIndex};
+use openzt2_world_state::world_spawn::world_membership_types::target_type_index::WorldTargetTypeQueries;
 
 #[derive(Resource, Default, PartialEq)]
 pub(super) struct GuestSubjectTaskIndex {
@@ -164,9 +165,10 @@ pub(super) fn select_idle_guest_tasks(
             Without<WaitingForTransport>,
             Without<TransportRider>,
             Without<SynchronizedBehaviorParticipant>,
+            Without<GuestEntranceApproach>,
         ),
     >,
-    (targets, held): (
+    (targets, held, indexed_targets): (
         Query<(
             Entity,
             &DefinitionId,
@@ -175,10 +177,12 @@ pub(super) fn select_idle_guest_tasks(
             Option<&FacilityContainedWaste>,
         )>,
         Query<(&DefinitionId, Option<&FacilityContainedWaste>)>,
+        WorldTargetTypeQueries,
     ),
-    (token_owners, tokens): (
+    (token_owners, tokens, token_contexts): (
         Query<&Children>,
         Query<(Entity, &BehaviorSelfToken), Without<ClaimedBehaviorSelfToken>>,
+        Query<&BehaviorTokenContext>,
     ),
     memberships: InteractionContainerMemberships,
     (show_locations, location_targets): (
@@ -234,7 +238,7 @@ pub(super) fn select_idle_guest_tasks(
     let show_attribute = AssetId::from_key("show");
     let tour_attribute = AssetId::from_key("tour");
     let station_type = AssetId::from_key("station");
-    let mut target_index = None;
+    let mut target_types = Vec::new();
     let mut combined_targets = Vec::new();
     for (
         guest,
@@ -279,7 +283,7 @@ pub(super) fn select_idle_guest_tasks(
         let active_tokens: Vec<_> = tokens
             .iter_many(token_owners.get(guest).ok().into_iter().flatten().copied())
             .flatten()
-            .filter(|(_, token)| token.available_at <= clock.tick && clock.tick < token.expires_at)
+            .filter(|(_, token)| token.is_available_at(clock.tick))
             .collect();
         let source_need = |attribute| {
             if attribute == show_attribute {
@@ -355,6 +359,9 @@ pub(super) fn select_idle_guest_tasks(
         }
         let mut viewing_candidates = None;
         for (document, declaration) in declarations {
+            if ranking.has_forced_candidate() {
+                break;
+            }
             let declaration = *declaration;
             let Some(task) = assets
                 .get(document)
@@ -367,6 +374,16 @@ pub(super) fn select_idle_guest_tasks(
                     score,
                     openzt2_game_data::behavior::score::BehaviorScore::LeaveZooPressure
                 )
+            });
+            let ordinary_score_task = leaves_zoo.then(|| {
+                let mut ordinary = task.clone();
+                ordinary.scores.retain(|score| {
+                    !matches!(
+                        score,
+                        openzt2_game_data::behavior::score::BehaviorScore::LeaveZooPressure
+                    )
+                });
+                ordinary
             });
             let can_board_tour = |station, root, circuit| {
                 root == world.root
@@ -384,10 +401,7 @@ pub(super) fn select_idle_guest_tasks(
                     })
                     .map(|tour| (tour.need, tour.threshold));
                 super::guest_behavior_departure_execution::departure_capacity_allows_score(
-                    admissions
-                        .get(world.root)
-                        .or_else(|_| admissions.single())
-                        .is_ok_and(|status| status.0),
+                    admissions.get(world.root).is_ok_and(|status| status.0),
                     departure_points.map_or(0, |points| points.0),
                     species_seen.map_or(0, |views| views.0.len()),
                     viewing_sensor.num_to_see,
@@ -509,11 +523,19 @@ pub(super) fn select_idle_guest_tasks(
                     }
                     return;
                 }
-                let score = if departure_capacity {
+                if ranking.has_forced_candidate() {
+                    return;
+                }
+                let force = object
+                    .and_then(|(token, ..)| token_contexts.get(token).ok())
+                    .is_some_and(|context| context.force);
+                let score = if force {
+                    Some(openzt2_zoo_state::animal_behavior::behavior_candidate_selection::FORCED_BEHAVIOR_TOKEN_SCORE)
+                } else if departure_capacity {
                     Some(1_000_000_000.0)
                 } else {
                     score_supported_behavior_task(
-                        task,
+                        ordinary_score_task.as_ref().unwrap_or(task),
                         policy.outside_range_need_value,
                         transform.translation().distance(target_position),
                         || biomes.at(world.root, target_position),
@@ -545,7 +567,7 @@ pub(super) fn select_idle_guest_tasks(
                 let Some(score) = score else {
                     return;
                 };
-                ranking.consider(
+                ranking.consider_token_candidate(
                     (
                         document,
                         declaration,
@@ -555,6 +577,7 @@ pub(super) fn select_idle_guest_tasks(
                     ),
                     task.priority.unwrap_or_default(),
                     score,
+                    force,
                 );
             };
             if task.sensor_tag == Some(watch_sensor) {
@@ -747,51 +770,50 @@ pub(super) fn select_idle_guest_tasks(
                     .map(String::as_str)
                     .any(|target| regular_target(&target))
             {
-                let index = target_index.get_or_insert_with(|| {
-                    let mut index = GuestTargetIndex::default();
-                    for (entity, definition, transform, world, waste) in &targets {
-                        let position = transform.translation();
-                        if !position.is_finite() {
-                            continue;
-                        }
-                        let Some(object) = definitions.find_object(definition.0) else {
-                            continue;
-                        };
-                        index.insert(
-                            world.root,
-                            GuestTarget {
-                                entity,
-                                object,
-                                position,
-                                waste: waste.map(|waste| waste.contained_waste_units),
-                            },
-                        );
-                    }
-                    index
-                });
-                for target in index.candidates(
-                    world.root,
+                target_index::candidate_types(
                     &task.targets,
                     &task.candidate_eligibility_requirements,
-                    &mut combined_targets,
-                ) {
-                    if target.entity != guest
+                    &mut target_types,
+                );
+                if target_types.is_empty() {
+                    combined_targets.clear();
+                    combined_targets.extend(
+                        targets
+                            .iter()
+                            .filter(|(_, _, _, member, _)| member.root == world.root)
+                            .map(|(entity, ..)| entity),
+                    );
+                } else {
+                    indexed_targets.collect(
+                        world.root,
+                        target_types.iter().copied(),
+                        &mut combined_targets,
+                    );
+                }
+                for (entity, id, pose, _, waste) in targets
+                    .iter_many(combined_targets.iter().copied())
+                    .matched()
+                {
+                    let Some(object) = definitions.find_object(id.0) else {
+                        continue;
+                    };
+                    let position = pose.translation();
+                    if entity != guest
+                        && position.is_finite()
                         && (task.targets.is_empty()
                             || task
                                 .targets
                                 .iter()
                                 .map(String::as_str)
                                 .filter(regular_target)
-                                .any(|required| {
-                                    matches_type(target.object, AssetId::from_key(required))
-                                }))
+                                .any(|required| matches_type(object, AssetId::from_key(required))))
                     {
                         consider_with_held_items(
-                            target.entity,
-                            Some(target.object),
+                            entity,
+                            Some(object),
                             None,
-                            target.waste,
-                            target.position,
+                            waste.map(|waste| waste.contained_waste_units),
+                            position,
                         );
                     }
                 }

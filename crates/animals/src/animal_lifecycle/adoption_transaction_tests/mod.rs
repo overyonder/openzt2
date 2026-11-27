@@ -13,10 +13,10 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
-    AssetId,
     species::*,
     terrain::*,
     world_definitions::{document::WorldDefinitionDocument, simulation_time::*, world_objects::*},
+    AssetId,
 };
 use openzt2_world_state::{
     application_schedule::FixedGameSet,
@@ -55,6 +55,7 @@ fn species_document() -> SpeciesDocument {
     let id = AssetId::from_key("test_species");
     SpeciesDocument {
         species: vec![Species {
+            caffeine_factors: Default::default(),
             placement_surface_policy: Default::default(),
             donation: None,
             id,
@@ -127,6 +128,7 @@ fn species_document() -> SpeciesDocument {
 
 fn object(id: AssetId) -> WorldObjectDefinition {
     WorldObjectDefinition {
+        collision_scores: None,
         authored_runtime: Default::default(),
         audio_cue_prefixes: Vec::new(),
         audio_stage_volumes: Vec::new(),
@@ -276,7 +278,7 @@ fn setup(cash: i64) -> (App, Entity) {
             ZooMonth(0),
             TopologyGrid::default(),
             HabitatIndex::default(),
-            ZooCash(Money(cash)),
+            ZooCash(Money::from_cents(cash)),
         ))
         .id();
     let grid = TerrainGrid {
@@ -393,13 +395,19 @@ fn paused_adoption_charges_and_spawns_once_without_an_enclosure() {
     let (mut app, root) = setup(10_000);
     advance_fixed(&mut app);
     assert_eq!(animal_count(&mut app), 1);
-    assert_eq!(app.world().get::<ZooCash>(root).unwrap().0, Money(8_750));
+    assert_eq!(
+        app.world().get::<ZooCash>(root).unwrap().0,
+        Money::from_cents(8_750)
+    );
     assert_eq!(app.world().resource::<Messages<AnimalAdopted>>().len(), 1);
     for _ in 0..4 {
         advance_fixed(&mut app);
     }
     assert_eq!(animal_count(&mut app), 1);
-    assert_eq!(app.world().get::<ZooCash>(root).unwrap().0, Money(8_750));
+    assert_eq!(
+        app.world().get::<ZooCash>(root).unwrap().0,
+        Money::from_cents(8_750)
+    );
     assert_eq!(app.world().resource::<Messages<AnimalAdopted>>().len(), 1);
     assert_no_pending_adoption(&mut app);
     assert_eq!(app.world().get::<ZooClock>(root).unwrap().tick, 99);
@@ -412,7 +420,10 @@ fn paused_adoption_with_insufficient_funds_does_not_spawn_or_charge() {
         advance_fixed(&mut app);
     }
     assert_eq!(animal_count(&mut app), 0);
-    assert_eq!(app.world().get::<ZooCash>(root).unwrap().0, Money(1_249));
+    assert_eq!(
+        app.world().get::<ZooCash>(root).unwrap().0,
+        Money::from_cents(1_249)
+    );
     assert_eq!(
         app.world()
             .resource::<Messages<TransactionRejected>>()
@@ -431,13 +442,22 @@ fn failed_paid_spawn_refunds_once_through_a_distinct_live_operation() {
         .insert(PersistentIdAllocator::from_snapshot(u64::MAX).unwrap());
     advance_fixed(&mut app);
     assert_eq!(animal_count(&mut app), 0);
-    assert_eq!(app.world().get::<ZooCash>(root).unwrap().0, Money(8_750));
+    assert_eq!(
+        app.world().get::<ZooCash>(root).unwrap().0,
+        Money::from_cents(8_750)
+    );
     advance_fixed(&mut app);
-    assert_eq!(app.world().get::<ZooCash>(root).unwrap().0, Money(10_000));
+    assert_eq!(
+        app.world().get::<ZooCash>(root).unwrap().0,
+        Money::from_cents(10_000)
+    );
     for _ in 0..4 {
         advance_fixed(&mut app);
     }
-    assert_eq!(app.world().get::<ZooCash>(root).unwrap().0, Money(10_000));
+    assert_eq!(
+        app.world().get::<ZooCash>(root).unwrap().0,
+        Money::from_cents(10_000)
+    );
     assert_no_pending_adoption(&mut app);
     let transactions = app.world().resource::<Messages<TransactionCompleted>>();
     let mut cursor = transactions.get_cursor();

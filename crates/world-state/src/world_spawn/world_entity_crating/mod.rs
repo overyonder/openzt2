@@ -33,18 +33,16 @@ fn hide_crated_entity(mut world: DeferredWorld, context: HookContext) {
 }
 
 fn restore_uncrated_visibility(mut world: DeferredWorld, context: HookContext) {
-    let entity = context.entity;
-    // Removal hooks run while the old components can still be queried.
-    world.commands().queue(move |world: &mut World| {
-        let Ok(mut entity) = world.get_entity_mut(entity) else {
-            return;
-        };
-        if !entity.contains::<AnimalCrate>() && !entity.contains::<ScriptedCrating>() {
-            if let Some(mut visibility) = entity.get_mut::<Visibility>() {
-                visibility.set_if_neq(Visibility::Inherited);
-            }
+    let still_crated = if world.component_id::<AnimalCrate>() == Some(context.component_id) {
+        world.get::<ScriptedCrating>(context.entity).is_some()
+    } else {
+        world.get::<AnimalCrate>(context.entity).is_some()
+    };
+    if !still_crated {
+        if let Some(mut visibility) = world.get_mut::<Visibility>(context.entity) {
+            visibility.set_if_neq(Visibility::Inherited);
         }
-    });
+    }
 }
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]

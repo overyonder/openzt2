@@ -13,6 +13,7 @@ use super::runtime::effect_pass_gpu_data::EffectPassMaterial;
 pub struct MaterialAsset {
     pub netimmerse_material_animations: Arc<[NetImmerseMaterialAnimation]>,
     pub netimmerse_texture_binding: Option<NetImmerseMaterialTextureBinding>,
+    pub(super) authored_effect: Option<openzt2_game_data::AssetId>,
     pub(super) evaluated_d3d9_effect: d3d9_effects::effect_types::EvaluatedD3d9Effect,
     pub(super) _source_dependencies: Box<[UntypedHandle]>,
     pub(super) evaluated_technique_pass_material_assets:
@@ -59,6 +60,10 @@ pub enum MaterialModeTarget {
 }
 
 impl MaterialAsset {
+    pub fn authored_effect_asset_id(&self) -> Option<openzt2_game_data::AssetId> {
+        self.authored_effect
+    }
+
     pub fn mode(&self, name: &str) -> Option<&MaterialModeTarget> {
         self.modes
             .iter()

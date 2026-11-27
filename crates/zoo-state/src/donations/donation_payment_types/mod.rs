@@ -9,6 +9,47 @@ pub struct DonationTotal {
     pub count: u32,
 }
 
+#[derive(Clone, Copy, Default)]
+struct DonationSum {
+    dollars: f64,
+    count: u64,
+}
+
+/// Booked donations grouped by category on the world root.
+#[derive(Component, Default)]
+pub struct ZooDonationSummary(std::collections::HashMap<Option<AssetId>, DonationSum>);
+
+impl ZooDonationSummary {
+    pub fn total(&self, category: Option<AssetId>) -> Option<DonationTotal> {
+        let sum = self.0.get(&category).copied().unwrap_or_default();
+        Some(DonationTotal {
+            amount: Money::from_dollars(sum.dollars as f32)?,
+            count: u32::try_from(sum.count).ok()?,
+        })
+    }
+
+    pub fn add(&mut self, category: AssetId, contribution: DonationTotal) {
+        for key in [Some(category), None] {
+            let sum = self.0.entry(key).or_default();
+            sum.dollars += f64::from(contribution.amount.dollars());
+            sum.count += u64::from(contribution.count);
+        }
+    }
+
+    pub fn subtract(&mut self, category: AssetId, contribution: DonationTotal) {
+        for key in [Some(category), None] {
+            if let std::collections::hash_map::Entry::Occupied(mut entry) = self.0.entry(key) {
+                let sum = entry.get_mut();
+                sum.dollars -= f64::from(contribution.amount.dollars());
+                sum.count -= u64::from(contribution.count);
+                if sum.count == 0 {
+                    entry.remove();
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct DonationCategoryTotal {
     category: AssetId,
@@ -34,7 +75,7 @@ impl DonationCategoryTotals {
     ) -> Option<Self> {
         let mut restored = Self::default();
         for (category, total) in totals {
-            if total.amount.0 <= 0
+            if !total.amount.is_positive()
                 || total.count == 0
                 || restored
                     .totals
@@ -61,9 +102,9 @@ impl DonationCategoryTotals {
             .iter_mut()
             .find(|entry| entry.category == category)
         {
-            let next_amount = entry.total.amount.0.checked_add(amount.0)?;
+            let next_amount = entry.total.amount.checked_add(amount)?;
             let next_count = entry.total.count.checked_add(1)?;
-            entry.total.amount.0 = next_amount;
+            entry.total.amount = next_amount;
             entry.total.count = next_count;
         } else {
             self.totals.push(DonationCategoryTotal {
@@ -83,7 +124,7 @@ impl DonationCategoryTotals {
             .filter(|entry| requested_category.is_none_or(|category| entry.category == category))
             .try_fold(DonationTotal::default(), |aggregate, entry| {
                 Some(DonationTotal {
-                    amount: Money(aggregate.amount.0.checked_add(entry.total.amount.0)?),
+                    amount: aggregate.amount.checked_add(entry.total.amount)?,
                     count: aggregate.count.checked_add(entry.total.count)?,
                 })
             })

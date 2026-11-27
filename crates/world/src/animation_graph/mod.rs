@@ -2,7 +2,7 @@ use bevy::asset::AssetLoadFailedEvent;
 pub(crate) mod animation_graph_blend_timer_advancement;
 mod animation_graph_clip_request_execution;
 mod animation_graph_node_request_execution;
-mod animation_graph_route_selection;
+pub(crate) mod animation_graph_route_selection;
 mod animation_graph_transition_completion;
 mod animation_return_route;
 mod embedded_model_animation_binding;
@@ -72,6 +72,8 @@ impl Plugin for AnimationGraphPlugin {
                 (
                     complete_animation_graph_transitions_after_animation_clip_completion::<RealTimeAnimationPlayer>
                         .run_if(on_message::<openzt2_world_state::animation_playback::animation_event_message_types::AnimationCompleted>),
+                    animation_graph_route_selection::continue_prepared_kfm_routes::<RealTimeAnimationPlayer>,
+                    animation_graph_node_request_execution::resume_animation_graph_node_routes::<RealTimeAnimationPlayer>,
                     execute_animation_graph_node_playback_requests::<RealTimeAnimationPlayer, true>
                         .run_if(on_message::<AnimationGraphNodePlaybackRequest>),
                     execute_explicit_animation_clip_playback_requests::<true>,
@@ -83,12 +85,15 @@ impl Plugin for AnimationGraphPlugin {
             .add_systems(
                 FixedUpdate,
                 (
+                    animation_graph_route_selection::continue_prepared_kfm_routes::<FixedAnimationPlayer>,
+                    animation_graph_node_request_execution::resume_animation_graph_node_routes::<FixedAnimationPlayer>,
                     execute_animation_graph_node_playback_requests::<FixedAnimationPlayer, false>
                         .run_if(on_message::<AnimationGraphNodePlaybackRequest>),
                     execute_explicit_animation_clip_playback_requests::<false>,
                 )
                     .chain()
                     .in_set(FixedGameSet::Act)
+                    .after(openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet::Think)
                     .before(AnimationLocomotionMotionSampling),
             )
             .add_systems(

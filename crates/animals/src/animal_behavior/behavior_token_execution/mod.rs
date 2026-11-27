@@ -6,8 +6,8 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::AssetId;
 use openzt2_game_data::behavior::action::token::BehaviorTokenRecipient;
+use openzt2_game_data::AssetId;
 use openzt2_world_state::{
     application_schedule::FixedGameSet, simulation_time::simulation_clock_types::ZooClock,
 };
@@ -20,15 +20,16 @@ use openzt2_zoo_state::{
     animal_health::types::Dead,
     animal_lifecycle::types::{Animal, SpeciesHandle},
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, BehaviorTaskFailed, PendingBehaviorTaskFailure,
-        abandon_behavior_task_for_reconsideration,
+        abandon_behavior_task_for_reconsideration, BehaviorTaskExecutionState, BehaviorTaskFailed,
+        PendingBehaviorTaskFailure,
     },
     guests::guest_simulation_types::GuestRng,
     staff::staff_job_types::CurrentJob,
 };
 
 use openzt2_zoo_state::animal_behavior::behavior_token_types::{
-    BehaviorSelfToken, BehaviorTokenExpires, ClaimedBehaviorSelfToken,
+    BehaviorSelfToken, BehaviorTokenContext, BehaviorTokenExpires, ClaimedBehaviorSelfToken,
+    PendingBehaviorTokenReconsideration,
 };
 
 #[derive(Component)]
@@ -138,6 +139,7 @@ pub(super) struct DeliverBehaviorSelfToken {
     pub(super) reconsider: bool,
     pub(super) tick: u64,
     pub(super) token: BehaviorSelfToken,
+    pub(super) context: BehaviorTokenContext,
 }
 
 impl Command for DeliverBehaviorSelfToken {
@@ -163,15 +165,59 @@ impl Command for DeliverBehaviorSelfToken {
         {
             return;
         }
-        // A sender continues its task. Staff finish their claimed jobs first.
-        if self.reconsider
-            && self.actor != self.recipient
+        let reconsider = self.reconsider && self.actor != self.recipient;
+        if reconsider
+            && self.token.is_available_at(self.tick)
             && !recipient.contains::<CurrentJob>()
             && recipient.contains::<BehaviorTaskExecutionState>()
         {
             abandon_behavior_task_for_reconsideration(self.recipient, &mut world.commands());
         }
-        world.spawn((self.token, ChildOf(self.recipient)));
+        let activate = reconsider && self.tick < self.token.available_at;
+        let mut token = world.spawn((self.token, ChildOf(self.recipient)));
+        if self.context != BehaviorTokenContext::default() {
+            token.insert(self.context);
+        }
+        if activate {
+            token.insert(PendingBehaviorTokenReconsideration);
+        }
+    }
+}
+
+fn reconsider_on_token_activation(
+    pending: Query<
+        (Entity, &BehaviorSelfToken, &ChildOf),
+        With<PendingBehaviorTokenReconsideration>,
+    >,
+    recipients: Query<&openzt2_world_state::world_spawn::world_membership_types::WorldMember>,
+    clocks: Query<&ZooClock>,
+    tasks: Query<
+        (),
+        (
+            With<BehaviorTaskExecutionState>,
+            Without<CurrentJob>,
+            Without<Dead>,
+        ),
+    >,
+    mut commands: Commands,
+) {
+    for (entity, token, recipient) in &pending {
+        let actor = recipient.parent();
+        let Ok(member) = recipients.get(actor) else {
+            continue;
+        };
+        let Ok(clock) = clocks.get(member.root) else {
+            continue;
+        };
+        if clock.tick < token.available_at {
+            continue;
+        }
+        if token.is_available_at(clock.tick) && tasks.contains(actor) {
+            abandon_behavior_task_for_reconsideration(actor, &mut commands);
+        }
+        commands
+            .entity(entity)
+            .try_remove::<PendingBehaviorTokenReconsideration>();
     }
 }
 
@@ -184,6 +230,15 @@ pub(super) fn register_token_execution(application: &mut App) {
             discard_expired_and_consumed_tokens
                 .before(super::autonomous_task_selection::select_idle_animal_tasks)
                 .in_set(FixedGameSet::Think)
+                .run_if(in_state(GamePhase::InGame)),
+        )
+        .add_systems(
+            FixedUpdate,
+            reconsider_on_token_activation
+                .after(
+                    openzt2_world_state::simulation_time::simulation_clock_types::ZooClockAdvance,
+                )
+                .in_set(FixedGameSet::Clock)
                 .run_if(in_state(GamePhase::InGame)),
         )
         .add_observer(execute_current_self_token_deliveries);
@@ -359,6 +414,10 @@ fn execute_current_self_token_deliveries(
                     recipient,
                     only_one: delivery.only_one,
                     reconsider: delivery.reconsider,
+                    context: BehaviorTokenContext {
+                        force: delivery.force,
+                        point: delivery.point_m.map(Vec3::from_array),
+                    },
                     tick: clock.tick,
                     token: BehaviorSelfToken {
                         name: delivery.token,

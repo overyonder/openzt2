@@ -1,3 +1,5 @@
+pub(super) mod projection;
+
 use bevy::{ecs::entity::EntityHashSet, prelude::*};
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
@@ -9,6 +11,7 @@ pub struct GuestViewingAreaWorklist {
     pub has_viewable_candidates: bool,
     pub has_user_camera_view_candidate: bool,
     pub mode_one_visible_species_count: Option<usize>,
+    next_projection_tick: u64,
 }
 
 impl GuestViewingAreaWorklist {
@@ -17,23 +20,23 @@ impl GuestViewingAreaWorklist {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Default, PartialEq)]
 pub struct GuestViewingArea {
     pub supports: Vec<Entity>,
     pub intersections: Vec<Entity>,
 }
 
-#[derive(Component)]
+#[derive(Component, PartialEq)]
 pub struct GuestViewSupport {
     pub species: Option<AssetId>,
     pub view_bonus: f32,
     pub excluded_surface: bool,
 }
 
-#[derive(Component)]
+#[derive(Component, PartialEq)]
 pub struct GuestViewpointContactScores(pub Vec<i32>);
 
-#[derive(Component)]
+#[derive(Component, PartialEq)]
 pub struct GuestViewpointSupports(pub Vec<Entity>);
 
 #[derive(Component)]

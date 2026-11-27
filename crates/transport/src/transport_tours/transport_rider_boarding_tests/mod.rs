@@ -62,7 +62,7 @@ fn boarding_uses_reservation_order_and_updates_station_vehicle_and_guest_relatio
                 definition: AssetId::from_key("groundtrack"),
                 closed: false,
             },
-            Price(Money(100)),
+            Price(Money::from_cents(100)),
         ))
         .id();
     let station_entity = application
@@ -95,7 +95,7 @@ fn boarding_uses_reservation_order_and_updates_station_vehicle_and_guest_relatio
         .spawn((
             Guest,
             guest_navigation_agent_for_boarding_test(),
-            Wallet(Money(200)),
+            Wallet(Money::from_cents(200)),
         ))
         .id();
     let second_guest_entity = application
@@ -103,7 +103,7 @@ fn boarding_uses_reservation_order_and_updates_station_vehicle_and_guest_relatio
         .spawn((
             Guest,
             guest_navigation_agent_for_boarding_test(),
-            Wallet(Money(200)),
+            Wallet(Money::from_cents(200)),
         ))
         .id();
     application

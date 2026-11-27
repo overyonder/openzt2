@@ -32,11 +32,12 @@ pub(super) fn acknowledge_staff_job_completion_fact_actions_owned_by_terminal_do
         {
             continue;
         }
+        let Some(target) = job.target else { continue };
         completed.write(StaffJobCompleted {
             staff: outcome.actor,
             job: current.job(),
             kind: StaffJobKind::EmptyBin,
-            target: job.target,
+            target,
         });
     }
 }

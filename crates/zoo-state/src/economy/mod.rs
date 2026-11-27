@@ -2,7 +2,6 @@ pub mod account_transaction_types;
 pub mod authored_price_queries;
 pub mod authored_transaction_amount;
 pub mod behavior_transaction_state;
-pub mod currency_formatting;
 pub mod experience_donation;
 pub mod facility_economy_types;
 pub mod general_economy_types;
@@ -20,5 +19,8 @@ pub struct EconomyServiceCleanupSet;
 
 #[derive(bevy::prelude::SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EconomyUiPolicyApplicationSet;
+
+#[derive(bevy::prelude::SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SubmitSimulationAccountRequests;
 
 pub mod world_economy_configuration;

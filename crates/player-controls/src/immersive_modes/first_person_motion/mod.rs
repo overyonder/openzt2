@@ -40,7 +40,9 @@ use crate::{
 };
 
 use super::{
-    first_person_mode_control_operations::allowed_first_person_movement_axes,
+    first_person_mode_control_operations::{
+        allowed_first_person_movement_axes, subject_relative_movement_axes,
+    },
     immersive_control_execution_types::FirstPersonViewAngles,
     immersive_mode_entry_and_policy_operations::find_authored_immersive_mode_policy,
     immersive_mode_policy_types::AllowedInteractionActions,
@@ -242,7 +244,7 @@ pub(super) fn advance_first_person_horizontal_motion(
                 let yaw = angles.map_or(0.0, |angles| angles.yaw);
                 drive
                     .map_unchanged(|drive| &mut drive.local_axes)
-                    .set_if_neq(Mat2::from_angle(yaw) * movement);
+                    .set_if_neq(subject_relative_movement_axes(yaw, movement));
                 tuning.set_if_neq(FirstPersonLocomotionTuning {
                     maximum_speed_mps: speed,
                     damping_per_second: surface.damping_per_second,
@@ -254,7 +256,10 @@ pub(super) fn advance_first_person_horizontal_motion(
         if !matches!(
             (mode.mode, *camera_mode),
             (ImmersiveMode::Photo, CameraMode::Free)
-                | (ImmersiveMode::SuperStaff, CameraMode::FirstPerson)
+                | (
+                    ImmersiveMode::SuperStaff | ImmersiveMode::FossilSearch,
+                    CameraMode::FirstPerson
+                )
         ) {
             continue;
         }
@@ -355,7 +360,10 @@ pub(super) fn fit_walking_camera_to_surfaces(
             && !matches!(
                 (mode.mode, *camera_mode),
                 (ImmersiveMode::Photo, CameraMode::Free)
-                    | (ImmersiveMode::SuperStaff, CameraMode::FirstPerson)
+                    | (
+                        ImmersiveMode::SuperStaff | ImmersiveMode::FossilSearch,
+                        CameraMode::FirstPerson
+                    )
             )
         {
             continue;
@@ -443,7 +451,12 @@ pub(super) fn fit_walking_camera_to_surfaces(
             .map_unchanged(|pose| &mut pose.translation)
             .set_if_neq(position);
         if let Some(mut avatar) = subject
-            .filter(|_| mode.mode == ImmersiveMode::SuperStaff)
+            .filter(|_| {
+                matches!(
+                    mode.mode,
+                    ImmersiveMode::SuperStaff | ImmersiveMode::FossilSearch
+                )
+            })
             .and_then(|subject| staff_avatars.get_mut(subject.0).ok())
         {
             let mut avatar_position = position;

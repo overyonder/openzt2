@@ -1,4 +1,5 @@
 use bevy::prelude::{Commands, Entity, Handle, IRect};
+use std::collections::BTreeMap;
 
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 
@@ -286,6 +287,53 @@ pub(super) fn restore_snapshot_sections(
             return Err(WorldSnapshotPersistenceFailure::DuplicatePersistentEntityIdentifier);
         }
         maximum_persistent_identifier = maximum_persistent_identifier.max(guest.id);
+    }
+    for id in behavior_snapshot_records
+        .iter()
+        .filter_map(super::behavior_snapshot_types::BehaviorActorSnapshot::task_record)
+        .filter_map(|actor| actor.staff_job.as_ref()?.persistent_identifier)
+    {
+        if !complete_persistent_identifiers.insert(id) {
+            return Err(WorldSnapshotPersistenceFailure::DuplicatePersistentEntityIdentifier);
+        }
+        maximum_persistent_identifier = maximum_persistent_identifier.max(id);
+    }
+    let mut saved_staff_sites = BTreeMap::new();
+    if let Some(domain) = runtime_continuation
+        .as_ref()
+        .and_then(|record| record.domain_continuation.as_ref())
+    {
+        use super::staff_job_continuation_snapshot::SavedStaffJobTarget;
+        for job in &domain.staff_jobs {
+            if !complete_persistent_identifiers.insert(job.id) {
+                return Err(WorldSnapshotPersistenceFailure::DuplicatePersistentEntityIdentifier);
+            }
+            maximum_persistent_identifier = maximum_persistent_identifier.max(job.id);
+            if job.target.is_some_and(|target| {
+                !complete_persistent_identifiers.contains(&target.existing_id())
+            }) || job.rejected.iter().any(|id| {
+                records
+                    .staff
+                    .binary_search_by_key(id, |staff| staff.persistent_identifier)
+                    .is_err()
+            }) {
+                return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+            }
+            if let Some(target @ SavedStaffJobTarget::CleaningSite { id, .. }) = job.target {
+                if let Some(previous) = saved_staff_sites.insert(id, target) {
+                    if previous != target {
+                        return Err(
+                            WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference,
+                        );
+                    }
+                } else if !complete_persistent_identifiers.insert(id) {
+                    return Err(
+                        WorldSnapshotPersistenceFailure::DuplicatePersistentEntityIdentifier,
+                    );
+                }
+                maximum_persistent_identifier = maximum_persistent_identifier.max(id);
+            }
+        }
     }
     for treatment in records.animals.iter().filter_map(|animal| animal.treatment) {
         if !complete_persistent_identifiers.contains(&treatment.provider) {

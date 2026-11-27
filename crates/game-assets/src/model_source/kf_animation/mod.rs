@@ -77,6 +77,8 @@ pub(super) fn lower_netimmerse_kf_clip(
         repeats |= clock.flags & 6 == 0;
         duration = duration.max(add_joint_curves(&mut clip, target, clock, data)?);
     }
+    let text_keys = extract_netimmerse_kf_text_keys(document, sequence.text_keys_ref, text_keys)?;
+    duration = duration.max(text_keys.end_time_seconds);
     clip.set_duration(duration);
     let root_name = [sequence.accum_root_name.as_str(), "bip01"]
         .into_iter()
@@ -92,8 +94,6 @@ pub(super) fn lower_netimmerse_kf_clip(
             super::native_animation_source_lowering::sample_root_motion(&clip, name);
         (Some(joint), Some(motion))
     });
-    let (animation_markers, authored_animation_text_keys) =
-        extract_netimmerse_kf_text_keys(document, sequence.text_keys_ref, text_keys)?;
     Ok((
         clip,
         AuthoredAnimationClipMetadata {
@@ -104,8 +104,8 @@ pub(super) fn lower_netimmerse_kf_clip(
             additive_blending_is_enabled: false,
             root_motion_transform,
             root_motion_joint,
-            animation_markers,
-            authored_animation_text_keys,
+            animation_markers: text_keys.markers,
+            authored_animation_text_keys: text_keys.commands,
         },
     ))
 }

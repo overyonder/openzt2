@@ -21,7 +21,7 @@ pub(super) fn staff_member_owns_active_job(
 
 pub(super) fn create_completed_staff_job_message(
     staff_job_entity: Entity,
-    staff_job: &StaffJob,
+    target: Entity,
     staff_member_entity: Entity,
     kind: StaffJobKind,
 ) -> StaffJobCompleted {
@@ -29,6 +29,6 @@ pub(super) fn create_completed_staff_job_message(
         staff: staff_member_entity,
         job: staff_job_entity,
         kind,
-        target: staff_job.target,
+        target,
     }
 }

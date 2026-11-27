@@ -9,6 +9,7 @@ use openzt2_interface_state::settings::audio_settings_types::AudioSettings;
 use openzt2_interface_state::settings::display_settings_types::DisplaySettings;
 use openzt2_zoo_state::progression::profile_challenge_types::ProfileChallengeCompletionCounts;
 
+use openzt2_interface_state::persistence::profile_types::PhotoAlbumProfileOptions;
 use openzt2_interface_state::persistence::profile_types::ProfileFailure;
 use openzt2_interface_state::persistence::profile_types::ProfileOptions;
 use openzt2_interface_state::persistence::profile_types::ProfileRecord;
@@ -21,10 +22,10 @@ use super::{
 pub(super) const MAXIMUM_PROFILE_COUNT: usize = 1024;
 pub(super) const MAXIMUM_PROFILE_DISPLAY_NAME_BYTE_COUNT: usize = 64;
 const PROFILE_INDEX_MAGIC_BYTES: [u8; 8] = *b"OZT2PROF";
-const PROFILE_INDEX_FORMAT_VERSION: u32 = 6;
+const PROFILE_INDEX_FORMAT_VERSION: u32 = 7;
 // Bound the complete index by the independently admitted profile payloads.
 pub(super) const MAXIMUM_PROFILE_INDEX_BYTE_COUNT: usize = 64 + MAXIMUM_PROFILE_COUNT * (
-    42 + 20 + 1 + 5 * (4 + MAXIMUM_ENCODED_PROFILE_SETTINGS_BYTE_COUNT)
+    42 + 20 + 1 + 4 + 5 * (4 + MAXIMUM_ENCODED_PROFILE_SETTINGS_BYTE_COUNT)
     + openzt2_zoo_state::progression::profile_scenario_variables::MAXIMUM_PROFILE_SCENARIO_VARIABLE_BYTES
     + 2 + MAXIMUM_PROFILE_DISPLAY_NAME_BYTE_COUNT
 );
@@ -43,6 +44,7 @@ pub(super) fn encode_profile_index_for_test(
                 profile_identifier: profile_record.profile_identifier,
                 locale_identifier: AssetId::default(),
                 controller_input_enabled: true,
+                photo_album: None,
                 attributes: Default::default(),
             },
             challenge_progress: ProfileChallengeCompletionCounts::default(),
@@ -205,6 +207,12 @@ pub(super) fn encode_stored_profile_index(
             &mut profile_index_bytes,
             &stored_profile_record_and_settings.options.attributes,
         )?;
+        let spreads = stored_profile_record_and_settings
+            .options
+            .photo_album
+            .and_then(|album| album.default_spreads)
+            .unwrap_or(0);
+        profile_index_bytes.extend_from_slice(&spreads.to_le_bytes());
         profile_index_bytes.extend_from_slice(
             &(stored_profile_record_and_settings
                 .record
@@ -403,13 +411,29 @@ pub(super) fn decode_stored_profile_index(
         } else {
             ModderToolsSettings::default()
         };
-        let attributes = if profile_index_format_version >= 6 {
-            decode_length_prefixed_canonical_json_profile_settings_value(
+        let mut attributes: std::collections::BTreeMap<String, String> =
+            if profile_index_format_version >= 6 {
+                decode_length_prefixed_canonical_json_profile_settings_value(
+                    profile_index_bytes,
+                    &mut profile_index_byte_cursor,
+                )?
+            } else {
+                Default::default()
+            };
+        let legacy_spreads = attributes.remove(PhotoAlbumProfileOptions::DEFAULT_SPREADS_ATTRIBUTE);
+        let photo_album = if profile_index_format_version >= 7 {
+            let spreads = read_little_endian_u32_from_profile_index(
                 profile_index_bytes,
-                &mut profile_index_byte_cursor,
-            )?
+                profile_index_byte_cursor,
+            )?;
+            profile_index_byte_cursor += 4;
+            (spreads != 0).then_some(PhotoAlbumProfileOptions {
+                default_spreads: Some(spreads),
+            })
         } else {
-            Default::default()
+            legacy_spreads
+                .as_deref()
+                .and_then(PhotoAlbumProfileOptions::parse_default_spreads)
         };
         let profile_display_name_byte_count = read_little_endian_u16_from_profile_index(
             profile_index_bytes,
@@ -444,6 +468,7 @@ pub(super) fn decode_stored_profile_index(
                 profile_identifier,
                 locale_identifier: AssetId(locale_identifier_bytes),
                 controller_input_enabled,
+                photo_album,
                 attributes,
             },
             challenge_progress: profile_challenge_completion_counts,

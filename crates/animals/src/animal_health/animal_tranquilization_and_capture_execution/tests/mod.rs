@@ -1,6 +1,8 @@
 use super::*;
 use openzt2_game_data::AssetId;
-use openzt2_zoo_state::staff::staff_lifecycle_messages::StaffJobCancelled;
+use openzt2_zoo_state::staff::{
+    staff_job_types::StaffJobTarget, staff_lifecycle_messages::StaffJobCancelled,
+};
 
 #[test]
 fn a_dose_batch_keeps_the_longest_sedation_and_last_recovery() {
@@ -120,6 +122,7 @@ fn capture_app() -> (App, CaptureAnimalRequest) {
             Tranquilized {
                 recovery_duration: Duration::from_millis(50),
             },
+            TranquilizerDoseTimer(Timer::new(Duration::from_secs(2), TimerMode::Once)),
         ))
         .id();
     let staff = app.world_mut().spawn(Staff).id();
@@ -128,10 +131,16 @@ fn capture_app() -> (App, CaptureAnimalRequest) {
         .spawn((
             StaffJob {
                 kind: Some(StaffJobKind::Capture),
-                target: animal,
-                urgency: 0,
+                target: Some(animal),
+                point: None,
+                priority: 1.0,
+                issued_at_seconds: 0.0,
+                remaining_wait_seconds: 0.0,
+                first_attempt: false,
                 token: Some(AssetId::from_key("t_crateanimal")),
             },
+            WorldMember { root },
+            StaffJobTarget(animal),
             JobClaim { staff },
             JobProgress,
             StaffJobBehaviorTask {
@@ -182,18 +191,18 @@ fn cancelled_capture_preserves_emergency_state_and_releases_claim_in_either_syst
         assert!(app.world().get::<Rampaging>(request.animal).is_some());
         assert_eq!(
             app.world()
-                .get::<Tranquilized>(request.animal)
+                .get::<TranquilizerDoseTimer>(request.animal)
                 .unwrap()
-                .remaining_ticks,
-            20
+                .0
+                .remaining(),
+            Duration::from_secs(2)
         );
         assert!(app.world().get_entity(request.job).is_err());
         assert!(app.world().get::<CurrentJob>(request.staff).is_none());
-        assert!(
-            app.world()
-                .resource::<Messages<AnimalCaptured>>()
-                .is_empty()
-        );
+        assert!(app
+            .world()
+            .resource::<Messages<AnimalCaptured>>()
+            .is_empty());
     }
 }
 

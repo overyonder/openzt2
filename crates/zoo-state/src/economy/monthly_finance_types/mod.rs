@@ -37,6 +37,12 @@ pub enum FinanceMetric {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinanceValue {
+    Money(Money),
+    Users(i64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FinancePeriod {
     Lifetime,
 }
@@ -55,7 +61,6 @@ pub struct MonthlyFinanceHistory {
     lifetime_expenses: Money,
     lifetime_donation_income: Money,
     lifetime_users: i64,
-    initialized: bool,
 }
 
 impl Default for MonthlyFinanceHistory {
@@ -69,7 +74,6 @@ impl Default for MonthlyFinanceHistory {
             lifetime_expenses: Money::ZERO,
             lifetime_donation_income: Money::ZERO,
             lifetime_users: 0,
-            initialized: false,
         }
     }
 }
@@ -92,7 +96,7 @@ impl MonthlyFinanceHistory {
     }
 
     pub const fn has_initialized_month(&self) -> bool {
-        self.initialized
+        self.len != 0
     }
 
     /// Restores saved totals. Invalid or non-contiguous history leaves the
@@ -107,9 +111,9 @@ impl MonthlyFinanceHistory {
         lifetime_users: i64,
         initialized: bool,
     ) -> bool {
-        let valid_totals = lifetime_income.0 >= 0
-            && lifetime_expenses.0 >= 0
-            && lifetime_donation_income.0 >= 0
+        let valid_totals = lifetime_income >= Money::ZERO
+            && lifetime_expenses >= Money::ZERO
+            && lifetime_donation_income >= Money::ZERO
             && lifetime_donation_income <= lifetime_income
             && lifetime_users >= 0;
         let valid_shape = months.len() <= MONTHLY_FINANCE_HISTORY_CAPACITY
@@ -119,20 +123,20 @@ impl MonthlyFinanceHistory {
                     && pair[0].closing_cash == pair[1].opening_cash
             })
             && months.iter().all(|month| {
-                month.income.0 >= 0
-                    && month.expenses.0 >= 0
-                    && month.admission_income.0 >= 0
-                    && month.cash_grants.0 >= 0
-                    && month.donation_income.0 >= 0
-                    && month.food_drink_sales.0 >= 0
-                    && month.recycling_income.0 >= 0
-                    && month.gift_sales.0 >= 0
-                    && month.animal_adoption.0 >= 0
-                    && month.animal_upkeep.0 >= 0
-                    && month.construction.0 >= 0
-                    && month.research.0 >= 0
-                    && month.staff_salaries.0 >= 0
-                    && month.upkeep.0 >= 0
+                month.income >= Money::ZERO
+                    && month.expenses >= Money::ZERO
+                    && month.admission_income >= Money::ZERO
+                    && month.cash_grants >= Money::ZERO
+                    && month.donation_income >= Money::ZERO
+                    && month.food_drink_sales >= Money::ZERO
+                    && month.recycling_income >= Money::ZERO
+                    && month.gift_sales >= Money::ZERO
+                    && month.animal_adoption >= Money::ZERO
+                    && month.animal_upkeep >= Money::ZERO
+                    && month.construction >= Money::ZERO
+                    && month.research >= Money::ZERO
+                    && month.staff_salaries >= Money::ZERO
+                    && month.upkeep >= Money::ZERO
                     && month.donation_income <= month.income
                     && month.active_users >= 0
                     && month.total_users >= 0
@@ -147,7 +151,6 @@ impl MonthlyFinanceHistory {
             lifetime_expenses,
             lifetime_donation_income,
             lifetime_users,
-            initialized,
             ..Self::default()
         };
         months
@@ -158,44 +161,50 @@ impl MonthlyFinanceHistory {
         true
     }
 
-    pub fn finance_metric_value(&self, metric: FinanceMetric, period: FinancePeriod) -> i64 {
-        match (metric, period) {
-            (FinanceMetric::Income, FinancePeriod::Lifetime) => self.lifetime_income.0,
-            (FinanceMetric::Expenses, FinancePeriod::Lifetime) => self.lifetime_expenses.0,
-            (FinanceMetric::Profit, FinancePeriod::Lifetime) => self
-                .lifetime_income
-                .0
-                .saturating_sub(self.lifetime_expenses.0),
-            (FinanceMetric::DonationIncome, FinancePeriod::Lifetime) => {
-                self.lifetime_donation_income.0
+    pub fn finance_metric_value(
+        &self,
+        metric: FinanceMetric,
+        period: FinancePeriod,
+    ) -> FinanceValue {
+        let amount = match (metric, period) {
+            (FinanceMetric::Income, FinancePeriod::Lifetime) => self.lifetime_income,
+            (FinanceMetric::Expenses, FinancePeriod::Lifetime) => self.lifetime_expenses,
+            (FinanceMetric::Profit, FinancePeriod::Lifetime) => {
+                self.lifetime_income.saturating_add(-self.lifetime_expenses)
             }
-            (FinanceMetric::TotalUsers, FinancePeriod::Lifetime) => self.lifetime_users,
+            (FinanceMetric::DonationIncome, FinancePeriod::Lifetime) => {
+                self.lifetime_donation_income
+            }
+            (FinanceMetric::TotalUsers, FinancePeriod::Lifetime) => {
+                return FinanceValue::Users(self.lifetime_users)
+            }
             (FinanceMetric::Cash, FinancePeriod::Lifetime) => self
                 .current_month_finance()
-                .map_or(0, |row| row.closing_cash.0),
-        }
+                .map_or(Money::ZERO, |row| row.closing_cash),
+        };
+        FinanceValue::Money(amount)
     }
 
     pub fn enter_calendar_month(&mut self, calendar_month: u32, cash: Money) {
-        if self.initialized && self.current_calendar_month == calendar_month {
+        let initialized = self.has_initialized_month();
+        if initialized && self.current_calendar_month == calendar_month {
             return;
         }
         let (active_users, carried_cash) = self
             .current_month_finance()
             .map_or((0, cash), |month| (month.active_users, month.closing_cash));
-        let elapsed = if self.initialized {
+        let elapsed = if initialized {
             calendar_month.saturating_sub(self.current_calendar_month)
         } else {
             1
         };
-        let first_month = if self.initialized {
+        let first_month = if initialized {
             self.current_month_finance()
                 .map_or(0, |month| month.month_ordinal.saturating_add(1))
         } else {
             0
         };
         self.current_calendar_month = calendar_month;
-        self.initialized = true;
         for offset in elapsed.saturating_sub(MONTHLY_FINANCE_HISTORY_CAPACITY_MONTHS)..elapsed {
             self.push_month_finance_record_into_bounded_history(MonthlyFinance {
                 month_ordinal: first_month.saturating_add(offset),
@@ -210,44 +219,47 @@ impl MonthlyFinanceHistory {
         }
     }
 
-    pub fn record_account_cash_movement(&mut self, delta: i64, cash: Money) {
-        if delta >= 0 {
-            let amount = Money(delta);
-            self.lifetime_income = Money(self.lifetime_income.0.saturating_add(amount.0));
+    pub fn record_account_cash_movement(&mut self, delta: Money, cash: Money) {
+        if delta >= Money::ZERO {
+            self.lifetime_income = self.lifetime_income.saturating_add(delta);
         } else {
-            let amount = delta.saturating_abs();
-            self.lifetime_expenses = Money(self.lifetime_expenses.0.saturating_add(amount));
+            let amount = delta.abs();
+            self.lifetime_expenses = self.lifetime_expenses.saturating_add(amount);
         }
         let row = self
             .current_month_finance_mut()
             .expect("the economy system enters the current month before recording");
         row.closing_cash = cash;
-        if delta >= 0 {
-            row.income = Money(row.income.0.saturating_add(delta));
+        if delta >= Money::ZERO {
+            row.income = row.income.saturating_add(delta);
         } else {
-            row.expenses = Money(row.expenses.0.saturating_add(delta.saturating_abs()));
+            row.expenses = row.expenses.saturating_add(delta.abs());
         }
     }
 
-    pub fn record_completed_transaction(&mut self, kind: TransactionKind, delta: i64, cash: Money) {
+    pub fn record_completed_transaction(
+        &mut self,
+        kind: TransactionKind,
+        delta: Money,
+        cash: Money,
+    ) {
         self.record_account_cash_movement(delta, cash);
-        if delta >= 0 && kind == TransactionKind::Donation {
-            self.lifetime_donation_income =
-                Money(self.lifetime_donation_income.0.saturating_add(delta));
+        if delta >= Money::ZERO && kind == TransactionKind::Donation {
+            self.lifetime_donation_income = self.lifetime_donation_income.saturating_add(delta);
         }
         let row = self
             .current_month_finance_mut()
             .expect("current month was recorded");
-        if delta >= 0 {
+        if delta >= Money::ZERO {
             let category = match kind {
                 TransactionKind::Admission => &mut row.admission_income,
                 TransactionKind::Donation => &mut row.donation_income,
                 TransactionKind::Reward => &mut row.cash_grants,
                 _ => return,
             };
-            category.0 = category.0.saturating_add(delta);
+            *category = category.saturating_add(delta);
         } else {
-            let amount = delta.saturating_abs();
+            let amount = delta.abs();
             let category = match kind {
                 TransactionKind::AnimalAdoption => &mut row.animal_adoption,
                 TransactionKind::Construction => &mut row.construction,
@@ -255,7 +267,7 @@ impl MonthlyFinanceHistory {
                 TransactionKind::StaffHire | TransactionKind::Wage => &mut row.staff_salaries,
                 _ => return,
             };
-            category.0 = category.0.saturating_add(amount);
+            *category = category.saturating_add(amount);
         }
     }
 
@@ -272,14 +284,14 @@ impl MonthlyFinanceHistory {
         let row = self
             .current_month_finance_mut()
             .expect("the economy system enters the current month before recording");
-        row.food_drink_sales.0 = row.food_drink_sales.0.saturating_add(amount.0);
+        row.food_drink_sales = row.food_drink_sales.saturating_add(amount);
     }
 
     pub fn record_gift_sale(&mut self, amount: Money) {
         let row = self
             .current_month_finance_mut()
             .expect("the economy system enters the current month before recording");
-        row.gift_sales.0 = row.gift_sales.0.saturating_add(amount.0);
+        row.gift_sales = row.gift_sales.saturating_add(amount);
     }
 
     pub fn record_guest_departure(&mut self) {
@@ -314,10 +326,10 @@ mod tests {
     #[test]
     fn carried_visitors_survive_month_rollover_and_restoration() {
         let mut history = MonthlyFinanceHistory::default();
-        history.enter_calendar_month(12, Money(100));
+        history.enter_calendar_month(12, Money::from_cents(100));
         history.record_guest_arrival();
         history.record_guest_arrival();
-        history.enter_calendar_month(13, Money(100));
+        history.enter_calendar_month(13, Money::from_cents(100));
         assert_eq!(history.current_month_finance().unwrap().active_users, 2);
         assert_eq!(history.current_month_finance().unwrap().total_users, 0);
         let months = history

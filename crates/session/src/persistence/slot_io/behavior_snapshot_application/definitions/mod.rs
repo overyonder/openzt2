@@ -80,7 +80,7 @@ pub(super) fn actor_references(
     record.task.target.iter().chain(&record.task.object)
         .chain(record.membership.iter().map(|membership| &membership.container))
         .chain(record.water_target.iter().map(|water| &water.region))
-        .chain(record.staff_job.iter().map(|job| &job.target))
+        .chain(record.staff_job.iter().flat_map(|job| job.target.iter().chain(&job.rejected_staff)))
         .chain(record.transaction.iter().map(|pending| &pending.facility))
         .chain(record.synchronized.iter().map(|owner| &owner.target))
         .chain(record.navigation.iter().flat_map(|nav| {
@@ -94,6 +94,13 @@ pub(super) fn actor_references(
                     _ => None,
                 }))
         }))
+        .flat_map(|reference| {
+            let payload = match reference {
+                BehaviorSnapshotEntityReference::SelfToken { payload, .. } => payload.as_deref(),
+                _ => None,
+            };
+            payload.into_iter().chain(std::iter::once(reference))
+        })
 }
 
 fn required_reference(

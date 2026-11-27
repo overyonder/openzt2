@@ -1,8 +1,8 @@
 use bevy::{ecs::world::CommandQueue, prelude::*};
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets, SpeciesView};
 use openzt2_game_data::{
-    AssetId,
     species::{LifeStage, NeedKind},
+    AssetId,
 };
 use openzt2_world_state::{
     simulation_time::deterministic_random_stream::{DeterministicRng, ZooSeed},
@@ -133,6 +133,12 @@ pub fn apply_scripted_animal_spawn(
         queue_scripted_animal_spawn(&mut commands, request);
     }
     queue.apply(world);
+    world.trigger(
+        openzt2_world::world_spawn::generated_entity_name_application::GenerateWorldEntityName {
+            entity: request.entity,
+        },
+    );
+    world.flush();
     true
 }
 

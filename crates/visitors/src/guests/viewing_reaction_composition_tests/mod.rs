@@ -21,6 +21,7 @@ pub(super) fn policy_document() -> WorldDefinitionDocument {
     let id = AssetId::from_key("viewing-test");
     WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
+            collision_scores: None,
             authored_runtime: Default::default(),
             audio_cue_prefixes: Vec::new(),
             audio_stage_volumes: Vec::new(),
@@ -72,6 +73,9 @@ pub(super) fn policy_document() -> WorldDefinitionDocument {
             virtual_nodes: Vec::new(),
         }],
         guests: vec![GuestDefinition {
+            locomotion: Default::default(),
+            show_need: None,
+            caffeine_factors: Default::default(),
             donation: None,
             id,
             object: id,

@@ -54,6 +54,8 @@ mod show_snapshot_capture;
 mod show_snapshot_section_encoding;
 mod show_snapshot_types;
 mod snapshot_container_section_assembly;
+mod staff_continuation_snapshot;
+mod staff_job_continuation_snapshot;
 mod staff_snapshot_application;
 mod staff_snapshot_capture;
 mod staff_snapshot_section_encoding;

@@ -58,12 +58,12 @@ pub(crate) fn apply_authored_disease_cures_for_live_staff_claims(
                     && job.token == Some(AssetId::from_key("t_cureanimal"))
                     && claim.staff == actor
                     && behavior.execution_id == Some(task.execution_id)
-                    && task.target == Some(job.target)
-                    && animals
-                        .get(job.target)
-                        .is_ok_and(|vitality| vitality.0 > 0.0)
+                    && task.target == job.target
+                    && job.target.is_some_and(|target| {
+                        animals.get(target).is_ok_and(|vitality| vitality.0 > 0.0)
+                    })
             })
-            .map(|(job, _, _)| job.target);
+            .and_then(|(job, _, _)| job.target);
         let Some(target) = target else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;

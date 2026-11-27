@@ -135,6 +135,7 @@ pub(super) fn bind_authored_path(
         record.key.to_string(),
     ));
     output.document.objects.push(WorldObjectDefinition {
+        collision_scores: super::interaction_policy_lowering::collision_scores(record)?,
         authored_runtime: super::object_and_placeable_source_lowering::lower_authored_world_object_runtime(record)?,
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
         audio_stage_volumes: Vec::new(),

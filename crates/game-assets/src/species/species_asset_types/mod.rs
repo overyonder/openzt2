@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use openzt2_game_data::{
-    AssetId,
     species::{LifeStage, Sex, SpeciesDocument},
+    AssetId,
 };
 
 pub mod species_animation_set_loading;
@@ -18,8 +18,14 @@ pub(super) struct SpeciesAnimationSetDependencyPath {
 #[derive(Asset, TypePath, Debug)]
 pub struct SpeciesAsset {
     pub(super) document: SpeciesDocument,
-    pub(super) variant_need_adjustments: Box<[(AssetId, i32)]>,
+    pub(super) binder: SpeciesBinderPolicies,
     pub(super) animation_sets: Box<[SpeciesAnimationSetDependencyPath]>,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct SpeciesBinderPolicies {
+    pub(super) variant_need_adjustments: Box<[(AssetId, i32)]>,
+    pub(super) donation: Option<openzt2_game_data::species::AnimalDonationPolicy>,
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -27,7 +33,7 @@ impl SpeciesAsset {
     pub fn from_test_document(document: SpeciesDocument) -> Self {
         Self {
             document,
-            variant_need_adjustments: Box::default(),
+            binder: Default::default(),
             animation_sets: Box::new([]),
         }
     }
@@ -41,6 +47,7 @@ pub struct SpeciesAssets {
     pub(super) source_ids: std::collections::BTreeSet<bevy::asset::AssetId<SpeciesAsset>>,
     loaded_handles: Vec<Handle<SpeciesAsset>>,
     by_species: BTreeMap<AssetId, SpeciesDocumentRow>,
+    species_rows: Box<[SpeciesDocumentRow]>,
     by_variant: BTreeMap<AssetId, VariantLocation>,
     variants_by_species: BTreeMap<AssetId, Box<[VariantLocation]>>,
     variant_by_model_path: BTreeMap<String, VariantLocation>,
@@ -112,7 +119,6 @@ impl SpeciesAssets {
                     .enumerate()
                     .map(|(index, species)| (species.id, SpeciesDocumentRow { document, index })),
             );
-            let mut models = BTreeMap::new();
             for (index, binding) in species.variants.iter().enumerate() {
                 let location = VariantLocation {
                     row: SpeciesDocumentRow { document, index },
@@ -122,17 +128,26 @@ impl SpeciesAssets {
                         .copied(),
                 };
                 self.by_variant.insert(binding.variant.id, location);
-                models
-                    .entry(normalized_species_model_path(&binding.variant.model))
-                    .or_insert(location);
             }
-            self.variant_by_model_path.extend(models);
         }
+        let mut species_rows = self.by_species.values().copied().collect::<Vec<_>>();
+        species_rows.sort_unstable_by_key(|row| (std::cmp::Reverse(row.document), row.index));
+        self.species_rows = species_rows.into_boxed_slice();
         let mut variants_by_species = BTreeMap::<AssetId, Vec<VariantLocation>>::new();
         let mut species_with_concrete_adults = std::collections::BTreeSet::new();
         for location in self.by_variant.values() {
             let binding = &documents[location.row.document].1.variants[location.row.index];
             let variant = &binding.variant;
+            self.variant_by_model_path
+                .entry(normalized_species_model_path(&variant.model))
+                .and_modify(|winner| {
+                    let order =
+                        |row: SpeciesDocumentRow| (row.document, std::cmp::Reverse(row.index));
+                    if order(location.row) > order(winner.row) {
+                        *winner = *location;
+                    }
+                })
+                .or_insert(*location);
             if variant.probability == 0 {
                 continue;
             }

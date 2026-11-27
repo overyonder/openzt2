@@ -134,7 +134,6 @@ pub(super) fn prepare_transport_track_construction_edit(
                 to_endpoint_index: track_preview.to_endpoint_index,
                 path_points: track_preview.path_points.clone().into_boxed_slice(),
                 tower_height_m: track_preview.tower_height_m,
-                applied_entities: Vec::new(),
                 preview: Some(request.preview),
                 application_in_flight: None,
             });

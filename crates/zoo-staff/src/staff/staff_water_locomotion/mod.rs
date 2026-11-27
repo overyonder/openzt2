@@ -15,12 +15,16 @@ use openzt2_zoo_state::locomotion::locomotion_types::{LocomotionMode, SwimLayer}
 use openzt2_zoo_state::staff::staff_employment_types::{Staff, StaffClimbingTankGate, StaffRole, StaffSubmergedDepth};
 use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
 use openzt2_zoo_state::{
-    aquatic::aquatic_simulation_types::TankGeometry,
-    habitat::habitat_types::HabitatIndex,
+    aquatic::aquatic_simulation_types::{TankGeometry, TankWaterCellsChanged},
+    habitat::{
+        habitat_cell_ownership_changes::HabitatCellOwnershipChanged,
+        habitat_topology_cell_queries::convert_finite_world_position_to_topology_cell,
+    },
+    topology::topology_graph_types::TopologyGrid,
     terrain::{
         terrain_chunk_types::{TerrainChunk, TerrainIndex},
         terrain_navigation_change_types::{TerrainNavigationChanged, TerrainNavigationRestored},
-        terrain_water_presentation_types::{TerrainWaterMembershipIndex, TerrainWaterRegionEdit, TerrainWaterRegionRetired, TerrainWaterRegionSource},
+        terrain_water_presentation_types::{TerrainWaterCellsChanged, TerrainWaterMembershipIndex, TerrainWaterRegionEdit, TerrainWaterRegionRetired, TerrainWaterRegionSource},
     },
 };
 
@@ -30,7 +34,7 @@ pub(super) struct StaffWaterChanges<'w, 's> {
     terrain_refresh: Query<
         'w,
         's,
-        (),
+        (Entity, Option<&'static WorldMember>),
         Or<(
             Changed<TerrainWaterMembershipIndex>,
             Changed<TerrainWaterRegionEdit>,
@@ -39,8 +43,11 @@ pub(super) struct StaffWaterChanges<'w, 's> {
             Changed<TerrainIndex>,
         )>,
     >,
-    tanks: Query<'w, 's, &'static WorldMember, Changed<TankGeometry>>,
-    habitats: Query<'w, 's, (), Changed<HabitatIndex>>,
+    tanks: Query<'w, 's, (Entity, &'static WorldMember), Changed<TankGeometry>>,
+    terrain_water_cells: MessageReader<'w, 's, TerrainWaterCellsChanged>,
+    habitat_cells: MessageReader<'w, 's, HabitatCellOwnershipChanged>,
+    tank_cells: MessageReader<'w, 's, TankWaterCellsChanged>,
+    grids: Query<'w, 's, &'static TopologyGrid>,
     edits: MessageReader<'w, 's, TerrainNavigationChanged>,
     restores: MessageReader<'w, 's, TerrainNavigationRestored>,
     chunks: Query<'w, 's, (&'static TerrainChunk, &'static WorldMember)>,
@@ -80,8 +87,6 @@ pub(super) fn project_staff_water_locomotion(
     let refresh_all = definitions.is_changed()
         | active_definitions.is_changed()
         | changes.terrain_assets.is_changed()
-        | !changes.terrain_refresh.is_empty()
-        | (changes.removed_tanks.read().count() != 0)
         | (changes.removed_water.read().count() != 0)
         | (changes.removed_indexes.read().count() != 0)
         | (changes.removed_source.read().count() != 0)
@@ -89,7 +94,7 @@ pub(super) fn project_staff_water_locomotion(
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    let edited: Vec<(Entity, Rect)> = changes
+    let mut edited: Vec<(Entity, Rect)> = changes
         .edits
         .read()
         .map(|edit| (edit.chunk, edit.min, edit.max))
@@ -106,7 +111,57 @@ pub(super) fn project_staff_water_locomotion(
             Some((member.root, Rect::from_corners(first, last)))
         })
         .collect();
-    let changed_tanks: EntityHashSet = changes.tanks.iter().map(|member| member.root).collect();
+    let mut precise_terrain = EntityHashSet::default();
+    let mut replaced_terrain = EntityHashSet::default();
+    for change in changes.terrain_water_cells.read() {
+        let Some(terrain) = changes.terrain_assets.get(change.terrain) else {
+            continue;
+        };
+        let Some(bounds) = &change.source_bounds else {
+            replaced_terrain.insert(change.root);
+            continue;
+        };
+        precise_terrain.insert(change.root);
+        let cell = terrain.canonical_terrain_grid().units.cell_size_metres;
+        let scale = Vec2::new(cell, -cell);
+        edited.extend(bounds.iter().map(|(first, last)| {
+            let first = first.saturating_sub(UVec2::ONE).as_vec2() * scale;
+            let last = (last.as_vec2() + Vec2::ONE) * scale;
+            (change.root, Rect::from_corners(first, last))
+        }));
+    }
+    for (entity, member) in &changes.terrain_refresh {
+        let root = member.map_or(entity, |member| member.root);
+        if !precise_terrain.contains(&root) {
+            replaced_terrain.insert(root);
+        }
+    }
+    let mut cell_changes =
+        bevy::ecs::entity::EntityHashMap::<bevy::platform::collections::HashSet<IVec2>>::default();
+    for change in changes.habitat_cells.read() {
+        cell_changes
+            .entry(change.root)
+            .or_default()
+            .extend(change.cells.iter().copied());
+    }
+    let mut precise_tanks = EntityHashSet::default();
+    for change in changes.tank_cells.read() {
+        precise_tanks.insert(change.tank);
+        cell_changes
+            .entry(change.root)
+            .or_default()
+            .extend(change.cells.iter().copied());
+    }
+    let refresh_all = refresh_all
+        | changes
+            .removed_tanks
+            .read()
+            .any(|entity| !precise_tanks.contains(&entity));
+    let changed_tanks: EntityHashSet = changes
+        .tanks
+        .iter()
+        .filter_map(|(entity, member)| (!precise_tanks.contains(&entity)).then_some(member.root))
+        .collect();
     let resumed: EntityHashSet = changes
         .unmounted
         .read()
@@ -116,13 +171,26 @@ pub(super) fn project_staff_water_locomotion(
     for (employee, role, member, transform, mode, swim_layer, held_depth) in &mut staff {
         let position = transform.translation.xz();
         if !refresh_all
+            && !replaced_terrain.contains(&member.root)
             && !role.is_changed()
             && !member.is_changed()
             && !transform.is_changed()
             && mode.as_ref().is_some_and(|mode| !mode.is_changed())
             && !held_depth.as_ref().is_some_and(DetectChanges::is_changed)
             && !resumed.contains(&employee)
-            && !changes.habitats.contains(member.root)
+            && !cell_changes.get(&member.root).is_some_and(|changed| {
+                changes
+                    .grids
+                    .get(member.root)
+                    .ok()
+                    .and_then(|grid| {
+                        convert_finite_world_position_to_topology_cell(
+                            position - grid.origin,
+                            grid.spacing_m,
+                        )
+                    })
+                    .is_some_and(|coordinate| changed.contains(&coordinate))
+            })
             && !changed_tanks.contains(&member.root)
             && !edited
                 .iter()

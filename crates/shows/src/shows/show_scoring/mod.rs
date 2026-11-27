@@ -163,7 +163,7 @@ pub(super) fn apply_authored_trick_outcome_scores(
         }
         trick.scored = true;
         samples.actual.insert(result.slot, result.score);
-        show.completed_tricks = u32::try_from(samples.actual.len()).unwrap_or(u32::MAX);
+        show.completed_tricks = show.completed_tricks.saturating_add(1);
         show.failed_tricks = show.failed_tricks.saturating_add(u32::from(result.failed));
         (show.trick_score, show.stars) = samples.rating(policy, rewards.score_fraction);
     }

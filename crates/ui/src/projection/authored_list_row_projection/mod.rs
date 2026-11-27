@@ -218,7 +218,7 @@ pub(crate) fn project_authored_award_group_rows(
                     .is_none_or(|persistent| group.persistent == persistent)
         }) {
             let path = group.document.replace('\\', "/").to_ascii_lowercase();
-            let handle = server.load::<UiDocumentAsset>(path);
+            let handle = server.load::<UiDocumentAsset>(openzt2_game_assets::ui_document::ui_document_role_asset_path_selection::ui_document_loader_path(&path));
             if let Some(index) = projected.iter().position(|(_, existing)| {
                 existing.program == program && existing.document == handle
             }) {
@@ -340,7 +340,7 @@ pub(crate) fn project_authored_award_milestone_presentation(
         let Some(progress) = group.milestones.get(&milestone.index) else {
             continue;
         };
-        if let Some(mut bar) = milestone.bar.and_then(|bar| nodes.get_mut(bar).ok()) {
+        if let Some(bar) = milestone.bar.and_then(|bar| nodes.get_mut(bar).ok()) {
             bar.map_unchanged(|bar| &mut bar.width)
                 .set_if_neq(percent(progress.progress.clamp(0.0, 1.0) * 100.0));
         }

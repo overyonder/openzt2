@@ -11,20 +11,22 @@ pub(super) fn orient_prefab_model_billboards_toward_active_camera_on_matching_re
     cameras: Res<ActiveModelViewCameras>,
     camera_layers: Query<&PrefabCameraRenderLayers>,
     parents: Query<&ChildOf>,
-    changed: Query<
-        (),
-        Or<(
-            Changed<Transform>,
-            Changed<ChildOf>,
-            Changed<PrefabCameraRenderLayers>,
-            Changed<PrefabAuthoredBillboardOrientationMode>,
-        )>,
-    >,
     mut removed_parents: RemovedComponents<ChildOf>,
     mut removed_layers: RemovedComponents<PrefabCameraRenderLayers>,
     mut transforms: ParamSet<(
         TransformHelper,
-        Query<Entity, With<PrefabAuthoredBillboardOrientationMode>>,
+        (
+            Query<Entity, With<PrefabAuthoredBillboardOrientationMode>>,
+            Query<
+                (),
+                Or<(
+                    Changed<Transform>,
+                    Changed<ChildOf>,
+                    Changed<PrefabCameraRenderLayers>,
+                    Changed<PrefabAuthoredBillboardOrientationMode>,
+                )>,
+            >,
+        ),
         Query<(
             Entity,
             &PrefabAuthoredBillboardOrientationMode,
@@ -37,7 +39,7 @@ pub(super) fn orient_prefab_model_billboards_toward_active_camera_on_matching_re
     separated.extend(removed_parents.read().chain(removed_layers.read()));
     let mut pending = EntityHashMap::default();
     {
-        let billboards = transforms.p1();
+        let (billboards, changed) = transforms.p1();
         for entity in &billboards {
             let mut dirty =
                 cameras.is_changed() || changed.contains(entity) || separated.contains(&entity);

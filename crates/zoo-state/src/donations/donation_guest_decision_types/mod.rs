@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 
 use crate::economy::money_types::Money;
-use crate::guests::guest_simulation_types::Viewing;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DonationCandidate {
@@ -19,13 +18,16 @@ pub struct DonationProgress {
     pub remaining_ticks: u32,
 }
 
-/// One guest's latest donation observation from viewing a subject.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DonationObservation {
-    pub viewing: Viewing,
-    pub amount: Money,
-    pub acceptor_radius_cm: u32,
-}
-
 #[derive(Component, Clone, Default)]
 pub struct GuestDonationMeters(pub std::collections::HashMap<openzt2_game_data::AssetId, f32>);
+
+#[derive(Component, Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+pub struct SpeciesDonationCandidateLifetimes(
+    pub std::collections::BTreeMap<openzt2_game_data::AssetId, SpeciesDonationCandidate>,
+);
+
+#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]
+pub struct SpeciesDonationCandidate {
+    pub binder: openzt2_game_data::AssetId,
+    pub remaining: f32,
+}

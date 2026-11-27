@@ -1,8 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
-use openzt2_game_data::behavior::action::animation::{
-    BehaviorAnimationPlaybackSpeed,
-};
+use openzt2_game_data::behavior::action::animation::BehaviorAnimationPlaybackSpeed;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::{
     AnimationClipPlaybackRequestStarted, AnimationReturnRouteOutcome, AnimationReturnRouteRequest,
     CancelAnimationClipPlaybackRequest,

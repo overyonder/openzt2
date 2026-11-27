@@ -48,9 +48,10 @@ pub(super) fn cancel_all_active_object_relocations(
     mut commands: Commands,
     relocating: Query<Entity, With<RelocatingPlacedObject>>,
 ) {
-    if cancellations.read().next().is_none() {
+    if cancellations.is_empty() {
         return;
     }
+    cancellations.clear();
     for entity in &relocating {
         commands
             .entity(entity)

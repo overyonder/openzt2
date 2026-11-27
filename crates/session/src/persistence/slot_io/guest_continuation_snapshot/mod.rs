@@ -13,7 +13,9 @@ use openzt2_world_state::{
     },
 };
 use openzt2_zoo_state::{
-    behavior_task_execution_types::running_actions::GuestTourDepartureGate,
+    donations::donation_guest_decision_types::{GuestDonationMeters, SpeciesDonationCandidateLifetimes},
+    behavior_task_execution_types::running_actions::{GuestTourDepartureGate, GuestVisitedTourStations},
+    shows::running_show_types::GuestShowNeed,
     economy::{facility_economy_types::Wallet, money_types::Money},
     guests::guest_simulation_types::*,
     locomotion::locomotion_types::{
@@ -49,6 +51,73 @@ pub(super) struct GuestContinuation {
     visit_destination: Option<(u64, GuestVisitPurpose)>,
     memories: Vec<SavedGuestMemory>,
     memory_cursor: u16,
+    #[serde(skip)]
+    activity: GuestActivityContinuation,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub(super) struct GuestActivityContinuation {
+    viewed_species: Vec<(AssetId, u32)>,
+    visited_stations: Vec<u64>,
+    show_need: Option<[f32; 4]>,
+    show_triggered: bool,
+    #[serde(skip)]
+    resume: GuestResumeContinuation,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub(super) struct GuestResumeContinuation {
+    entrance_approach: bool,
+    donation_candidates: SpeciesDonationCandidateLifetimes,
+    donation_meters: std::collections::BTreeMap<AssetId, f32>,
+}
+
+impl GuestResumeContinuation {
+    fn is_empty(&self) -> bool {
+        !self.entrance_approach
+            && self.donation_candidates.0.is_empty()
+            && self.donation_meters.is_empty()
+    }
+
+    fn valid(&self) -> bool {
+        self.donation_candidates
+            .0
+            .iter()
+            .all(|(species, candidate)| {
+                *species != AssetId::default()
+                    && candidate.binder != AssetId::default()
+                    && candidate.remaining.is_finite()
+                    && candidate.remaining >= 0.0
+            })
+            && self
+                .donation_meters
+                .iter()
+                .all(|(species, score)| *species != AssetId::default() && score.is_finite())
+    }
+}
+
+impl GuestActivityContinuation {
+    fn valid(&self, next_identity: u64) -> bool {
+        self.viewed_species
+            .iter()
+            .all(|(id, _)| *id != AssetId::default())
+            && self
+                .viewed_species
+                .windows(2)
+                .all(|pair| pair[0].0 < pair[1].0)
+            && self
+                .visited_stations
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+            && self
+                .visited_stations
+                .iter()
+                .all(|id| *id != 0 && *id < next_identity)
+            && (!self.show_triggered || self.show_need.is_some())
+            && self
+                .show_need
+                .is_none_or(|values| values.into_iter().all(f32::is_finite))
+    }
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -65,8 +134,27 @@ impl GuestContinuation {
             .map_or(0, |destination| destination.request_id)
     }
 
-    pub(super) fn is_valid(&self) -> bool {
-        self.id != 0
+    pub(super) fn saved_activity(&self) -> &GuestActivityContinuation {
+        &self.activity
+    }
+
+    pub(super) fn restore_activity(&mut self, activity: GuestActivityContinuation) {
+        self.activity = activity;
+    }
+
+    pub(super) fn saved_resume(&self) -> Option<(u64, &GuestResumeContinuation)> {
+        (!self.activity.resume.is_empty()).then_some((self.id, &self.activity.resume))
+    }
+
+    pub(super) fn restore_resume(&mut self, resume: GuestResumeContinuation) {
+        self.activity.resume = resume;
+    }
+
+    pub(super) fn is_valid(&self, next_identity: u64) -> bool {
+        self.activity.valid(next_identity)
+            && self.activity.resume.valid()
+            && (!self.activity.resume.entrance_approach || self.destination.is_some())
+            && self.id != 0
             && self.archetype != AssetId::default()
             && self.random[1] & 1 != 0
             && self.phase <= 2
@@ -140,7 +228,23 @@ fn capture_guest(
     }
     let satisfaction = read::<GuestSatisfaction>(guest)?;
     let destination = guest.get::<Destination>().copied();
+    let entrance_approach = guest.contains::<GuestEntranceApproach>();
+    if entrance_approach && destination.is_none() {
+        return Err(Failure::SnapshotTransactionInFlight);
+    }
     let memories = read::<GuestMemories>(guest)?;
+    let mut viewed_species = guest
+        .get::<GuestSpeciesViewCounts>()
+        .map_or_else(Vec::new, |counts| counts.0.clone());
+    viewed_species.sort_unstable_by_key(|(species, _)| *species);
+    let mut visited_stations = guest
+        .get::<GuestVisitedTourStations>()
+        .into_iter()
+        .flat_map(|stations| stations.0.iter())
+        .filter_map(|station| identities.get(*station).ok().map(|id| id.0))
+        .collect::<Vec<_>>();
+    visited_stations.sort_unstable();
+    let show_need = guest.get::<GuestShowNeed>();
     Ok(GuestContinuation {
         id: read::<PersistentId>(guest)?.0,
         archetype: read::<GuestArchetype>(guest)?.0,
@@ -197,6 +301,24 @@ fn capture_guest(
             })
             .collect(),
         memory_cursor: memories.next,
+        activity: GuestActivityContinuation {
+            viewed_species,
+            visited_stations,
+            show_need: show_need.map(|need| [need.value, 0.0, need.cessation, need.trigger]),
+            show_triggered: show_need.is_some_and(|need| need.triggered),
+            resume: GuestResumeContinuation {
+                entrance_approach,
+                donation_candidates: guest
+                    .get::<SpeciesDonationCandidateLifetimes>()
+                    .cloned()
+                    .unwrap_or_default(),
+                donation_meters: guest
+                    .get::<GuestDonationMeters>()
+                    .into_iter()
+                    .flat_map(|meters| meters.0.iter().map(|(&species, &score)| (species, score)))
+                    .collect(),
+            },
+        },
         entrance: guest
             .get::<EntranceNavigationConnection>()
             .and_then(|entrance| {
@@ -260,6 +382,16 @@ pub(super) fn restore_guests(
             Guest,
             GuestArchetype(saved.archetype),
             GuestFavouriteAnimal(saved.favourite),
+            saved.activity.resume.donation_candidates.clone(),
+            GuestDonationMeters(
+                saved
+                    .activity
+                    .resume
+                    .donation_meters
+                    .iter()
+                    .map(|(&species, &score)| (species, score))
+                    .collect(),
+            ),
             WorldMember { root },
             id,
             DefinitionId(definition.object),
@@ -311,6 +443,19 @@ pub(super) fn restore_guests(
             GuestDeparturePoints(saved.departure_points),
             GuestMemories::new(definition.memory.capacity),
         ));
+        if !saved.activity.viewed_species.is_empty() {
+            guest.insert(GuestSpeciesViewCounts(
+                saved.activity.viewed_species.clone(),
+            ));
+        }
+        if let Some([value, _, cessation, trigger]) = saved.activity.show_need {
+            guest.insert(GuestShowNeed {
+                value,
+                cessation,
+                trigger,
+                triggered: saved.activity.show_triggered,
+            });
+        }
         if let Some(name) = &saved.name {
             guest.insert(Name::new(name.clone()));
         }
@@ -348,6 +493,11 @@ pub(super) fn restore_guests(
                     inbound,
                 });
             }
+            if saved.activity.resume.entrance_approach
+                || saved.entrance.is_some_and(|(_, inbound)| inbound)
+            {
+                guest.insert(GuestEntranceApproach);
+            }
         }
     }
     Ok(())
@@ -361,6 +511,7 @@ pub(super) struct GuestContinuationApplication<'w, 's> {
         (
             &'static mut GuestMemories,
             Option<&'static mut GuestDestination>,
+            Option<&'static mut GuestVisitedTourStations>,
         ),
         With<Guest>,
     >,
@@ -377,7 +528,7 @@ impl GuestContinuationApplication<'_, '_> {
         let resolve = |id| identities.get(root, PersistentId(id));
         for record in records {
             let guest = resolve(record.id).ok_or(Failure::BrokenPersistentEntityReference)?;
-            let (mut memories, destination) = self
+            let (mut memories, destination, visited) = self
                 .guests
                 .get_mut(guest)
                 .map_err(|_| Failure::BrokenPersistentEntityReference)?;
@@ -399,6 +550,22 @@ impl GuestContinuationApplication<'_, '_> {
             memories.next = record
                 .memory_cursor
                 .min(memories.active_capacity.saturating_sub(1));
+            let stations = (!record.activity.visited_stations.is_empty()).then(|| {
+                GuestVisitedTourStations(
+                    record
+                        .activity
+                        .visited_stations
+                        .iter()
+                        .filter_map(|&id| resolve(id))
+                        .collect(),
+                )
+            });
+            super::restored_component_values::restore_optional_component(
+                &mut commands.entity(guest),
+                visited,
+                stations,
+                true,
+            );
             let next = record.visit_destination.and_then(|(id, purpose)| {
                 Some(GuestDestination {
                     entity: resolve(id)?,

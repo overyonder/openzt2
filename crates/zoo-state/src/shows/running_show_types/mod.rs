@@ -106,14 +106,31 @@ pub struct WorldTrickPopularity(pub HashMap<AssetId, f32>);
 pub struct GuestShowNeed {
     pub value: f32,
     pub triggered: bool,
-    pub minimum: f32,
     pub cessation: f32,
     pub trigger: f32,
 }
 
 impl GuestShowNeed {
+    pub fn from_authored(
+        initial: f32,
+        inclusive_range: Option<u32>,
+        trigger: f32,
+        cessation: f32,
+        draw: impl FnOnce() -> u16,
+    ) -> Self {
+        let offset =
+            inclusive_range.map_or(0, |extent| u32::from(draw()) % extent.saturating_add(1));
+        let value = (initial + offset as f32).clamp(0.0, 100.0);
+        Self {
+            value,
+            triggered: value >= trigger,
+            cessation,
+            trigger,
+        }
+    }
+
     pub fn adjust(&mut self, delta: f32) {
-        self.value = (self.value + delta).max(self.minimum);
+        self.value = (self.value + delta).clamp(0.0, 100.0);
         if self.value >= self.trigger {
             self.triggered = true;
         } else if self.value <= self.cessation {
@@ -123,5 +140,25 @@ impl GuestShowNeed {
 
     pub fn source_need(&self) -> (i32, bool) {
         ((self.value * 65_536.0).round() as i32, self.triggered)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GuestShowNeed;
+
+    #[test]
+    fn authored_show_need_draws_whole_steps_and_clamps_adjustments() {
+        let mut need = GuestShowNeed::from_authored(50.0, Some(25), 0.0, -100.0, || 25);
+        assert_eq!(need.value, 75.0);
+        need.adjust(50.0);
+        assert_eq!(need.value, 100.0);
+        need.adjust(-150.0);
+        assert_eq!(need.value, 0.0);
+
+        let fixed = GuestShowNeed::from_authored(11.25, None, 0.0, -100.0, || {
+            panic!("fixed value requested a draw")
+        });
+        assert_eq!(fixed.value, 11.25);
     }
 }

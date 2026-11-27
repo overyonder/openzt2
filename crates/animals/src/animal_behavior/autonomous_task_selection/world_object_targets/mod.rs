@@ -23,7 +23,7 @@ use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
 use openzt2_zoo_state::feeding::container_quantity::DrinkContainer;
 use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
 use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
-use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
+use openzt2_zoo_state::habitat::habitat_types::{HabitatCellOf, HabitatIndex};
 use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
 use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
@@ -34,6 +34,7 @@ pub(crate) struct WorldObjectTargetSources<'w, 's> {
     pub(super) objects:
         Query<'w, 's, WorldObjectTargetFacts, (Without<Animal>, UncratedWorldEntity)>,
     roots: Query<'w, 's, (&'static HabitatIndex, &'static TopologyGrid)>,
+    cell_owners: Query<'w, 's, &'static HabitatCellOf>,
     pub(super) terrain_surfaces: DrySurfaceEligibility<'w, 's>,
     /// Fences an animal bashes, jumps, climbs or tunnels under.
     pub(super) fences: Query<
@@ -78,13 +79,24 @@ impl WorldObjectTargetSources<'_, '_> {
         let Ok((index, grid)) = self.roots.get(root) else {
             return false;
         };
-        super::super::escaped_animal_reaches(index, *grid, &self.habitat_summaries, position.xz())
+        super::super::escaped_animal_reaches(
+            index,
+            &self.cell_owners,
+            *grid,
+            &self.habitat_summaries,
+            position.xz(),
+        )
     }
 
     /// The fenced habitat containing a world position, if any.
     pub(super) fn habitat_at(&self, root: Entity, position: Vec3) -> Option<Entity> {
         let (index, grid) = self.roots.get(root).ok()?;
-        locate_habitat_at_world_position(index, Vec2::new(position.x, position.z), *grid)
+        locate_habitat_at_world_position(
+            index,
+            &self.cell_owners,
+            Vec2::new(position.x, position.z),
+            *grid,
+        )
     }
 }
 

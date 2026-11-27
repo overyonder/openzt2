@@ -3,9 +3,9 @@
 use crate::animal_welfare::need_latch_types::AnimalNeedLatches;
 use bevy::{ecs::query::QueryData, prelude::*};
 use openzt2_game_data::{
-    AssetId,
     behavior::eligibility::*,
     species::{LifeStage, Sex},
+    AssetId,
 };
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::animal_lineage::AnimalMate;
@@ -24,14 +24,14 @@ use openzt2_zoo_state::animal_welfare::types::ExerciseNeed;
 use openzt2_zoo_state::animal_welfare::types::HealthNeed;
 use openzt2_zoo_state::animal_welfare::types::Hunger;
 use openzt2_zoo_state::animal_welfare::types::HygieneNeed;
-use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
 use openzt2_zoo_state::animal_welfare::types::PrivacyNeed;
-use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
 use openzt2_zoo_state::animal_welfare::types::RestNeed;
 use openzt2_zoo_state::animal_welfare::types::SocialNeed;
 use openzt2_zoo_state::animal_welfare::types::StimulationNeed;
 use openzt2_zoo_state::animal_welfare::types::Thirst;
-use openzt2_zoo_state::animal_welfare::types::{REPRODUCTION_TRIGGER_INDEX, ReproductionNeed};
+use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
+use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
+use openzt2_zoo_state::animal_welfare::types::{ReproductionNeed, REPRODUCTION_TRIGGER_INDEX};
 use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
@@ -135,6 +135,7 @@ pub(crate) struct AnimalCandidateFacts {
     need_points: Option<&'static openzt2_zoo_state::animal_welfare::types::NeedPoints>,
     training: Option<&'static openzt2_zoo_state::shows::performer_training::PerformerTraining>,
     rehearsing: Has<openzt2_zoo_state::shows::running_show_types::AnimalPerformingShowTrick>,
+    floating_fallback: Has<openzt2_zoo_state::locomotion::locomotion_types::AnimalFloatingFallback>,
     authored_values: Option<&'static AuthoredFloatAttributes>,
 }
 
@@ -187,16 +188,11 @@ impl AnimalCandidateFactsItem<'_, '_> {
             BehaviorEntityStateEligibilityFact::Frozen => self.frozen,
             BehaviorEntityStateEligibilityFact::Dead => self.dead,
             BehaviorEntityStateEligibilityFact::Moving => self.velocity?.0.length_squared() > 0.0,
-            BehaviorEntityStateEligibilityFact::Floating => {
-                self.authored_values
-                    .and_then(|values| values.get(AssetId::from_key("isfloating")))
-                    .is_some_and(|value| value != 0.0)
-            }
-            BehaviorEntityStateEligibilityFact::InCloningCenter => {
-                self.authored_values
-                    .and_then(|values| values.get(AssetId::from_key("b_incloningcenter")))
-                    .is_some_and(|value| value != 0.0)
-            }
+            BehaviorEntityStateEligibilityFact::Floating => self.floating_fallback,
+            BehaviorEntityStateEligibilityFact::InCloningCenter => self
+                .authored_values
+                .and_then(|values| values.get(AssetId::from_key("b_incloningcenter")))
+                .is_some_and(|value| value != 0.0),
             BehaviorEntityStateEligibilityFact::Swimming => *self.mode? == LocomotionMode::Swim,
             BehaviorEntityStateEligibilityFact::InHabitat => self.habitat.is_some(),
             BehaviorEntityStateEligibilityFact::HasMate => self.mate.is_some(),
@@ -344,7 +340,11 @@ impl AnimalCandidateFactsItem<'_, '_> {
                     };
                     authored_types.contains(&AssetId::from_key(key))
                 });
-                if value { Q16_ONE } else { 0 }
+                if value {
+                    Q16_ONE
+                } else {
+                    0
+                }
             }
             BehaviorEligibilityFactInput::Taxonomy(taxonomy) => {
                 let key = match taxonomy {

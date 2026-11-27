@@ -1,6 +1,8 @@
 use bevy::prelude::*;
+use openzt2_game_data::animation::animation_clip_metadata::AuthoredAnimationClipMetadata;
 use openzt2_game_data::animation::animation_set::{
-    AuthoredAnimationGraphEdge, AuthoredAnimationGraphNode,
+    AuthoredAnimationGraphEdge, AuthoredAnimationGraphNode, AuthoredKfmTransition,
+    KfmTransitionKind,
 };
 
 use crate::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
@@ -8,10 +10,10 @@ use crate::animation_playback::animation_playback_controller_types::AnimationPla
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 
 use crate::animation_graph::animation_graph_playback_message_types::AnimationGraphNodePlaybackRequestRejectionReason;
-use crate::animation_graph::animation_graph_playback_state_types::AnimationGraphBlend;
 use crate::animation_graph::animation_graph_playback_state_types::AnimationGraphTransition;
 use crate::animation_graph::animation_graph_playback_state_types::{
-    AnimationGraphPlaybackState, AnimationGraphRoute, AnimationGraphRouteStep,
+    AnimationGraphChainCursor, AnimationGraphPlaybackState, AnimationGraphRoute,
+    AnimationGraphRouteStep,
 };
 use crate::animation_graph::authored_animation_graph_edge_blend_duration_interpretation::interpret_authored_animation_graph_edge_blend_duration_milliseconds;
 
@@ -97,11 +99,7 @@ pub fn begin_resolved_animation_graph_route(
     for &step in &route.steps {
         let (edge, target) =
             resolve_route_step(asset, source, step).ok_or(MissingAuthoredGraphEdge)?;
-        if (!edge.transition_animation_clip_asset_keys.is_empty()
-            && !edge
-                .transition_animation_clip_asset_keys
-                .iter()
-                .any(|clip| clip_ready(clip)))
+        if !transition_clips_ready(edge, clip_ready)
             || !target
                 .animation_clip_asset_keys
                 .iter()
@@ -126,6 +124,54 @@ pub fn begin_resolved_animation_graph_route(
     state.remaining_transition_steps = route.steps;
     state.route_owner = None;
     continue_animation_graph_transition_route(asset, clip_ready, controller, state)
+}
+
+pub fn transition_clips_ready(
+    edge: &AuthoredAnimationGraphEdge,
+    ready: impl Fn(&str) -> bool,
+) -> bool {
+    let mut clips = edge.transition_animation_clip_asset_keys.iter();
+    if is_kfm_chain(edge) {
+        return clips.all(|clip| ready(clip));
+    }
+    clips.len() == 0 || clips.any(|clip| ready(clip))
+}
+
+fn is_kfm_chain(edge: &AuthoredAnimationGraphEdge) -> bool {
+    edge.kfm_transition
+        .as_ref()
+        .is_some_and(|kfm| kfm.kind == KfmTransitionKind::Chain)
+}
+
+pub fn kfm_transition_marker_times<'a>(
+    transition: &'a AuthoredKfmTransition,
+    source: Option<&'a AuthoredAnimationClipMetadata>,
+    target: Option<&'a AuthoredAnimationClipMetadata>,
+) -> impl Iterator<Item = [Option<u32>; 2]> + 'a {
+    fn marker_time(metadata: Option<&AuthoredAnimationClipMetadata>, name: &str) -> Option<u32> {
+        metadata?
+            .animation_markers
+            .iter()
+            .find(|marker| marker.marker_name.eq_ignore_ascii_case(name))
+            .map(|marker| marker.event_time_milliseconds)
+    }
+    transition
+        .text_key_pairs
+        .iter()
+        .filter_map(move |[from, to]| {
+            let from_time = from
+                .as_deref()
+                .map(|key| marker_time(source, key))
+                .unwrap_or(Some(0))?;
+            let to_time = to
+                .as_deref()
+                .map(|key| marker_time(target, key))
+                .unwrap_or(Some(0))?;
+            Some([
+                from.as_ref().map(|_| from_time),
+                to.as_ref().map(|_| to_time),
+            ])
+        })
 }
 
 fn resolve_route_step(
@@ -178,11 +224,24 @@ fn begin_authored_animation_graph_edge_transition(
     )
     .ok_or(AnimationGraphNodePlaybackRequestRejectionReason::MissingAuthoredGraphEdge)?;
     let target_animation_graph_node_index = step.target_node;
-    let blend_duration_milliseconds = blend_duration_override_milliseconds.unwrap_or(u32::from(
-        interpret_authored_animation_graph_edge_blend_duration_milliseconds(
-            &authored_animation_graph_edge.authored_animation_attributes,
-        ),
-    ));
+    let blend_duration_milliseconds = blend_duration_override_milliseconds.unwrap_or_else(|| {
+        authored_animation_graph_edge
+            .kfm_transition
+            .as_ref()
+            .map_or_else(
+                || {
+                    u32::from(
+                        interpret_authored_animation_graph_edge_blend_duration_milliseconds(
+                            &authored_animation_graph_edge.authored_animation_attributes,
+                        ),
+                    )
+                },
+                |transition| {
+                    u32::try_from(transition.duration.as_nanos().div_ceil(1_000_000))
+                        .unwrap_or(u32::MAX)
+                },
+            )
+    });
     if let Some(authored_transition_animation_clip) = authored_animation_graph_edge
         .transition_animation_clip_asset_keys
         .iter()
@@ -201,11 +260,20 @@ fn begin_authored_animation_graph_edge_transition(
             .clone_from(authored_transition_animation_clip);
         animation_playback_controller.preserve_seek_on_restart = false;
 
-        animation_playback_controller.playback_repetition_policy =
-            AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy;
+        let chain_cursor =
+            is_kfm_chain(authored_animation_graph_edge).then_some(AnimationGraphChainCursor {
+                edge_index: step.edge_index,
+                next_clip: 1,
+            });
+        animation_playback_controller.playback_repetition_policy = if chain_cursor.is_some() {
+            AnimationPlaybackRepetitionPolicy::PlayOnce
+        } else {
+            AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
+        };
         animation_graph_playback_state.active_animation_graph_transition =
             Some(AnimationGraphTransition {
                 target_animation_graph_node_index,
+                chain_cursor,
             });
         return Ok(());
     }
@@ -217,6 +285,33 @@ fn begin_authored_animation_graph_edge_transition(
         animation_graph_playback_state,
         blend_duration_milliseconds,
     )
+}
+
+/// Starts the next chain clip at a completion boundary and preserves the route.
+pub fn advance_animation_graph_chain(
+    asset: &AnimationSetAsset,
+    controller: &mut AnimationPlaybackController,
+    transition: &mut AnimationGraphTransition,
+) -> bool {
+    let Some(cursor) = transition.chain_cursor.as_mut() else {
+        return false;
+    };
+    let Some(key) = asset
+        .animation_graph_edges
+        .get(cursor.edge_index)
+        .and_then(|edge| {
+            edge.transition_animation_clip_asset_keys
+                .get(cursor.next_clip)
+        })
+    else {
+        return false;
+    };
+    cursor.next_clip += 1;
+    controller.animation_clip_asset_key.clone_from(key);
+    controller.playback_generation = controller.playback_generation.wrapping_add(1);
+    controller.preserve_seek_on_restart = false;
+    controller.playback_repetition_policy = AnimationPlaybackRepetitionPolicy::PlayOnce;
+    true
 }
 
 pub fn enter_animation_graph_node_playback(
@@ -260,8 +355,8 @@ fn begin_animation_graph_blend_timer(
     animation_graph_playback_state: &mut AnimationGraphPlaybackState,
     blend_duration_milliseconds: u32,
 ) {
-    animation_graph_playback_state.active_animation_graph_blend =
-        AnimationGraphBlend::from_duration_milliseconds(blend_duration_milliseconds);
+    animation_graph_playback_state.requested_blend_duration_milliseconds =
+        (blend_duration_milliseconds != 0).then_some(blend_duration_milliseconds);
 }
 
 pub fn select_preferred_animation_clip_from_graph_node(

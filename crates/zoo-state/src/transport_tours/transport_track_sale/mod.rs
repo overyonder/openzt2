@@ -1,13 +1,9 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
-
-use crate::economy::money_types::Money;
-use crate::economy::object_sale_refund::calculate_authored_object_sale_refund;
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
-use openzt2_game_data::world_definitions::world_objects::WorldObjectPropertyFlags;
+use openzt2_world_state::world_spawn::{
+    persistent_id_index::PersistentIdIndex, persistent_id_types::PersistentId,
+    world_membership_types::WorldMember,
+};
 
 use crate::transport_tours::transport_circuit_types::CircuitMember;
 use crate::transport_tours::transport_circuit_types::TransportCircuit;
@@ -211,7 +207,6 @@ impl TransportTrackSaleQueries<'_, '_> {
             to_endpoint_index: route.to_endpoint_index,
             path_points: route.path_points.clone(),
             tower_height_m: self.tower_heights.get(sale.to).ok().map(|height| height.0),
-            applied_entities: sale.pieces.into_iter().map(|(entity, _)| entity).collect(),
             preview: None,
             application_in_flight: None,
         })
@@ -224,27 +219,6 @@ impl TransportTrackSaleQueries<'_, '_> {
         let (_, _, piece, _, world) = self.pieces.get(target).ok()?;
         let (_, route, _, _) = self.routes.get(piece.route_segment).ok()?;
         (route.path_points.len() > 2).then_some((usize::from(piece.piece_index), *world))
-    }
-
-    pub fn quote(&self, target: Entity, definitions: WorldDefinitionsView<'_>) -> Option<Money> {
-        let sale = self.terminal_route_sale(target)?;
-        let removed_pieces = if self.single_piece(target).is_some() {
-            1
-        } else {
-            sale.pieces.len()
-        };
-        let track = definitions.find_track(sale.route.definition)?;
-        let object = definitions.find_object(track.object)?;
-        if !object
-            .properties
-            .contains_all(WorldObjectPropertyFlags::DELETABLE)
-        {
-            return None;
-        }
-        let refund = calculate_authored_object_sale_refund(object)?;
-        Some(Money(
-            refund.0.checked_mul(i64::try_from(removed_pieces).ok()?)?,
-        ))
     }
 
     pub fn removal_still_matches(&self, edit: &PreparedTransportTrackConstructionEdit) -> bool {

@@ -3,7 +3,7 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::ui_document::action::UiTrigger;
-use openzt2_game_data::{AssetId, species::Sex};
+use openzt2_game_data::{species::Sex, AssetId};
 use openzt2_world_state::game_session_types::WorldSessionMode;
 use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
 

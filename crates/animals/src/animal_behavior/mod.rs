@@ -16,12 +16,13 @@ mod docking_animation_pose;
 /// fence.
 pub(super) fn escaped_animal_reaches(
     habitats: &openzt2_zoo_state::habitat::habitat_types::HabitatIndex,
+    cell_owners: &Query<&openzt2_zoo_state::habitat::habitat_types::HabitatCellOf>,
     grid: openzt2_zoo_state::topology::topology_graph_types::TopologyGrid,
     summaries: &Query<&openzt2_zoo_state::habitat::habitat_types::HabitatSummary>,
     point: Vec2,
 ) -> bool {
     openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position(
-        habitats, point, grid,
+        habitats, cell_owners, point, grid,
     )
     .is_none_or(|habitat| {
         summaries
@@ -61,7 +62,7 @@ pub use behavior_script_execution::BreedingCenterEndangeredBirths;
 mod behavior_set_start_request_handling;
 use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types;
 mod behavior_show_event_execution;
-mod behavior_spatial_candidates;
+use openzt2_zoo_state::animal_behavior::behavior_spatial_candidates;
 mod behavior_subject_type_resolution;
 pub(crate) mod behavior_synchronized_set_execution;
 pub(crate) mod behavior_target_placement_execution;
@@ -84,12 +85,12 @@ use behavior_set_start_request_types::StartBehaviorSet;
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    activate_behavior_failure, activate_due_behavior_instructions, BehaviorStepFixedSet,
+};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorFeedbackDispatched;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFailed;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished;
-use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    BehaviorStepFixedSet, activate_behavior_failure, activate_due_behavior_instructions,
-};
 
 pub struct AnimalBehaviorExecutionPlugin;
 
@@ -137,7 +138,6 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
             .add_observer(behavior_fact_modification::apply_supported_current_behavior_fact_modifications)
             .add_observer(behavior_trick_learning_execution::apply_current_authored_trick_learning)
             .add_observer(behavior_show_event_execution::register_current_authored_animal_show_events)
-            .add_observer(behavior_script_execution::execute_authored_behavior_script_actions)
             .add_observer(behavior_target_test_execution::find_target_and_enter_success_or_failure_behavior_set)
             .add_observer(behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
             .add_systems(FixedUpdate, activate_due_behavior_instructions.in_set(BehaviorStepFixedSet::Think));
@@ -155,7 +155,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         behavior_hide_execution::register_hide_execution(application);
         behavior_synchronized_set_execution::register_synchronized_behavior_execution(application);
         behavior_spatial_candidates::register_behavior_spatial_candidates(application);
-        behavior_named_nodes::register_behavior_named_nodes(application);
+        behavior_script_execution::register_script_actions(application);
         behavior_script_execution::script_particles::register(application);
         application.add_observer(behavior_clothing_delivery::cancel_clothing_delivery);
         behavior_wander_execution::register_wander_execution(application);
@@ -349,7 +349,7 @@ fn fail_invalid_authored_instruction(
 mod escaped_reach_tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
-    use openzt2_zoo_state::habitat::habitat_types::{HabitatIndex, HabitatSummary};
+    use openzt2_zoo_state::habitat::habitat_types::{HabitatCellOf, HabitatIndex, HabitatSummary};
     use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
     #[test]
@@ -364,8 +364,8 @@ mod escaped_reach_tests {
         let breached = world.spawn(summary(true)).id();
         let closed = world.spawn(summary(false)).id();
         let mut index = HabitatIndex::default();
-        index.record_habitat_for_topology_cell(IVec2::new(0, 0), breached);
-        index.record_habitat_for_topology_cell(IVec2::new(4, 0), closed);
+        index.record_cell(IVec2::new(0, 0), world.spawn(HabitatCellOf(breached)).id());
+        index.record_cell(IVec2::new(4, 0), world.spawn(HabitatCellOf(closed)).id());
         world.spawn((
             index,
             TopologyGrid {
@@ -376,6 +376,7 @@ mod escaped_reach_tests {
         let reaches = world
             .run_system_once(
                 |index: Single<&HabitatIndex>,
+                 owners: Query<&HabitatCellOf>,
                  grid: Single<&TopologyGrid>,
                  summaries: Query<&HabitatSummary>| {
                     [
@@ -383,7 +384,9 @@ mod escaped_reach_tests {
                         Vec2::new(4.5, 0.5),
                         Vec2::new(9.5, 0.5),
                     ]
-                    .map(|point| super::escaped_animal_reaches(&index, **grid, &summaries, point))
+                    .map(|point| {
+                        super::escaped_animal_reaches(&index, &owners, **grid, &summaries, point)
+                    })
                 },
             )
             .unwrap();

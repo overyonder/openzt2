@@ -1,7 +1,8 @@
 use openzt2_game_data::AssetId;
 
-use openzt2_interface_state::persistence::profile_types::ProfileFailure;
-use openzt2_interface_state::persistence::profile_types::ProfileRecord;
+use openzt2_interface_state::persistence::profile_types::{
+    PhotoAlbumProfileOptions, ProfileFailure, ProfileOptions, ProfileRecord,
+};
 
 use super::profile_index_encoding::{decode_profile_index_for_test, encode_profile_index_for_test};
 
@@ -52,14 +53,14 @@ fn corrupt_profile_records_are_rejected() {
 }
 
 #[test]
-fn older_profile_versions_decode_without_scenario_variables() {
+fn older_profile_versions_restore_defaults_and_migrate_the_album_setting() {
     use super::profile_index_encoding::decode_stored_profile_index;
     use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
     use openzt2_interface_state::{
         input::input_types::GameActionInputBindings,
         settings::{audio_settings_types::AudioSettings, display_settings_types::DisplaySettings},
     };
-    for version in 1_u32..=3 {
+    for version in 1_u32..=6 {
         let id = create_test_profile_identifier(1);
         let mut bytes = b"OZT2PROF".to_vec();
         bytes.extend_from_slice(&version.to_le_bytes());
@@ -86,6 +87,17 @@ fn older_profile_versions_decode_without_scenario_variables() {
                 bytes.extend_from_slice(&settings);
             }
         }
+        if version >= 4 {
+            bytes.extend_from_slice(&0_u32.to_le_bytes());
+        }
+        if version >= 5 {
+            bytes.push(0);
+        }
+        if version >= 6 {
+            let attributes = br#"{"PhotoAlbumDefaultSpreads":"7"}"#;
+            bytes.extend_from_slice(&(attributes.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(attributes);
+        }
         bytes.extend_from_slice(&3_u16.to_le_bytes());
         bytes.extend_from_slice(b"Ava");
         let mut checksum = blake3::Hasher::new();
@@ -97,6 +109,13 @@ fn older_profile_versions_decode_without_scenario_variables() {
         assert_eq!(selected, Some(id));
         assert_eq!(profiles[0].record.profile_display_name, "Ava");
         assert_eq!(profiles[0].scenario_variables.iter().len(), 0);
+        assert!(profiles[0].options.attributes.is_empty());
+        assert_eq!(
+            profiles[0].options.photo_album,
+            (version == 6).then_some(PhotoAlbumProfileOptions {
+                default_spreads: Some(7),
+            })
+        );
         assert_eq!(
             profiles[0].challenge_progress.all,
             if version == 1 { 0 } else { 7 }
@@ -116,6 +135,9 @@ fn independently_bounded_variables_round_trip_across_profiles() {
         .collect();
     let bytes = encode_profile_index_for_test(&records, None).unwrap();
     let (mut profiles, _) = decode_stored_profile_index(&bytes).unwrap();
+    profiles[0].options.photo_album = Some(PhotoAlbumProfileOptions {
+        default_spreads: Some(12),
+    });
     let value = "v".repeat(1024);
     for profile in &mut profiles {
         let mut count = 0;
@@ -138,6 +160,7 @@ fn independently_bounded_variables_round_trip_across_profiles() {
     let (decoded, _) = decode_stored_profile_index(&bytes).unwrap();
     for (expected, actual) in profiles.iter().zip(decoded) {
         assert_eq!(actual.scenario_variables, expected.scenario_variables);
+        assert_eq!(actual.options.photo_album, expected.options.photo_album);
     }
 }
 
@@ -152,11 +175,12 @@ fn disabled_message_of_the_day_survives_the_profile_index() {
                     profile_display_name: "Ava".to_owned(),
                     last_played_unix_timestamp_milliseconds: 10,
                 },
-                options: openzt2_interface_state::persistence::profile_types::ProfileOptions {
+                options: ProfileOptions {
                     profile_identifier,
                     locale_identifier: AssetId::default(),
                     controller_input_enabled: true,
-                attributes: Default::default(),
+                    photo_album: None,
+                    attributes: Default::default(),
                 },
                 challenge_progress: Default::default(),
                 scenario_variables: Default::default(),

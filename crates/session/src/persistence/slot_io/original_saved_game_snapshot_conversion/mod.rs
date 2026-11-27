@@ -163,6 +163,9 @@ pub(super) fn encode_original_saved_game_snapshot(
         unlocked_catalogue_definition_count: 0,
         unlocked_catalogue_definition_bit_words: Vec::new(),
         scenario_award_points: award_points,
+        award_history: None,
+        fossil_education: Default::default(),
+        fossil_skeleton_rewards: Default::default(),
         award_globals: Default::default(),
         award_presentation: Default::default(),
         endangered_animal_birth_count: 0,
@@ -301,7 +304,9 @@ fn validate_inactive_managers(context: &OrderedSourceDocumentNode) -> io::Result
             let indices = unique_child(component, "transactionCostIndex")?;
             for (transaction, value) in indices.attributes() {
                 if value.parse::<u32>().ok() != Some(0) {
-                    return Err(invalid(format!("saved entity {id} transaction {transaction} has an unconverted price index {value}")));
+                    return Err(invalid(format!(
+                        "saved entity {id} transaction {transaction} has an unconverted price index {value}"
+                    )));
                 }
             }
         }
@@ -362,7 +367,7 @@ fn read_saved_status_progression(status: &OrderedSourceDocumentNode) -> io::Resu
             _ => {
                 return Err(invalid(format!(
                     "saved Status script field {name} has no conversion"
-                )))
+                )));
             }
         };
         let value = field

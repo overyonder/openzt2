@@ -285,7 +285,7 @@ pub(super) fn attach_sun_visual_when_position_model_is_ready(
 }
 
 pub(super) fn attach_sun_visual_to_single_node_position_model(
-    mesh: On<Add, Mesh3d>,
+    mesh: On<Add<Mesh3d>>,
     mut commands: Commands,
     parents: Query<&ChildOf>,
     scene_roots: Query<(), With<WorldAssetRoot>>,

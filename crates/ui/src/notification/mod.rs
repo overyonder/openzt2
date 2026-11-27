@@ -312,7 +312,7 @@ pub(super) fn initialize_authored_guest_thought_text(
     mut commands: Commands,
     mut pending: Query<(Entity, &InitialGuestThoughtText, &mut Text)>,
 ) {
-    for (entity, initial, mut text) in &mut pending {
+    for (entity, initial, text) in &mut pending {
         text.map_unchanged(|text| &mut text.0)
             .clone_from_if_neq(initial.0.as_str());
         commands.entity(entity).remove::<InitialGuestThoughtText>();
@@ -450,7 +450,7 @@ pub(super) fn project_selected_guest_thoughts(
                 for node in
                     std::iter::once(child).chain(children.iter_descendants::<Children>(child))
                 {
-                    if let Ok(mut text) = text.get_mut(node) {
+                    if let Ok(text) = text.get_mut(node) {
                         text.map_unchanged(|text| &mut text.0)
                             .clone_from_if_neq(value.as_str());
                         break;

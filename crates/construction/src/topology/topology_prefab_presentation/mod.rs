@@ -1,8 +1,10 @@
 use bevy::prelude::*;
+use openzt2_game_data::world_definitions::fences_and_gates::FenceDefinition;
 use openzt2_game_data::AssetId;
+use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_authored_gate_prefab;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::{WorldDefinitions, WorldDefinitionsView};
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentationHydrated;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
@@ -15,10 +17,21 @@ use crate::topology::topology_presentation_types::{
 };
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentPrefab;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;
-use openzt2_zoo_state::topology::gate_operation_types::Gate;
+use openzt2_zoo_state::topology::gate_operation_types::{AuthoredGateVariant, Gate};
 use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
+
+pub(super) fn authored_gate_definition<'a>(
+    definitions: WorldDefinitionsView<'a>,
+    fence: AssetId,
+    variant: Option<&AuthoredGateVariant>,
+) -> Option<&'a FenceDefinition> {
+    match variant {
+        Some(variant) => definitions.find_fence(variant.0),
+        None => definitions.find_gate_fence(fence),
+    }
+}
 
 #[derive(Component)]
 pub(super) struct FenceSegmentPosts {
@@ -37,6 +50,7 @@ pub(super) fn hydrate_topology_prefab_presentations(
             Option<&FenceSegmentPrefab>,
             Option<&FenceTerrainEndpointPresentationCells>,
             Option<&Gate>,
+            Option<&AuthoredGateVariant>,
             Option<&FenceEdge>,
             Option<&PathTile>,
             Option<&PathSupportPrefab>,
@@ -59,7 +73,7 @@ pub(super) fn hydrate_topology_prefab_presentations(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (topology_entity, fence, cells, gate, edge, path, support, visibility, children) in
+    for (topology_entity, fence, cells, gate, variant, edge, path, support, visibility, children) in
         &mut topology
     {
         let existing = children
@@ -92,10 +106,14 @@ pub(super) fn hydrate_topology_prefab_presentations(
         }
         // A gate edge presents its authored segment model and, beside it, the
         // actor named by its ZTGate physObj binder which carries the leaves.
-        let gate_scene = gate
-            .and_then(|_| definitions.find_gate_fence(edge?.definition))
-            .map(|fence| fence.gate_policy.prefab)
-            .filter(|id| *id != AssetId::default());
+        let gate_scene = gate.and_then(|_| {
+            let fence = authored_gate_definition(definitions, edge?.definition, variant)?;
+            select_authored_gate_prefab(fence, variant, |id| {
+                definitions
+                    .find_fence(id)
+                    .map(|variant| variant.gate_policy.prefab)
+            })
+        });
         let gate_handle = match gate_scene {
             Some(scene) => match definitions.scene(scene) {
                 Some(handle) => Some(handle),
@@ -161,7 +179,13 @@ pub(super) fn hydrate_topology_prefab_presentations(
                 PrefabPresentation::new(handle),
             ));
             let post = edge
-                .and_then(|edge| definitions.find_fence(edge.definition))
+                .and_then(|edge| {
+                    if gate.is_some() {
+                        authored_gate_definition(definitions, edge.definition, variant)
+                    } else {
+                        definitions.find_fence(edge.definition)
+                    }
+                })
                 .map(|fence| fence.post_prefab)
                 .filter(|id| *id != AssetId::default())
                 .and_then(|id| definitions.scene(id));

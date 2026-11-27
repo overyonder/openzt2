@@ -1,77 +1,12 @@
-use std::io;
-
-use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
-    ecs::entity::EntityHashSet,
-    platform::collections::HashMap,
-    prelude::*,
+use bevy::{ecs::entity::EntityHashSet, platform::collections::HashMap, prelude::*};
+use openzt2_game_assets::world_definitions::{
+    world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+    world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
-use openzt2_game_assets::source_document::{
-    blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
+use openzt2_game_data::{
+    world_definitions::transportation_and_tours::TransportationTrackKind, AssetId,
 };
-use openzt2_game_data::AssetId;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
-
-#[derive(Asset, TypePath)]
-pub(super) struct SkyStationStopNodes([Option<AssetId>; 4]);
-
-#[derive(Default, TypePath)]
-pub(super) struct SkyStationStopNodesLoader;
-
-impl AssetLoader for SkyStationStopNodesLoader {
-    type Asset = SkyStationStopNodes;
-    type Settings = ();
-    type Error = io::Error;
-
-    async fn load(
-        &self,
-        reader: &mut dyn Reader,
-        (): &(),
-        context: &mut LoadContext<'_>,
-    ) -> io::Result<Self::Asset> {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes).await?;
-        let path = AssetPath::new(context.path().path().to_string_lossy());
-        let document = parse_blue_fang_source_document(path, &bytes).map_err(io::Error::other)?;
-        let shared = document
-            .root
-            .element_children()
-            .find(|node| node.name.eq_ignore_ascii_case("shared"))
-            .and_then(|node| {
-                node.element_children()
-                    .find(|node| node.name.eq_ignore_ascii_case("BFAIEntityDataShared"))
-            });
-        let fields = [
-            "s_StopNodeName_Forward",
-            "s_StopNodeName_Reverse",
-            "s_ReturnStopNodeName_Forward",
-            "s_ReturnStopNodeName_Reverse",
-        ];
-        Ok(SkyStationStopNodes(fields.map(|field| {
-            shared
-                .and_then(|data| data.attribute_named_any(&[field]))
-                .filter(|name| !name.is_empty())
-                .map(|name| AssetId::from_key(&name.to_ascii_lowercase()))
-        })))
-    }
-
-    fn extensions(&self) -> &[&str] {
-        &["xml"]
-    }
-}
-
-#[derive(Resource)]
-pub(super) struct SkyStationStopSource(Handle<SkyStationStopNodes>);
-
-impl FromWorld for SkyStationStopSource {
-    fn from_world(world: &mut World) -> Self {
-        Self(
-            world
-                .resource::<AssetServer>()
-                .load("entities/transportation/stations/ai/skystation_end.xml"),
-        )
-    }
-}
 
 #[derive(Debug, PartialEq)]
 pub(super) struct StationCable {
@@ -205,10 +140,10 @@ fn is_cable_node(name: &str) -> bool {
 }
 
 pub(super) fn project_sky_station_travel(
-    stops: Res<Assets<SkyStationStopNodes>>,
-    stop_source: Res<SkyStationStopSource>,
-    stations: Query<Entity, With<TransportStation>>,
-    new_stations: Query<Entity, Added<TransportStation>>,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    active: Res<WorldDefinitions>,
+    stations: Query<(Entity, &TransportStation)>,
+    changed_stations: Query<Entity, Changed<TransportStation>>,
     changed_nodes: Query<
         Entity,
         (
@@ -223,13 +158,14 @@ pub(super) fn project_sky_station_travel(
     mut travel: Query<&mut SkyStationTravel>,
     mut commands: Commands,
 ) {
-    let Some(policy) = stops.get(&stop_source.0) else {
+    let definitions_changed = definitions.is_changed() || active.is_changed();
+    let Some(definitions) = active.get(&definitions) else {
         return;
     };
-    let mut affected: EntityHashSet = new_stations.iter().collect();
+    let mut affected: EntityHashSet = changed_stations.iter().collect();
     affected.extend(discarded.read().map(|node| node.0));
-    if stops.is_changed() || stop_source.is_changed() {
-        affected.extend(stations.iter());
+    if definitions_changed {
+        affected.extend(stations.iter().map(|(entity, _)| entity));
     }
     for entity in &changed_nodes {
         let Ok((name, _)) = nodes.get(entity) else {
@@ -245,6 +181,18 @@ pub(super) fn project_sky_station_travel(
         }
     }
     for station in affected {
+        let Ok((_, settings)) = stations.get(station) else {
+            continue;
+        };
+        let Some(definition) = definitions.find_station(settings.definition) else {
+            continue;
+        };
+        if definition.kind != TransportationTrackKind::Sky {
+            continue;
+        }
+        let stops = definitions
+            .sky_station_stop_nodes(settings.definition)
+            .unwrap_or_default();
         let mut sockets = HashMap::new();
         for child in children.iter_descendants_depth_first::<Children>(station) {
             let Ok((name, pose)) = nodes.get(child) else {
@@ -258,8 +206,8 @@ pub(super) fn project_sky_station_travel(
             }
         }
         let geometry = SkyStationTravel([
-            collect_station_cable(&sockets, "travelpoint", &policy.0[..2]),
-            collect_station_cable(&sockets, "returntravelpoint", &policy.0[2..]),
+            collect_station_cable(&sockets, "travelpoint", &stops[..2]),
+            collect_station_cable(&sockets, "returntravelpoint", &stops[2..]),
         ]);
         if let Ok(mut current) = travel.get_mut(station) {
             current.set_if_neq(geometry);

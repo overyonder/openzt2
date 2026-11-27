@@ -267,3 +267,45 @@ fn blue_fang_renderer_model_prefers_bfb_and_retains_nif_fallback() -> std::io::R
     );
     Ok(())
 }
+
+#[test]
+fn replacing_a_zip_entry_at_the_same_position_updates_its_winner() -> std::io::Result<()> {
+    let directory = TestDirectory::new()?;
+    let original = directory.archive("original.z2f", &[("ui/layout/menu.xml", b"old")])?;
+    let replacement = directory.archive("replacement.z2f", &[("ui/layout/menu.xml", b"new")])?;
+    let archives = ArchiveSet::open([original])?;
+    let path = Path::new("ui/layout/menu.xml");
+    let before = archives
+        .resolved_winning_entry(path)
+        .expect("original winner");
+    let changes = archives.replace_archive(0, &replacement)?;
+    let after = archives
+        .resolved_winning_entry(path)
+        .expect("replacement winner");
+
+    assert_eq!(before.archive_priority_index, after.archive_priority_index);
+    assert_eq!(before.zip_entry_ordinal, after.zip_entry_ordinal);
+    assert_ne!(before.content_revision, after.content_revision);
+    assert_eq!(
+        changes,
+        vec![
+            ResolvedAssetChange {
+                normalized_asset_path: PathBuf::from("menu.xml"),
+                change_kind: ResolvedAssetChangeKind::Modified,
+            },
+            ResolvedAssetChange {
+                normalized_asset_path: path.to_owned(),
+                change_kind: ResolvedAssetChangeKind::Modified,
+            },
+        ],
+    );
+    assert!(archives
+        .read_resolved_archive_entry(before.read_entry(), 3)
+        .is_err());
+    assert_eq!(
+        archives.read_resolved_archive_entry(after.read_entry(), 3)?,
+        b"new"
+    );
+    assert!(archives.replace_archive(0, &replacement)?.is_empty());
+    Ok(())
+}

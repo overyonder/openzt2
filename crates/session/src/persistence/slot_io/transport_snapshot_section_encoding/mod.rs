@@ -8,7 +8,8 @@ use super::super::{
     snapshot_container_types::WorldSnapshotSectionDirectoryEntry,
 };
 use super::transport_snapshot_types::{
-    TransportCircuitMemberSnapshotRecord, TransportCircuitSnapshotRecord, TransportGraphSnapshot,
+    SkyStationCrossingSnapshot, TransportCircuitMemberSnapshotRecord,
+    TransportCircuitSnapshotRecord, TransportGraphSnapshot, TransportRouteSnapshot,
     TransportSnapshotRecords, TransportVehicleSnapshotRecord,
 };
 
@@ -48,7 +49,7 @@ pub(super) fn encode_transport_snapshot_section(
         bytes.extend_from_slice(&vehicle.circuit_persistent_identifier.0.to_le_bytes());
     }
     validate_graph(transport)?;
-    bytes.push(1);
+    bytes.push(2);
     bytes.extend(
         postcard::to_allocvec(&transport.graph)
             .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?,
@@ -144,16 +145,14 @@ pub(super) fn decode_and_validate_transport_snapshot_section(
         cursor += record_bytes;
     }
     if cursor != payload.len() {
-        let remaining = payload[cursor..]
-            .strip_prefix(&[1])
-            .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
-        let (graph, trailing): (TransportGraphSnapshot, _) =
-            postcard::take_from_bytes(remaining)
-                .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
-        if !trailing.is_empty() {
-            return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+        transport.graph = match &payload[cursor..] {
+            [1, bytes @ ..] => decode_transport_graph_v1(bytes),
+            [2, bytes @ ..] => postcard::take_from_bytes(bytes)
+                .ok()
+                .and_then(|(graph, trailing)| trailing.is_empty().then_some(graph)),
+            _ => None,
         }
-        transport.graph = graph;
+        .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
     }
     if !transport
         .circuit_records
@@ -210,6 +209,49 @@ pub(super) fn decode_and_validate_transport_snapshot_section(
     }
     validate_graph(&transport)?;
     Ok(transport)
+}
+
+fn decode_transport_graph_v1(bytes: &[u8]) -> Option<TransportGraphSnapshot> {
+    type GraphPrefix = (Vec<(u64, bevy::prelude::Transform)>, Vec<(u64, i64)>);
+    type GraphSuffix = (Vec<(u64, Option<f32>)>, Vec<TransportRouteSnapshot>);
+    let ((poses, fares), bytes) = postcard::take_from_bytes::<GraphPrefix>(bytes).ok()?;
+    // Version 1 omitted either of these vectors entirely when empty.
+    for (has_fare_dollars, has_crossings) in
+        [(true, true), (true, false), (false, true), (false, false)]
+    {
+        let Some((fares_dollars, after_fares)) = (if has_fare_dollars {
+            postcard::take_from_bytes::<Vec<(u64, f32)>>(bytes)
+                .ok()
+                .filter(|(fares, _)| !fares.is_empty())
+        } else {
+            Some((Vec::new(), bytes))
+        }) else {
+            continue;
+        };
+        let Some((sky_station_crossings, after_crossings)) = (if has_crossings {
+            postcard::take_from_bytes::<Vec<SkyStationCrossingSnapshot>>(after_fares)
+                .ok()
+                .filter(|(crossings, _)| !crossings.is_empty())
+        } else {
+            Some((Vec::new(), after_fares))
+        }) else {
+            continue;
+        };
+        if let Ok(((junctions, routes), [])) =
+            postcard::take_from_bytes::<GraphSuffix>(after_crossings)
+        {
+            return Some(TransportGraphSnapshot {
+                poses,
+                fares,
+                fares_dollars,
+                sky_station_crossings,
+                junctions,
+                routes,
+                station_ratings: Vec::new(),
+            });
+        }
+    }
+    None
 }
 
 fn decode_snapshot_boolean_byte(
@@ -274,6 +316,16 @@ fn validate_graph(
                     .iter()
                     .any(|route| route.pieces.first() == Some(&crossing.next_route))
         })
+        || !graph
+            .station_ratings
+            .windows(2)
+            .all(|rows| rows[0].station < rows[1].station)
+        || graph.station_ratings.iter().any(|rating| {
+            member(rating.station).is_none()
+                || rating.permille > 1000
+                || rating.samples.len() > usize::from(u16::MAX)
+                || rating.samples.iter().any(|sample| !sample.is_finite())
+        })
         || !graph.poses.windows(2).all(|rows| rows[0].0 < rows[1].0)
         || !graph.fares.windows(2).all(|rows| rows[0].0 < rows[1].0)
         || !graph.junctions.windows(2).all(|rows| rows[0].0 < rows[1].0)
@@ -334,4 +386,55 @@ fn validate_graph(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::transport_snapshot_types::StationTourRatingSnapshot;
+    use super::*;
+
+    #[test]
+    fn station_rating_keeps_the_ordered_samples_and_published_value() {
+        let mut records = TransportSnapshotRecords::default();
+        records
+            .circuit_records
+            .push(TransportCircuitSnapshotRecord {
+                persistent_identifier: PersistentId(1),
+                transport_definition_identifier: AssetId::from_key("circuit"),
+                is_closed_loop: true,
+                is_running: true,
+                travel_direction: CircuitDirection::Forward,
+            });
+        records
+            .circuit_member_records
+            .push(TransportCircuitMemberSnapshotRecord {
+                persistent_identifier: PersistentId(2),
+                circuit_persistent_identifier: PersistentId(1),
+                transport_definition_identifier: AssetId::from_key("station"),
+            });
+        records
+            .graph
+            .station_ratings
+            .push(StationTourRatingSnapshot {
+                station: 2,
+                permille: 713,
+                samples: vec![0.75, -0.25, 0.5],
+            });
+        let bytes = encode_transport_snapshot_section(&records).unwrap();
+        let restored = decode_and_validate_transport_snapshot_section(
+            &bytes,
+            WorldSnapshotSectionDirectoryEntry {
+                encoded_record_count: 2,
+                payload_start_byte_offset: 0,
+                payload_byte_count: bytes.len() as u64,
+            },
+        )
+        .unwrap();
+        let [rating] = restored.graph.station_ratings.as_slice() else {
+            panic!("expected one station rating");
+        };
+        assert_eq!(rating.station, 2);
+        assert_eq!(rating.permille, 713);
+        assert_eq!(rating.samples, [0.75, -0.25, 0.5]);
+    }
 }

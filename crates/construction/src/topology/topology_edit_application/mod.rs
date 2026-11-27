@@ -1,4 +1,3 @@
-use super::elevated_path_layout::ElevatedPathSurfaceEdits;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
@@ -224,7 +223,6 @@ pub(super) fn apply_committed_topology_edit(
         &TopologyEdit,
         Option<&mut TankTopologyRestorations>,
         Option<&mut AppliedFenceTopology>,
-        Option<&ElevatedPathSurfaceEdits>,
     )>,
     tanks: Query<(
         &Tank,
@@ -256,8 +254,7 @@ pub(super) fn apply_committed_topology_edit(
     let mut reserved = HashSet::new();
     let mut released = bevy::ecs::entity::EntityHashSet::default();
     for request in requests.read() {
-        let Ok((edit, live_restorations, applied_fences, surfaces)) =
-            edits.get_mut(request.transaction)
+        let Ok((edit, live_restorations, applied_fences)) = edits.get_mut(request.transaction)
         else {
             write_topology_edit_acknowledgement(&request, false, &mut acknowledged);
             continue;
@@ -534,30 +531,17 @@ pub(super) fn apply_committed_topology_edit(
                     id,
                     definition,
                     cell,
+                    height_cm,
                 } => {
                     let entity = commands
                         .spawn((
                             PathTile { definition, cell },
+                            TileSurface { height_cm },
                             id,
                             WorldMember { root },
                             Transform::from_translation(grid.cell_translation(cell)),
                         ))
                         .id();
-                    if let Some(surface) = surfaces
-                        .and_then(|surfaces| {
-                            surfaces
-                                .0
-                                .iter()
-                                .find_map(|(piece, surface)| (*piece == id).then_some(*surface))
-                        })
-                        .or_else(|| {
-                            definitions.find_path(definition).map(|path| TileSurface {
-                                height_cm: path.surface.height_cm,
-                            })
-                        })
-                    {
-                        commands.entity(entity).insert(surface);
-                    }
                     resolved.insert(id.0, entity);
                     bounds =
                         merge_topology_changed_cell_bounds(bounds, topology_cell_rectangle(cell));

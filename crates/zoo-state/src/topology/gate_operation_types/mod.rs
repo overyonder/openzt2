@@ -1,6 +1,10 @@
 use std::time::Duration;
 
 use bevy::prelude::*;
+use openzt2_game_data::AssetId;
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuthoredGateVariant(pub AssetId);
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GateOperationSet;

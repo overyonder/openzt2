@@ -6,7 +6,7 @@ use std::{
 
 use bevy::{
     asset::Handle,
-    ecs::{component::Component, resource::Resource},
+    ecs::{component::Component, entity::Entity, resource::Resource},
     log::{trace, warn},
     platform::collections::HashMap,
     render::{
@@ -184,9 +184,8 @@ impl Default for SlabId {
 /// If an effect has a different particle layout, it needs to be stored in a
 /// different slab.
 ///
-/// Also currently only accepts instances of a unique effect asset, although
-/// this restriction is purely for convenience and may be relaxed in the future
-/// to improve batching.
+/// Instances of the same effect asset or members of the same spawn group can
+/// share a slab when their particle layouts match.
 #[derive(Debug)]
 pub struct ParticleSlab {
     /// GPU buffer storing all particles for the entire slab of effects.
@@ -216,9 +215,8 @@ pub struct ParticleSlab {
     /// inside the slab buffers.
     free_slices: Vec<Range<u32>>,
 
-    /// Handle of all effects common in this slab. TODO - replace with
-    /// compatible layout.
     asset: Handle<EffectAsset>,
+    spawn_group: Option<Entity>,
     /// Layout of the particle@1 bind group for the render pass.
     // TODO - move; this only depends on the particle and spawner layouts, can be shared across
     // slabs
@@ -244,6 +242,7 @@ impl ParticleSlab {
     pub fn new(
         slab_id: SlabId,
         asset: Handle<EffectAsset>,
+        spawn_group: Option<Entity>,
         capacity: u32,
         particle_layout: ParticleLayout,
         render_device: &RenderDevice,
@@ -350,6 +349,7 @@ impl ParticleSlab {
             used_size: 0,
             free_slices: vec![],
             asset,
+            spawn_group,
             sim_bind_groups: HashMap::default(),
         }
     }
@@ -613,12 +613,15 @@ impl ParticleSlab {
     pub fn is_compatible(
         &self,
         handle: &Handle<EffectAsset>,
+        spawn_group: Option<Entity>,
         particle_layout: &ParticleLayout,
     ) -> bool {
-        // TODO - replace with check particle layout is compatible to allow
-        // tighter packing in less buffers, and update in the less
-        // dispatch calls
-        *handle == self.asset && *particle_layout == self.particle_layout
+        *particle_layout == self.particle_layout
+            && match (self.spawn_group, spawn_group) {
+                (Some(owner), Some(other)) => owner == other,
+                (None, None) => *handle == self.asset,
+                _ => false,
+            }
     }
 }
 
@@ -844,6 +847,7 @@ impl EffectCache {
     pub fn insert(
         &mut self,
         asset: Handle<EffectAsset>,
+        spawn_group: Option<Entity>,
         capacity: u32,
         particle_layout: &ParticleLayout,
     ) -> CachedEffect {
@@ -857,7 +861,7 @@ impl EffectCache {
                 let Some(slab) = maybe_slab else { return None; };
 
                 // The slab must be compatible with the effect's layout, otherwise ignore it.
-                if !slab.is_compatible(&asset, particle_layout) {
+                if !slab.is_compatible(&asset, spawn_group, particle_layout) {
                     return None;
                 }
 
@@ -886,6 +890,7 @@ impl EffectCache {
                 let mut slab = ParticleSlab::new(
                     slab_id,
                     asset,
+                    spawn_group,
                     capacity,
                     particle_layout.clone(),
                     &self.render_device,
@@ -1097,14 +1102,14 @@ fn create_particle_sim_bind_group_layout_desc(
         count: None,
     });
 
-    // @group(1) @binding(2) var<storage, read> parent_particle_buffer :
-    // ParentParticleBuffer;
+    // Treat both particle bindings as storage writes. A shared slab can be
+    // bound as the parent and child at distinct particle offsets.
     if let Some(min_binding_size) = parent_particle_layout_min_binding_size {
         entries.push(BindGroupLayoutEntry {
             binding: 2,
             visibility: ShaderStages::COMPUTE,
             ty: BindingType::Buffer {
-                ty: BufferBindingType::Storage { read_only: true },
+                ty: BufferBindingType::Storage { read_only: false },
                 has_dynamic_offset: false,
                 min_binding_size: Some(min_binding_size.into()),
             },
@@ -1358,6 +1363,7 @@ mod gpu_tests {
         let mut buffer = ParticleSlab::new(
             SlabId::new(42),
             asset,
+            None,
             capacity,
             l64.clone(),
             &render_device,
@@ -1431,6 +1437,7 @@ mod gpu_tests {
         let mut buffer = ParticleSlab::new(
             SlabId::new(42),
             asset,
+            None,
             capacity,
             l64.clone(),
             &render_device,
@@ -1496,7 +1503,7 @@ mod gpu_tests {
         let item_size = l32.size();
 
         // Insert an effect
-        let effect1 = effect_cache.insert(asset.clone(), capacity, &l32);
+        let effect1 = effect_cache.insert(asset.clone(), None, capacity, &l32);
         //assert!(effect1.is_valid());
         let slice1 = &effect1.slice;
         assert_eq!(slice1.len(), capacity);
@@ -1508,7 +1515,7 @@ mod gpu_tests {
         assert_eq!(effect_cache.slabs().len(), 1);
 
         // Insert a second copy of the same effect
-        let effect2 = effect_cache.insert(asset.clone(), capacity, &l32);
+        let effect2 = effect_cache.insert(asset.clone(), None, capacity, &l32);
         //assert!(effect2.is_valid());
         let slice2 = &effect2.slice;
         assert_eq!(slice2.len(), capacity);
@@ -1532,7 +1539,7 @@ mod gpu_tests {
         }
 
         // Regression #60
-        let effect3 = effect_cache.insert(asset, capacity, &l32);
+        let effect3 = effect_cache.insert(asset, None, capacity, &l32);
         //assert!(effect3.is_valid());
         let slice3 = &effect3.slice;
         assert_eq!(slice3.len(), capacity);

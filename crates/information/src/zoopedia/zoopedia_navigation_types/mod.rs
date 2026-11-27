@@ -1,6 +1,6 @@
 use bevy::prelude::*;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
+use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;

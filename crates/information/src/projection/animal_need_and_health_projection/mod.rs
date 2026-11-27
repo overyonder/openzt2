@@ -22,12 +22,12 @@ use openzt2_zoo_state::animal_welfare::types::HealthNeed;
 use openzt2_zoo_state::animal_welfare::types::Hunger;
 use openzt2_zoo_state::animal_welfare::types::HygieneNeed;
 use openzt2_zoo_state::animal_welfare::types::PrivacyNeed;
-use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
 use openzt2_zoo_state::animal_welfare::types::RestNeed;
 use openzt2_zoo_state::animal_welfare::types::SocialNeed;
 use openzt2_zoo_state::animal_welfare::types::StimulationNeed;
 use openzt2_zoo_state::animal_welfare::types::Thirst;
 use openzt2_zoo_state::animal_welfare::types::WelfareBand;
+use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
 
 use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
 
@@ -97,36 +97,36 @@ pub(crate) fn project_live_animal_needs_to_visible_information_panels(
             };
             let next = match &binding.0 {
                 UiIntegerPropertyBindingSource::AnimalHungerQ16Permille => {
-                    convert_q16_animal_need_value_to_permille(needs.0.0)
+                    convert_q16_animal_need_value_to_permille(needs.0 .0)
                 }
                 UiIntegerPropertyBindingSource::AnimalThirstQ16Permille => {
-                    convert_q16_animal_need_value_to_permille(needs.1.0)
+                    convert_q16_animal_need_value_to_permille(needs.1 .0)
                 }
                 UiIntegerPropertyBindingSource::AnimalRestQ16Permille => {
-                    convert_q16_animal_need_value_to_permille(needs.2.0)
+                    convert_q16_animal_need_value_to_permille(needs.2 .0)
                 }
                 UiIntegerPropertyBindingSource::AnimalPrivacyQ16Permille => {
-                    convert_q16_animal_need_value_to_permille(needs.3.0)
+                    convert_q16_animal_need_value_to_permille(needs.3 .0)
                 }
                 UiIntegerPropertyBindingSource::AnimalSocialQ16Permille => {
-                    convert_q16_animal_need_value_to_permille(needs.4.0)
+                    convert_q16_animal_need_value_to_permille(needs.4 .0)
                 }
                 UiIntegerPropertyBindingSource::AnimalExerciseQ16Permille => {
-                    convert_q16_animal_need_value_to_permille(needs.5.0)
+                    convert_q16_animal_need_value_to_permille(needs.5 .0)
                 }
                 UiIntegerPropertyBindingSource::AnimalStimulationQ16Permille => {
-                    convert_q16_animal_need_value_to_permille(needs.6.0)
+                    convert_q16_animal_need_value_to_permille(needs.6 .0)
                 }
                 UiIntegerPropertyBindingSource::AnimalEnvironmentQ16Permille => {
-                    convert_q16_animal_need_value_to_permille(needs.7.0)
+                    convert_q16_animal_need_value_to_permille(needs.7 .0)
                 }
                 UiIntegerPropertyBindingSource::AnimalHygieneQ16Permille => {
-                    convert_q16_animal_need_value_to_permille(needs.8.0)
+                    convert_q16_animal_need_value_to_permille(needs.8 .0)
                 }
                 UiIntegerPropertyBindingSource::AnimalHealthNeedQ16Permille => {
-                    convert_q16_animal_need_value_to_permille(needs.9.0)
+                    convert_q16_animal_need_value_to_permille(needs.9 .0)
                 }
-                UiIntegerPropertyBindingSource::AnimalWelfarePermille => i64::from(needs.10.0),
+                UiIntegerPropertyBindingSource::AnimalWelfarePermille => i64::from(needs.10 .0),
                 _ => continue,
             };
             value.set_if_neq(UiValue(next));

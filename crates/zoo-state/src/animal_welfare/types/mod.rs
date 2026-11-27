@@ -83,7 +83,6 @@ pub struct CumulativeNeedPoints {
 pub struct NeedPoints {
     pub good: f32,
     pub bad: f32,
-    pub seconds_until_update: f32,
 }
 
 /// A focused outcome emitted by whichever behavior changed the active BFAI

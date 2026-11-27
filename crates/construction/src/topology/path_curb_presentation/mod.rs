@@ -1,7 +1,9 @@
-use super::path_curb_patterns::{PathCurbPatternAsset, PathCurbPatterns};
+use super::path_curb_patterns::curb_pair;
+use super::path_placement_highlight_presentation::PathPlacementHighlightAssets;
 use bevy::platform::collections::HashMap;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
+use openzt2_game_assets::world_definitions::path_placement_highlight_asset::PathPlacementHighlightAsset;
 use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -82,8 +84,8 @@ pub(super) fn invalidate_path_curb_presentations_after_topology_or_terrain_chang
     curb_roots: Query<(), With<PathCurbRoot>>,
     mut discarded_segments: MessageReader<DiscardedPathCurbSegment>,
     (pattern_asset, mut pattern_events): (
-        Res<PathCurbPatternAsset>,
-        MessageReader<AssetEvent<PathCurbPatterns>>,
+        Res<PathPlacementHighlightAssets>,
+        MessageReader<AssetEvent<PathPlacementHighlightAsset>>,
     ),
     index: Single<&TopologyIndex>,
     grid: Single<&TopologyGrid>,
@@ -102,7 +104,8 @@ pub(super) fn invalidate_path_curb_presentations_after_topology_or_terrain_chang
     if pattern_events
         .read()
         .filter(|event| {
-            event.is_modified(pattern_asset.0.id()) || event.is_removed(pattern_asset.0.id())
+            event.is_modified(pattern_asset.rules.id())
+                || event.is_removed(pattern_asset.rules.id())
         })
         .count()
         != 0
@@ -156,9 +159,12 @@ pub(super) fn hydrate_authored_path_curb_prefab_presentations(
         Without<EmptyPathCurbPresentation>,
     >,
     curb_roots: Query<(), With<PathCurbRoot>>,
-    (patterns, pattern_asset): (Res<Assets<PathCurbPatterns>>, Res<PathCurbPatternAsset>),
+    (patterns, pattern_asset): (
+        Res<Assets<PathPlacementHighlightAsset>>,
+        Res<PathPlacementHighlightAssets>,
+    ),
 ) {
-    let Some(patterns) = patterns.get(&pattern_asset.0) else {
+    let Some(patterns) = patterns.get(&pattern_asset.rules) else {
         return;
     };
     let grid = grid.into_inner();
@@ -263,7 +269,8 @@ pub(super) fn hydrate_authored_path_curb_prefab_presentations(
             continue;
         }
         for direction in [0, 2, 4, 6] {
-            let Some(edges) = patterns.pair(
+            let Some(edges) = curb_pair(
+                patterns,
                 owner.centre_cell,
                 direction,
                 owner.width_cells / 2,

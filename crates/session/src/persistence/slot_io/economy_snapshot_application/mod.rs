@@ -87,9 +87,6 @@ pub(super) fn apply_economy_snapshot_records(
             .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
         let mut entity = commands.entity(entity);
         let remove = record.complete_component_state;
-        if remove {
-            entity.remove::<(ObjectEconomyFactsResolved, ServiceFacilityFactsResolved)>();
-        }
         let profit = record.profit.map(|(profit, transactions)| FacilityProfit {
             total: profit,
             transactions,

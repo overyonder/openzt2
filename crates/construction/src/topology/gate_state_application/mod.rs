@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::topology::gate_operation_types::{AuthoredGateVariant, Gate};
 use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
@@ -10,8 +11,8 @@ use openzt2_world_state::animation_graph::model_animation_asset_binding_types::P
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
 
+use super::topology_prefab_presentation::authored_gate_definition;
 use openzt2_zoo_state::topology::gate_actor_type_queries::GateActorTypeQueries;
-use openzt2_zoo_state::topology::gate_operation_types::Gate;
 use openzt2_zoo_state::topology::gate_operation_types::GateAutoClose;
 use openzt2_zoo_state::topology::gate_operation_types::SetGateState;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyChanged;
@@ -25,7 +26,12 @@ pub(super) fn apply_requested_gate_state(
     time: Res<Time<Fixed>>,
     mut requests: MessageReader<SetGateState>,
     definitions: GateActorTypeQueries,
-    mut gates: Query<(&mut Gate, FenceSegment, Option<&mut GateAutoClose>)>,
+    mut gates: Query<(
+        &mut Gate,
+        FenceSegment,
+        Option<&AuthoredGateVariant>,
+        Option<&mut GateAutoClose>,
+    )>,
     nodes: Query<&TopologyNode>,
     mut changed: MessageWriter<TopologyChanged>,
 ) {
@@ -34,7 +40,7 @@ pub(super) fn apply_requested_gate_state(
     };
     let mut changed_timers = bevy::ecs::entity::EntityHashMap::default();
     for request in requests.read() {
-        let Ok((mut gate, edge, _)) = gates.get_mut(request.gate) else {
+        let Ok((mut gate, edge, variant, _)) = gates.get_mut(request.gate) else {
             continue;
         };
         if gate.locked || gate.open == request.open {
@@ -44,7 +50,7 @@ pub(super) fn apply_requested_gate_state(
             continue;
         };
         gate.open = request.open;
-        if let Some(definition) = definitions.find_gate_fence(edge.definition) {
+        if let Some(definition) = authored_gate_definition(definitions, edge.definition, variant) {
             let ticks = if request.open {
                 definition.gate_policy.auto_close_ticks
             } else {
@@ -58,7 +64,7 @@ pub(super) fn apply_requested_gate_state(
         });
     }
     for (gate, ticks) in changed_timers {
-        if let Ok((_, _, timer)) = gates.get_mut(gate) {
+        if let Ok((_, _, _, timer)) = gates.get_mut(gate) {
             arm_gate_automatic_close_timer(&mut commands, gate, timer, ticks, &time);
         }
     }
@@ -79,20 +85,21 @@ pub(super) fn attach_authored_animation_sets_to_resolved_gate_models(
     >,
     parents: Query<&ChildOf>,
     presentation_owners: Query<&AnimationPresentationOwner>,
-    gates: Query<(&Gate, FenceSegment)>,
+    gates: Query<(&Gate, FenceSegment, Option<&AuthoredGateVariant>)>,
 ) {
     let Some(definitions) = definitions.definitions() else {
         return;
     };
     for model in &resolved_models {
-        let Some((gate, edge)) = parents
+        let Some((gate, edge, variant)) = parents
             .iter_ancestors(model)
             .find_map(|ancestor| presentation_owners.get(ancestor).ok())
             .and_then(|owner| gates.get(owner.gameplay_entity).ok())
         else {
             continue;
         };
-        let Some(definition) = definitions.find_gate_fence(edge.definition) else {
+        let Some(definition) = authored_gate_definition(definitions, edge.definition, variant)
+        else {
             continue;
         };
         let clip = if gate.open {
@@ -101,7 +108,7 @@ pub(super) fn attach_authored_animation_sets_to_resolved_gate_models(
             &definition.gate_policy.close_animation
         };
         let Some(animation_set) =
-            definitions.load_fence_gate_animation_set::<AnimationSetAsset>(edge.definition)
+            definitions.load_fence_gate_animation_set::<AnimationSetAsset>(definition.id)
         else {
             continue;
         };
@@ -113,6 +120,9 @@ pub(super) fn attach_authored_animation_sets_to_resolved_gate_models(
             .insert(PendingModelAnimationAssets {
                 pending_model_animation_set_asset_handles: vec![animation_set].into_boxed_slice(),
                 requested_initial_animation_clip_asset_key: Some(clip.clone()),
+                requested_initial_repetition_policy: Some(
+                    AnimationPlaybackRepetitionPolicy::PlayOnce,
+                ),
             })
             .remove::<ModelAnimationAttachmentResolved>();
     }
@@ -122,7 +132,7 @@ pub(super) fn attach_authored_animation_sets_to_resolved_gate_models(
 /// subsequent state changes address that same gate-animation presentation.
 pub(super) fn project_gate_state_to_ready_animation_presentations(
     definitions: GateActorTypeQueries,
-    gates: Query<(Ref<Gate>, FenceSegment)>,
+    gates: Query<(Ref<Gate>, FenceSegment, Option<&AuthoredGateVariant>)>,
     controllers: Query<(
         Entity,
         Ref<AnimationPlaybackController>,
@@ -134,13 +144,14 @@ pub(super) fn project_gate_state_to_ready_animation_presentations(
         return;
     };
     for (controller_entity, controller, owner) in &controllers {
-        let Ok((gate, edge)) = gates.get(owner.gameplay_entity) else {
+        let Ok((gate, edge, variant)) = gates.get(owner.gameplay_entity) else {
             continue;
         };
         if !gate.is_changed() && !controller.is_added() {
             continue;
         }
-        let Some(definition) = definitions.find_gate_fence(edge.definition) else {
+        let Some(definition) = authored_gate_definition(definitions, edge.definition, variant)
+        else {
             continue;
         };
         let clip = if gate.open {

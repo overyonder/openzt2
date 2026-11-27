@@ -36,6 +36,7 @@ pub(super) fn bind_immersive_mode_policy(
     let mode = match source_kind.as_str() {
         "ztguestviewmode" => ImmersiveModeKind::GuestView,
         "ztfirstpersonmode" => ImmersiveModeKind::FirstPerson,
+        "ztpuzzlemode" => ImmersiveModeKind::FossilAssembly,
         _ => immersive_mode_kind(required(record, &["mode", "modeKind"])?)?,
     };
     let first_person_movement = (mode == ImmersiveModeKind::FirstPerson)
@@ -61,6 +62,10 @@ pub(super) fn bind_immersive_mode_policy(
                     .with_additional_flags(ImmersiveModeActionFlags::STRAFE_LEFT)
                     .with_additional_flags(ImmersiveModeActionFlags::STRAFE_RIGHT)
                     .with_additional_flags(ImmersiveModeActionFlags::CANCEL)
+            } else if mode == ImmersiveModeKind::FossilAssembly && source_kind == "ztpuzzlemode" {
+                ImmersiveModeActionFlags::PRIMARY
+                    .with_additional_flags(ImmersiveModeActionFlags::ROTATE)
+                    .with_additional_flags(ImmersiveModeActionFlags::CANCEL)
             } else {
                 ImmersiveModeActionFlags::from_raw_flag_bits(flags(
                     record.value(&["allowedActions", "actions"]),
@@ -75,10 +80,14 @@ pub(super) fn bind_immersive_mode_policy(
             guest_navigation_marker: asset(record, &["tagFile"]),
             guest_ground_cursor: asset(record, &["groundCursor"]),
             first_person_movement,
+            fossil_piece_rotation_radians: (mode == ImmersiveModeKind::FossilAssembly)
+                .then(|| number_or::<f32>(record, &["pieceRotation"], 45.0).map(f32::to_radians))
+                .transpose()?
+                .filter(|angle| angle.is_finite()),
             camera: asset(record, &["camera"]),
             restore_camera_on_exit: matches!(
                 source_kind.as_str(),
-                "ztguestviewmode" | "ztfirstpersonmode"
+                "ztguestviewmode" | "ztfirstpersonmode" | "ztpuzzlemode"
             ) || lifecycle_flags & RETURN_CAMERA_ON_EXIT != 0,
             pause_simulation: lifecycle_flags & PAUSE_SIMULATION != 0,
             hide_hud: lifecycle_flags & HIDE_HUD != 0,
@@ -134,6 +143,7 @@ fn bind_nested_authored_first_person_child_policy(
             guest_navigation_marker: AssetId::default(),
             guest_ground_cursor: AssetId::default(),
             first_person_movement: Some(first_person_movement(record, &first_person_parent_mode)?),
+            fossil_piece_rotation_radians: None,
             camera: asset(&first_person_parent_mode, &["camera"]),
             // Both children share the first-person camera parent. The overhead
             // camera-set toggle returns to the previously captured overhead pose.

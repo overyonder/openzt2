@@ -553,25 +553,28 @@ pub(super) fn project_object_placement_validity_onto_preview_model_tint(
             Changed<ObjectPlacementPreviewMaterials>,
         )>,
     >,
-    new_nodes: Query<
-        Entity,
-        Or<(
-            Added<ObjectPlacementPreviewRenderable>,
-            Added<PrefabModelTint>,
-            Added<PlacementDecalRole>,
-        )>,
-    >,
+    mut visuals: ParamSet<(
+        Query<
+            Entity,
+            Or<(
+                Added<ObjectPlacementPreviewRenderable>,
+                Added<PrefabModelTint>,
+                Added<PlacementDecalRole>,
+            )>,
+        >,
+        Query<&mut PrefabModelTint, With<ObjectPlacementPreviewRenderable>>,
+    )>,
     children: Query<&Children>,
     parents: Query<&ChildOf>,
-    mut renderables: Query<&mut PrefabModelTint, With<ObjectPlacementPreviewRenderable>>,
     mut decals: Query<(&PlacementDecalRole, &mut MeshMaterial3d<StandardMaterial>)>,
 ) {
     let mut dirty: bevy::ecs::entity::EntityHashSet = changed.iter().collect();
-    dirty.extend(new_nodes.iter().filter_map(|entity| {
+    dirty.extend(visuals.p0().iter().filter_map(|entity| {
         parents
             .iter_ancestors::<ChildOf>(entity)
             .find(|&ancestor| previews.contains(ancestor))
     }));
+    let mut renderables = visuals.p1();
     for entity in dirty {
         let Ok((valid, materials)) = previews.get(entity) else {
             continue;

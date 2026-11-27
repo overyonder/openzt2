@@ -38,11 +38,16 @@ pub(super) fn create_ui_document_asset_and_load_typed_dependencies(
                 ));
             }
             UiDependencyKind::InteractiveTexture => {
-                if dependency.path.ends_with(".cur") {
+                let source_path = dependency.path.replace('\\', "/").to_ascii_lowercase();
+                let metadata_path = if source_path.ends_with(".cur") {
+                    use crate::texture::interactive_texture_metadata_asset_loading::INTERACTIVE_TEXTURE_ASSET_EXTENSION;
+                    let metadata_path =
+                        format!("{source_path}.{INTERACTIVE_TEXTURE_ASSET_EXTENSION}");
                     texture_image_handles.push((
                         dependency.id,
-                        load_context.load(format!("{}#interactive-image", dependency.path)),
+                        load_context.load::<Image>(format!("{metadata_path}#interactive-image")),
                     ));
+                    metadata_path
                 } else {
                     texture_image_handles.push((
                         dependency.id,
@@ -52,9 +57,12 @@ pub(super) fn create_ui_document_asset_and_load_typed_dependencies(
                             ),
                         ),
                     ));
-                }
-                interactive_texture_metadata_handles
-                    .push((dependency.id, load_context.load(dependency.path.clone())));
+                    source_path
+                };
+                interactive_texture_metadata_handles.push((
+                    dependency.id,
+                    load_context.load::<crate::texture::interactive_texture_metadata_asset_and_borrowing_queries::InteractiveTextureMetadataAsset>(metadata_path),
+                ));
             }
             UiDependencyKind::Scene => {
                 scene_prefab_handles

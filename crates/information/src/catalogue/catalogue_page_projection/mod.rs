@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use openzt2_game_data::{
-    AssetId,
     localization::LocalizationFormatArgument,
     ui_document::node_property_binding::{
         UiBooleanPropertyBindingSource, UiImagePropertyBindingSource,
@@ -9,6 +8,7 @@ use openzt2_game_data::{
     world_definitions::catalogue_and_progression::catalogue_definition_types::{
         CatalogueEntry, CatalogueFilterFlags,
     },
+    AssetId,
 };
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
@@ -34,7 +34,9 @@ use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIden
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use crate::catalogue::catalogue_world_availability_context::resolve_catalogue_world_session_mode_and_scenario_availability;
-use crate::projection::text_replacement_operations::replace_projected_ui_text_if_changed;
+use crate::projection::text_replacement_operations::{
+    currency_cents, replace_projected_ui_text_if_changed,
+};
 use openzt2_interface_state::information::catalogue_types::CatalogueFilter;
 use openzt2_interface_state::information::catalogue_types::CataloguePanel;
 
@@ -206,7 +208,7 @@ pub(crate) fn project_catalogue_page(
                     }) {
                         let mut formatted_amount = String::new();
                         let _ = localization.write_localized_currency_amount(
-                            price.0,
+                            currency_cents(price),
                             !omit_fractional_currency_cents,
                             &mut formatted_amount,
                         );
@@ -257,7 +259,7 @@ pub(crate) fn project_catalogue_page(
                                 AssetId(entry.definition.0),
                             )
                         })
-                        .map_or(0, |price| price.0)
+                        .map_or(0, currency_cents)
                 }
                 UiIntegerPropertyBindingSource::CataloguePage => i64::from(panel.page),
                 _ => continue,

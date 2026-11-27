@@ -104,7 +104,7 @@ fn lower_ambient(
     document: &OrderedSourceDocument,
 ) -> Result<AudioAmbientPolicy, AudioDocumentDiagnostic> {
     let mut policy = AudioAmbientPolicy {
-        enabled: root_number::<u8>(document, "On")?.is_none_or(|value| value != 0),
+        enabled: matches!(document.root.attribute("On"), Some("true" | "1")),
         voice_limit: 10,
         delay_seconds: [4.0, 6.0],
         probability: 1.0,
@@ -117,6 +117,9 @@ fn lower_ambient(
     policy.probability = root_number(document, "Probability")?.unwrap_or(policy.probability);
     Ok(policy)
 }
+
+#[cfg(test)]
+mod tests;
 
 fn lower_water(
     document: &OrderedSourceDocument,

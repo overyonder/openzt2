@@ -19,7 +19,7 @@ use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_quer
 
 use super::mod_manager_types::{
     AssetArchiveEnabledStateCheckbox, ModManagerOverlayButton, ModManagerOverlayRoot,
-    ModManagerReloadInputBlocker,
+    ModManagerReloadInputBlocker, ReloadArchiveAtSamePath,
 };
 
 pub(super) fn spawn_mod_manager_overlay_from_asset_archives(
@@ -106,38 +106,61 @@ pub(super) fn spawn_mod_manager_overlay_from_asset_archives(
             .enumerate()
             .rev()
         {
-            let mut archive_checkbox_row = overlay_root.spawn((
-                Name::new("archive checkbox"),
-                AssetArchiveEnabledStateCheckbox {
-                    archive_status_index,
-                },
-                Node {
+            overlay_root
+                .spawn(Node {
                     width: percent(100),
-                    padding: UiRect::axes(px(8), px(5)),
+                    column_gap: px(4),
                     ..default()
-                },
-                BackgroundColor(Color::srgb(0.14, 0.14, 0.17)),
-            ));
-            if !archive_status.is_required_base_archive {
-                archive_checkbox_row.insert((
-                    bevy::ui_widgets::Button,
-                    DirectlyHovered::default(),
-                    UiInteractionEnabled(true),
-                ));
-            }
-            archive_checkbox_row.with_child((
-                Text::new(format_asset_archive_enabled_state_checkbox_label(
-                    archive_status.is_enabled,
-                    archive_status.is_required_base_archive,
-                    &archive_status.archive_name.to_string_lossy(),
-                )),
-                TextFont::from_font_size(17.0),
-                TextColor(if archive_status.is_required_base_archive {
-                    Color::srgb(0.65, 0.65, 0.68)
-                } else {
-                    Color::WHITE
-                }),
-            ));
+                })
+                .with_children(|row| {
+                    let mut archive_checkbox_row = row.spawn((
+                        Name::new("archive checkbox"),
+                        AssetArchiveEnabledStateCheckbox {
+                            archive_status_index,
+                        },
+                        Node {
+                            flex_grow: 1.0,
+                            padding: UiRect::axes(px(8), px(5)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgb(0.14, 0.14, 0.17)),
+                    ));
+                    if !archive_status.is_required_base_archive {
+                        archive_checkbox_row.insert((
+                            bevy::ui_widgets::Button,
+                            DirectlyHovered::default(),
+                            UiInteractionEnabled(true),
+                        ));
+                    }
+                    archive_checkbox_row.with_child((
+                        Text::new(format_asset_archive_enabled_state_checkbox_label(
+                            archive_status.is_enabled,
+                            archive_status.is_required_base_archive,
+                            &archive_status.archive_name.to_string_lossy(),
+                        )),
+                        TextFont::from_font_size(17.0),
+                        TextColor(if archive_status.is_required_base_archive {
+                            Color::srgb(0.65, 0.65, 0.68)
+                        } else {
+                            Color::WHITE
+                        }),
+                    ));
+                    if !archive_status.is_required_base_archive {
+                        row.spawn((
+                            ReloadArchiveAtSamePath(archive_status_index),
+                            bevy::ui_widgets::Button,
+                            UiInteractionEnabled(true),
+                            Text::new("Reload"),
+                            TextFont::from_font_size(17.0),
+                            TextColor(Color::WHITE),
+                            BackgroundColor(Color::srgb(0.14, 0.14, 0.17)),
+                            Node {
+                                padding: UiRect::axes(px(8), px(5)),
+                                ..default()
+                            },
+                        ));
+                    }
+                });
         }
     });
     commands
@@ -223,7 +246,7 @@ pub(super) fn apply_mod_manager_visibility_controls(
     }
 }
 
-pub(super) fn toggle_selected_asset_archive_enabled_state(
+pub(super) fn apply_selected_asset_archive_change(
     mut commands: Commands,
     mut asset_archives: ResMut<AssetArchives>,
     asset_server: Res<AssetServer>,
@@ -232,6 +255,8 @@ pub(super) fn toggle_selected_asset_archive_enabled_state(
     shell_screens: Query<&ShellScreen>,
     mut presses: MessageReader<PointerPress>,
     archive_checkboxes: Query<&AssetArchiveEnabledStateCheckbox>,
+    reload_buttons: Query<&ReloadArchiveAtSamePath>,
+    mut overlays: MessageWriter<openzt2_game_assets::asset_source::ArchiveOverlayChanged>,
 ) {
     if *phase.get() != GamePhase::MainMenu
         || !shell_screens
@@ -246,28 +271,35 @@ pub(super) fn toggle_selected_asset_archive_enabled_state(
         .read()
         .filter(|press| press.pointer.id.is_mouse() && press.button == PointerButton::Primary)
     {
-        let Ok(archive_checkbox) = archive_checkboxes.get(press.entity) else {
+        let toggle = archive_checkboxes.get(press.entity).ok();
+        let Some(index) = toggle
+            .map(|checkbox| checkbox.archive_status_index)
+            .or_else(|| reload_buttons.get(press.entity).ok().map(|reload| reload.0))
+        else {
             continue;
         };
         let archive_statuses = asset_archives.enabled_archive_statuses();
-        let Some(selected_archive_status) =
-            archive_statuses.get(archive_checkbox.archive_status_index)
-        else {
+        let Some(selected_archive_status) = archive_statuses.get(index) else {
             continue;
         };
         if selected_archive_status.is_required_base_archive {
             continue;
         }
-        let changed_bevy_asset_paths = match asset_archives.set_archive_enabled(
-            archive_checkbox.archive_status_index,
-            !selected_archive_status.is_enabled,
-        ) {
-            Ok(changed_bevy_asset_paths) => changed_bevy_asset_paths,
+        let edit = if toggle.is_some() {
+            asset_archives.set_archive_enabled(index, !selected_archive_status.is_enabled)
+        } else {
+            asset_archives.reload_archive_at_same_path(index)
+        };
+        let edit = match edit {
+            Ok(edit) => edit,
             Err(archive_mutation_error) => {
-                error!("could not change Z2F state: {archive_mutation_error}");
+                error!("could not update Z2F archive: {archive_mutation_error}");
                 return;
             }
         };
+        if edit.publication.is_none() {
+            return;
+        }
         let Some(main_menu_document_path) =
             select_bevy_asset_path_for_canonical_ui_document_role(UiDocumentRole::MainMenu)
         else {
@@ -279,9 +311,30 @@ pub(super) fn toggle_selected_asset_archive_enabled_state(
         let main_menu = existing_menu
             .clone()
             .unwrap_or_else(|| asset_server.load(menu_path.clone()));
-        let mut operation = AssetArchiveReloadOperation::new();
+        let generation = edit
+            .publication
+            .as_ref()
+            .map(|publication| publication.generation);
+        let mut operation = AssetArchiveReloadOperation::new(generation);
+        if let Some(publication) = edit.publication {
+            for change in &publication.changes {
+                use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
+                let path = &change.normalized_asset_path;
+                if asset_server
+                    .get_handle::<WorldScenarioDocumentAsset>(path.clone())
+                    .is_some()
+                {
+                    if let Some(entry) = publication.reload_entry_path(path) {
+                        let snapshot = asset_server.load::<WorldScenarioDocumentAsset>(entry);
+                        operation.expect_reload(snapshot.untyped());
+                    }
+                }
+            }
+            overlays.write(publication);
+        }
         let mut menu_reload_requested = false;
-        for path in changed_bevy_asset_paths
+        for path in edit
+            .changed_asset_paths
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>()
         {

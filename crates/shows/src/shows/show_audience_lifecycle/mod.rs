@@ -20,15 +20,15 @@ use openzt2_zoo_state::{
         behavior_token_types::{BehaviorSelfToken, ClaimedBehaviorSelfToken},
     },
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
         running_actions::{RunBehaviorWatchShow, RunningBehaviorInstruction},
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     economy::{
         authored_transaction_amount::authored_currency_to_money,
         experience_donation::ExperienceDonation, facility_economy_types::Wallet,
         service_types::ServiceReservation,
     },
-    guests::guest_simulation_types::{Guest, GuestNeedAdjustmentDue, GuestPhase, GuestRng},
+    guests::guest_simulation_types::{Guest, GuestPhase, GuestRng},
     locomotion::locomotion_types::{Destination, SpatialGrid, SpatialGridMembership},
     shows::{
         running_show_types::{
@@ -39,50 +39,6 @@ use openzt2_zoo_state::{
         show_stage_types::{ShowStage, ShowStageOpenState},
     },
 };
-
-pub(super) fn reconcile_guest_show_needs(
-    mut due: MessageReader<GuestNeedAdjustmentDue>,
-    source: Res<AuthoredShowRewardsSource>,
-    rewards: Res<Assets<AuthoredShowRewards>>,
-    mut existing: Query<&mut GuestShowNeed, With<Guest>>,
-    mut added: Query<(Entity, &mut GuestRng), (With<Guest>, Without<GuestShowNeed>)>,
-    mut commands: Commands,
-) {
-    let Some(policy) = rewards
-        .get(&source.0)
-        .and_then(|rewards| rewards.audience_need.as_ref())
-    else {
-        due.clear();
-        return;
-    };
-    let mut initialize_due = bevy::ecs::entity::EntityHashSet::default();
-    for event in due.read() {
-        if let Ok(mut need) = existing.get_mut(event.0) {
-            need.adjust(policy.adjustment);
-        } else {
-            initialize_due.insert(event.0);
-        }
-    }
-    for (entity, mut random) in &mut added {
-        let [minimum, maximum] = policy.initial;
-        let value = if minimum == maximum {
-            minimum
-        } else {
-            minimum + (maximum - minimum) * random.0.unit_f32()
-        };
-        let mut need = GuestShowNeed {
-            value,
-            triggered: value >= policy.trigger,
-            minimum: policy.cessation,
-            cessation: policy.cessation,
-            trigger: policy.trigger,
-        };
-        if initialize_due.contains(&entity) {
-            need.adjust(policy.adjustment);
-        }
-        commands.entity(entity).insert(need);
-    }
-}
 
 pub(super) fn invite_guests_to_starting_shows(
     runs: Query<(&RunningShow, &RunningShowOnStage, &RunningShowFromRow), Added<RunningShow>>,

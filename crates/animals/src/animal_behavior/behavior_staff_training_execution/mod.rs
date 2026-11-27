@@ -22,12 +22,13 @@ use openzt2_zoo_state::{
     animal_health::types::Dead,
     animal_lifecycle::types::SpeciesHandle,
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, BehaviorTaskReturnFrame, PendingBehaviorTaskFailure,
         running_actions::{
-            BehaviorStepFixedSet, BehaviorTaskReplaced, RunBehaviorStaffTrainAnimal,
-            RunningBehaviorInstruction, SelectedBehaviorSet, TrainerEnabledTricks,
             activated_behavior_actor, behavior_action_actors, update_waiting_behavior_actors,
+            BehaviorStepFixedSet, BehaviorTaskReplaced, CompletedPlayerTraining,
+            RunBehaviorStaffTrainAnimal, RunningBehaviorInstruction, SelectedBehaviorSet,
+            TrainerEnabledTricks,
         },
+        BehaviorTaskExecutionState, BehaviorTaskReturnFrame, PendingBehaviorTaskFailure,
     },
     shows::performer_training::PerformerTraining,
     staff::{
@@ -39,6 +40,29 @@ use super::{
     behavior_subject_type_resolution::behavior_subject_type_identifiers,
     behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
 };
+
+fn record_perfect_training(
+    completed: On<CompletedPlayerTraining>,
+    sessions: Query<
+        &openzt2_interface_state::immersive_modes::immersive_mode_state_types::FirstPersonTraining,
+    >,
+    animals: Query<&WorldMember, With<SpeciesHandle>>,
+    mut commands: Commands,
+) {
+    if !completed.perfect {
+        return;
+    }
+    let Ok(session) = sessions.get(completed.entity) else {
+        return;
+    };
+    let Ok(member) = animals.get(session.subject) else {
+        return;
+    };
+    commands.write_message(openzt2_progression::progression::RecordAwardOutcome {
+        root: member.root,
+        outcome: openzt2_progression::progression::AwardHistoryOutcome::PerfectTraining,
+    });
+}
 
 #[derive(Clone, Copy)]
 enum TrainingPhase {
@@ -63,7 +87,8 @@ struct AnimalTrainingSession {
 }
 
 pub(super) fn register(app: &mut App) {
-    app.add_observer(activated_behavior_actor::<RunBehaviorStaffTrainAnimal>.pipe(train_animal))
+    app.add_observer(record_perfect_training)
+        .add_observer(activated_behavior_actor::<RunBehaviorStaffTrainAnimal>.pipe(train_animal))
         .add_observer(clear_training_session)
         .add_observer(clear_replaced_training_session)
         .add_systems(

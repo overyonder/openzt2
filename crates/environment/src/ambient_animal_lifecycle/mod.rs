@@ -56,6 +56,7 @@ use super::{
         random_probability_threshold_passes, sample_inclusive_u32_range,
     },
     environment_state_types::Daylight,
+    world_environment_initialization::AdditionalAmbientActors,
 };
 
 const AMBIENT_PLACEMENT_TRIES: usize = 10;
@@ -64,7 +65,7 @@ const AMBIENT_PLACEMENT_TRIES: usize = 10;
 pub(super) struct WorldAmbientCandidates {
     biomes: BTreeMap<AssetId, [Vec<AssetId>; 2]>,
     listed_air: Vec<AssetId>,
-    unlisted: [Vec<AssetId>; 3],
+    additional: [Vec<AssetId>; 3],
 }
 
 pub(super) fn reconcile_world_ambient_candidates(
@@ -72,47 +73,58 @@ pub(super) fn reconcile_world_ambient_candidates(
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     audio: Res<AudioAssets>,
     audio_assets: Res<Assets<AudioAsset>>,
-    mut worlds: Query<&mut WorldAmbientCandidates>,
+    mut worlds: Query<(Ref<AdditionalAmbientActors>, &mut WorldAmbientCandidates)>,
 ) {
     let sources_changed = definitions.is_changed()
         || definition_assets.is_changed()
         || audio.is_changed()
         || audio_assets.is_changed();
     let mut resolved = None;
-    for mut candidates in &mut worlds {
-        if !sources_changed && !candidates.is_added() {
+    for (additional, mut candidates) in &mut worlds {
+        if !sources_changed && !candidates.is_added() && !additional.is_changed() {
             continue;
         }
         let next = resolved.get_or_insert_with(|| {
             let catalogue = definitions.get(&definition_assets)?;
             let audio = audio.get(&audio_assets)?;
-            Some(build_ambient_candidates(catalogue, audio))
+            let mut by_key = BTreeMap::new();
+            for object in catalogue.objects() {
+                if let Some(class) = ambient_class(object) {
+                    by_key.insert(object.id, (object.id, class));
+                    if let Some(key) = catalogue.object_record_key(object.id) {
+                        by_key.insert(AssetId::from_key(key), (object.id, class));
+                        by_key.insert(
+                            AssetId::from_key(&key.to_ascii_lowercase()),
+                            (object.id, class),
+                        );
+                    }
+                }
+            }
+            Some((build_ambient_candidates(catalogue, audio, &by_key), by_key))
         });
-        candidates.set_if_neq(
-            next.as_ref()
-                .map_or_else(WorldAmbientCandidates::default, Clone::clone),
-        );
+        let Some((listed, by_key)) = next.as_ref() else {
+            candidates.set_if_neq(WorldAmbientCandidates::default());
+            continue;
+        };
+        let mut next = listed.clone();
+        for &(object, class) in additional.keys().iter().filter_map(|key| by_key.get(key)) {
+            let bucket = match class {
+                AmbientClass::Ground => 0,
+                AmbientClass::Water => 1,
+                AmbientClass::Air => 2,
+            };
+            next.additional[bucket].push(object);
+        }
+        candidates.set_if_neq(next);
     }
 }
 
 fn build_ambient_candidates(
     definitions: WorldDefinitionsView<'_>,
     audio: AudioView<'_>,
+    by_key: &BTreeMap<AssetId, (AssetId, AmbientClass)>,
 ) -> WorldAmbientCandidates {
     let mut candidates = WorldAmbientCandidates::default();
-    let mut by_key = BTreeMap::new();
-    let mut ambient_objects = Vec::new();
-    for object in definitions.objects() {
-        let Some(class) = ambient_class(object) else {
-            continue;
-        };
-        by_key.insert(object.id, (object.id, class));
-        if let Some(key) = definitions.object_record_key(object.id) {
-            by_key.insert(AssetId::from_key(key), (object.id, class));
-        }
-        ambient_objects.push((object.id, class));
-    }
-    let mut listed = BTreeSet::new();
     let mut air = BTreeSet::new();
     for biome in definitions.biomes() {
         let Some(allowed) = audio.soundscape_allowed_entities(biome.id) else {
@@ -125,7 +137,6 @@ fn build_ambient_candidates(
             .filter_map(|key| by_key.get(key))
             .copied()
         {
-            listed.insert(id);
             match class {
                 AmbientClass::Air if air.insert(id) => candidates.listed_air.push(id),
                 AmbientClass::Ground => local[0].push(id),
@@ -134,16 +145,6 @@ fn build_ambient_candidates(
             }
         }
         candidates.biomes.insert(biome.id, local);
-    }
-    for (id, class) in ambient_objects {
-        if !listed.contains(&id) {
-            candidates.unlisted[match class {
-                AmbientClass::Ground => 0,
-                AmbientClass::Water => 1,
-                AmbientClass::Air => 2,
-            }]
-            .push(id);
-        }
     }
     candidates
 }
@@ -432,7 +433,7 @@ fn select_listed_ambient<'a>(
         .biomes
         .get(&biome)
         .map_or(&[][..], |choices| &choices[usize::from(water)]);
-    let [ground, water_only, air] = candidates.unlisted.each_ref();
+    let [ground, water_only, air] = candidates.additional.each_ref();
     let groups: [&[AssetId]; 4] = if water {
         [local, water_only, &candidates.listed_air, air]
     } else {

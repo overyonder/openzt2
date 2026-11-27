@@ -3,10 +3,13 @@ use bevy::{
     ecs::{query::QueryData, system::SystemParam},
     prelude::*,
 };
+use openzt2_extinct_animals::extinct_animals::FossilSkeletonRewardTimer;
+use openzt2_progression::progression::AwardDomainHistory;
 use openzt2_progression::progression::{
     AuthoredAwardName, AuthoredAwardPoints, AwardGlobalVariables,
 };
 use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
+use openzt2_zoo_state::extinct_animals::extinct_animal_observable_fact_types::FossilEducationProgress;
 use openzt2_zoo_state::progression::award_and_progression_fact_types::ProgressionAwardPresentationAcknowledged;
 
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
@@ -35,6 +38,9 @@ use super::{
 
 #[derive(SystemParam)]
 pub(super) struct ProgressionSnapshotApplicationParameters<'w, 's> {
+    award_history: Query<'w, 's, &'static mut AwardDomainHistory>,
+    fossil_education: Query<'w, 's, &'static mut FossilEducationProgress>,
+    fossil_skeleton_rewards: Query<'w, 's, &'static mut FossilSkeletonRewardTimer>,
     fixed_time: Res<'w, Time<Fixed>>,
     world_progression: Query<
         'w,
@@ -141,7 +147,51 @@ pub(super) fn apply_progression_snapshot_records_to_live_world(
         definition_count: progression_snapshot_records.unlocked_catalogue_definition_count,
         words: progression_snapshot_records.unlocked_catalogue_definition_bit_words,
     });
+    for (&id, &bone_level) in &progression_snapshot_records.fossil_education {
+        let entity = identities
+            .get(world_root_entity, PersistentId(id))
+            .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+        if let Ok(mut value) = progression_snapshot_application_parameters
+            .fossil_education
+            .get_mut(entity)
+        {
+            value.set_if_neq(FossilEducationProgress { bone_level });
+        } else {
+            commands
+                .entity(entity)
+                .insert(FossilEducationProgress { bone_level });
+        }
+        let reward = progression_snapshot_records
+            .fossil_skeleton_rewards
+            .get(&id)
+            .map(|saved| FossilSkeletonRewardTimer {
+                timer: Timer::new(
+                    std::time::Duration::from_nanos(saved.remaining_ns),
+                    TimerMode::Once,
+                ),
+                reward: saved.reward,
+                message: saved.message,
+            });
+        restore_optional_component(
+            &mut commands.entity(entity),
+            progression_snapshot_application_parameters
+                .fossil_skeleton_rewards
+                .get_mut(entity)
+                .ok(),
+            reward,
+            true,
+        );
+    }
     let mut root = commands.entity(world_root_entity);
+    restore_optional_component(
+        &mut root,
+        progression_snapshot_application_parameters
+            .award_history
+            .get_mut(world_root_entity)
+            .ok(),
+        progression_snapshot_records.award_history,
+        false,
+    );
     if let Some(mut points) = award_points {
         if points.0 != progression_snapshot_records.scenario_award_points {
             points.0 = progression_snapshot_records.scenario_award_points;
@@ -267,12 +317,24 @@ pub(super) fn apply_progression_snapshot_records_to_live_world(
             }),
             false,
         );
-        let saved_countdown = research_availability_snapshot_record
-            .remaining_unlock_ticks
-            .map(|remaining_ticks| ResearchAvailabilityUnlockCountdown {
+        let saved_countdown = if let Some((duration, elapsed)) =
+            research_availability_snapshot_record.unlock_timer_ns
+        {
+            let mut timer = Timer::new(std::time::Duration::from_nanos(duration), TimerMode::Once);
+            timer.set_elapsed(std::time::Duration::from_nanos(elapsed));
+            Some(ResearchAvailabilityUnlockCountdown {
                 item: definition,
-                timer: Timer::new(duration_for_ticks(step, remaining_ticks), TimerMode::Once),
-            });
+                timer,
+            })
+        } else {
+            research_availability_snapshot_record
+                .remaining_unlock_ticks
+                .map(|remaining| {
+                    ResearchAvailabilityUnlockCountdown::from_saved_ticks(
+                        definition, step, remaining,
+                    )
+                })
+        };
         restore_optional_component(&mut entity, countdown, saved_countdown, true);
     }
     for species_adoption_chance_snapshot_record in
@@ -354,12 +416,21 @@ pub(super) fn restore_saved_research_projects(
                 .id()
         };
         let current = active_research.get_mut(item).ok();
-        let mut timer = Timer::new(
-            duration_for_ticks(step, project.required_simulation_ticks),
-            TimerMode::Once,
-        );
-        timer.set_elapsed(duration_for_ticks(step, project.elapsed_simulation_ticks));
-        let progress = ResearchProject { definition, timer };
+        let progress = if let Some((required, elapsed)) = project.timer_ns {
+            let mut progress =
+                ResearchProject::new(definition, std::time::Duration::from_nanos(required));
+            progress
+                .timer
+                .set_elapsed(std::time::Duration::from_nanos(elapsed));
+            progress
+        } else {
+            ResearchProject::from_saved_ticks(
+                definition,
+                step,
+                project.required_simulation_ticks,
+                project.elapsed_simulation_ticks,
+            )
+        };
         let mut entity = commands.entity(item);
         if let Some((mut id, mut state)) = current {
             state.set_if_neq(progress);
@@ -389,14 +460,6 @@ pub(super) fn restore_saved_research_projects(
         }
     }
     Ok(())
-}
-
-fn duration_for_ticks(step: std::time::Duration, ticks: u64) -> std::time::Duration {
-    let ns = step.as_nanos().saturating_mul(u128::from(ticks));
-    std::time::Duration::new(
-        u64::try_from(ns / 1_000_000_000).unwrap_or(u64::MAX),
-        (ns % 1_000_000_000) as u32,
-    )
 }
 
 fn find_existing_or_spawn_progression_snapshot_entity(

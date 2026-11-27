@@ -61,6 +61,14 @@ pub struct TankGeometry {
     pub volume: f32,
 }
 
+/// Exact topology footprint affected by a tank's water or geometry change.
+#[derive(Message, Debug, Clone)]
+pub struct TankWaterCellsChanged {
+    pub root: Entity,
+    pub tank: Entity,
+    pub cells: Box<[IVec2]>,
+}
+
 impl TankGeometry {
     pub fn depth(self) -> f32 {
         (self.water_height - self.floor_height).max(0.0)
@@ -145,7 +153,7 @@ pub enum MarinePlacementFailure {
     InvalidGeometry,
 }
 
-/// A placed tank filter: the time to its next cleanup and how full it is, 0 to 100.
+/// A placed tank filter with its authored policy and fill level from 0 to 100.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct WaterFilter {
     pub policy: WaterFilterPolicy,

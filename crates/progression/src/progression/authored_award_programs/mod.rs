@@ -27,7 +27,7 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::{AssetId, species::LifeStage};
+use openzt2_game_data::{species::LifeStage, AssetId};
 pub use openzt2_interface_state::information::award_presentation_types::{
     AwardGroupPresentation, AwardMilestonePresentation, AwardProgramEffect, AwardProgramOf,
     WorldAwardPrograms,
@@ -126,7 +126,7 @@ use super::{
 const AWARD_PROGRAM_DIRECTORY: &str = "scenario/scripts/awards";
 const AWARD_GROUPS_PER_PASS: usize = 2;
 
-#[derive(Component, Default)]
+#[derive(Component, Default, PartialEq, Eq)]
 pub struct AuthoredAwardPoints(pub u32);
 
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
@@ -462,10 +462,15 @@ pub(super) fn process_authored_award_programs(
             let mut apply_fame_before_panel = false;
             for command in next {
                 match command {
-                    AwardEffect::Document(document) => {
-                        if presentation.document != document {
-                            presentation.document = document;
-                        }
+                    AwardEffect::Document { path, persistent } => {
+                        presentation
+                            .reborrow()
+                            .map_unchanged(|presentation| &mut presentation.document)
+                            .set_if_neq(path);
+                        presentation
+                            .reborrow()
+                            .map_unchanged(|presentation| &mut presentation.persistent)
+                            .set_if_neq(persistent);
                     }
                     AwardEffect::Progress { index, value } => {
                         if presentation
@@ -581,10 +586,10 @@ pub(super) fn process_authored_award_programs(
                             .display
                             .write(AwardProgramEffect::ReplaceZooWalls { root, definition });
                     }
-                    AwardEffect::Ambient(cue) => {
+                    AwardEffect::Ambient(actor) => {
                         effects
                             .display
-                            .write(AwardProgramEffect::AddAmbientSound { root, cue });
+                            .write(AwardProgramEffect::AddAmbientSound { root, cue: actor });
                     }
                     AwardEffect::Cash(dollars) => {
                         if let Some((writer, amount)) = effects
@@ -790,7 +795,10 @@ impl AwardFacts<'_, '_, '_> {
 }
 
 enum AwardEffect {
-    Document(String),
+    Document {
+        path: String,
+        persistent: bool,
+    },
     Progress {
         index: usize,
         value: f32,
@@ -878,7 +886,13 @@ fn install_award_group_bindings<'scope, 'env: 'scope>(
         "create_award_group_graphics",
         scope.create_function(move |_, group: Table| {
             if let Some(document) = group.get::<Option<String>>("group_xml")? {
-                effects.borrow_mut().push(AwardEffect::Document(document));
+                let persistent = group
+                    .get::<Option<bool>>("persistent_awards")?
+                    .unwrap_or(false);
+                effects.borrow_mut().push(AwardEffect::Document {
+                    path: document,
+                    persistent,
+                });
             }
             Ok(())
         })?,
@@ -1497,7 +1511,9 @@ fn install_award_world_bindings<'scope, 'env: 'scope>(
         scope.create_function(move |_, (_, name): (Table, String)| {
             effects
                 .borrow_mut()
-                .push(AwardEffect::Ambient(AssetId::from_key(&name)));
+                .push(AwardEffect::Ambient(AssetId::from_key(
+                    &name.to_ascii_lowercase(),
+                )));
             Ok(())
         })?,
     )?;
@@ -1514,7 +1530,9 @@ fn install_award_world_bindings<'scope, 'env: 'scope>(
         "queryObject",
         scope.create_function(move |_, name: String| {
             Ok(match name.as_str() {
-                "ZTStatus" | "ZTWorldMgr" | "ZTDiseaseMgr" => Some(status.clone()),
+                "ZTStatus" | "ZTWorldMgr" | "ZTDiseaseMgr" | "ZTAIAmbientsMgr" => {
+                    Some(status.clone())
+                }
                 "ZTPuzzleMgr" => Some(fossil_manager.clone()),
                 "BFGManager" => Some(game_manager.clone()),
                 _ => None,

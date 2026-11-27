@@ -13,10 +13,7 @@ use openzt2_zoo_state::terrain::terrain_navigation_change_types::{TerrainNavigat
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
 use super::{
-    staff_job_types::{
-        authored_staff_request_urgency, StaffJob, StaffJobRouting, TankCleaningRequestSite,
-        TankCleaningSite,
-    },
+    staff_job_types::{StaffJob, StaffJobRouting, TankCleaningRequestSite, TankCleaningSite},
     staff_lifecycle_messages::{CancelStaffJobRequest, StaffJobRequest},
 };
 
@@ -56,7 +53,7 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
         ),
         With<Tank>,
     >,
-    mut sites: Query<&mut Transform, With<TankCleaningRequestSite>>,
+    mut sites: Query<&mut Transform>,
     worlds: Query<Ref<SelectedWorldIdentity>>,
     jobs: Query<(Entity, &StaffJob, Option<&StaffJobRouting>)>,
     mut removed_sites: RemovedComponents<TankCleaningSite>,
@@ -105,7 +102,7 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
         let dirtiness = 1.0 - f32::from(quality.0.min(1000)) / 1000.0;
         let requested = policy.and_then(|policy| {
             let token = policy.request.token?;
-            let urgency = authored_staff_request_urgency(policy.request.priority)?;
+            let priority = policy.request.priority;
             if dirtiness < policy.dirt_threshold {
                 return None;
             }
@@ -116,9 +113,9 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
                 subject_type: policy.request.subject_type,
                 recipient: policy.request.staff,
             };
-            Some((token, urgency, point, routing))
+            Some((token, priority, point, routing))
         });
-        if let Some((token, urgency, point, routing)) = requested {
+        if let Some((token, priority, point, routing)) = requested {
             let Some(world) = world else {
                 continue;
             };
@@ -131,11 +128,11 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
                     } else {
                         commands
                             .entity(site)
-                            .insert(Transform::from_translation(point));
+                            .insert_if_new(Transform::from_translation(point));
                     }
                     for (job, _, _) in jobs.iter().filter(|(_, job, current_routing)| {
                         job.kind == Some(StaffJobKind::MaintainTank)
-                            && job.target == site
+                            && job.target == Some(site)
                             && (job.token != Some(token)
                                 || current_routing.copied().unwrap_or_default() != routing)
                     }) {
@@ -162,9 +159,13 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
                 }
             };
             requests.write(StaffJobRequest {
+                root: world.root,
                 kind: Some(StaffJobKind::MaintainTank),
-                target: site,
-                urgency,
+                target: Some(site),
+                point: None,
+                priority,
+                issued_at_seconds: 0.0,
+                remaining_wait_seconds: 0.0,
                 token: Some(token),
                 routing,
             });
@@ -174,7 +175,7 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
             continue;
         };
         for (job, ..) in jobs.iter().filter(|(_, job, _)| {
-            job.kind == Some(StaffJobKind::MaintainTank) && job.target == site
+            job.kind == Some(StaffJobKind::MaintainTank) && job.target == Some(site)
         }) {
             cancellations.write(CancelStaffJobRequest { job });
         }

@@ -1,4 +1,7 @@
-use crate::source_document::ui::model::SourceUiEvent;
+use crate::source_document::{
+    source_document_semantic_name::canonicalize_source_document_record_key,
+    ui::model::SourceUiEvent,
+};
 use crate::ui_document::source::lower::authored_ui_action_argument_lowering::worker_task;
 use crate::ui_document::source::lower::authored_ui_document_lowering::AuthoredUiDocument;
 use crate::ui_document::source::lower::authored_ui_scalar_value_lowering::invalid_at;
@@ -6,6 +9,7 @@ use openzt2_game_data::ui_document::action::staff_management::{
     UiStaffAction, UiStaffActionRecord,
 };
 use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
+use openzt2_game_data::AssetId;
 use std::io;
 
 pub(super) fn lower_staff_command(
@@ -44,8 +48,29 @@ pub(super) fn lower_staff_command(
         })),
         "ZT_DELETE_KEEPER_ASSIGNMENT" => Ok(UiActionRecord::Staff(UiStaffActionRecord {
             trigger,
-            action: UiStaffAction::ClearSelectedKeeperAssignmentTarget,
+            action: UiStaffAction::RemoveSelectedStaffAssignment,
         })),
+        "ZT_TRAINER_TRAIN_TRICK" | "ZT_TRAINER_DONT_TRAIN_TRICK" => {
+            let trick = event
+                .string
+                .as_deref()
+                .or(event.value.as_deref())
+                .map(canonicalize_source_document_record_key)
+                .filter(|name| !name.is_empty());
+            let Some(trick) = trick else {
+                return Err(invalid_at(
+                    input,
+                    format!("{} requires an authored trick ID", event.message),
+                ));
+            };
+            Ok(UiActionRecord::Staff(UiStaffActionRecord {
+                trigger,
+                action: UiStaffAction::SetTrainerTrickEnabled {
+                    trick: AssetId::from_key(&trick),
+                    enabled: event.message == "ZT_TRAINER_TRAIN_TRICK",
+                },
+            }))
+        }
         "ZT_ASSIGN_WORKER" | "ZT_UNASSIGN_WORKER" => {
             let task = worker_task(event).ok_or_else(|| {
                 invalid_at(
