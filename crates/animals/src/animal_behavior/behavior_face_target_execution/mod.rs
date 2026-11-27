@@ -10,6 +10,7 @@ use openzt2_zoo_state::behavior_task_execution_types::{
     advance_behavior_task_to_next_action, find_current_behavior_task_action,
     BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
 };
+use openzt2_zoo_state::locomotion::locomotion_types::TurnToHeading;
 
 pub(super) fn register_face_target_execution(application: &mut App) {
     application.add_systems(
@@ -23,18 +24,27 @@ pub(super) fn register_face_target_execution(application: &mut App) {
 
 /// Turns the subject to its target's position when it starts, plus the
 /// authored offset, unless its heading is already within the authored error.
-/// Headings change at once, as docking aligns them.
+/// An animal turns on the spot with its turning clips, as `zt.exe` hands the
+/// heading to locomotion (`BFBehFaceTarget`, `FUN_0061ded7`), and the action
+/// waits for it; anyone else turns at once.
 fn face_current_behavior_targets(
+    mut commands: Commands,
     clock: Res<ZooClock>,
     documents: Res<Assets<BehaviorDocumentAsset>>,
     mut actors: Query<
-        (&mut BehaviorTaskExecutionState, &mut Transform),
+        (
+            Entity,
+            &mut BehaviorTaskExecutionState,
+            &mut Transform,
+            Has<openzt2_zoo_state::animal_lifecycle::types::Animal>,
+            Has<TurnToHeading>,
+        ),
         Without<PendingBehaviorTaskFailure>,
     >,
     targets: Query<&GlobalTransform>,
 ) {
-    for (mut task, mut transform) in &mut actors {
-        if task.next_action_tick > clock.tick {
+    for (actor, mut task, mut transform, animal, turning) in &mut actors {
+        if turning || task.next_action_tick > clock.tick {
             continue;
         }
         let Some(&BehaviorAction::FaceTarget(action)) = documents
@@ -59,6 +69,13 @@ fn face_current_behavior_targets(
             let error = (wanted - current + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
                 - std::f32::consts::PI;
             if error.abs() > action.rotation_tolerance_radians {
+                if animal {
+                    commands.entity(actor).insert(TurnToHeading {
+                        heading_radians: wanted,
+                        tolerance_radians: action.rotation_tolerance_radians,
+                    });
+                    continue;
+                }
                 transform.rotation = Quat::from_rotation_y(wanted);
             }
         }

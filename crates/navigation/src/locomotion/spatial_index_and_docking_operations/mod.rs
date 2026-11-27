@@ -106,6 +106,10 @@ pub(crate) fn detect_stuck_agents(
     }
 }
 
+/// How far from its dock's heading a docked animal may face, as the
+/// `rotError` `zt.exe` gives a turn by default.
+const DOCK_TURN_TOLERANCE_RADIANS: f32 = 5.0 * std::f32::consts::PI / 180.0;
+
 pub(super) fn complete_docking(
     mut commands: Commands,
     mut dockers: Query<(
@@ -119,6 +123,8 @@ pub(super) fn complete_docking(
         Option<&mut Route>,
         Option<&mut Steering>,
         Option<&LocomotionMode>,
+        Has<openzt2_zoo_state::animal_lifecycle::types::Animal>,
+        Has<openzt2_zoo_state::locomotion::locomotion_types::TurnToHeading>,
     )>,
     targets: Query<&GlobalTransform>,
     mut arrived: MessageWriter<Arrived>,
@@ -135,8 +141,13 @@ pub(super) fn complete_docking(
         route,
         steering,
         locomotion_mode,
+        animal,
+        turning,
     ) in &mut dockers
     {
+        if turning {
+            continue;
+        }
         if targets.get(docking.target).is_err() {
             commands.entity(entity).remove::<(Docking, Destination)>();
             failed.write(NavigationFailed {
@@ -170,8 +181,31 @@ pub(super) fn complete_docking(
             .transform_point3(docking.point);
         let forward = Vec2::new(docking.forward.x, docking.forward.z).normalize_or_zero();
         if forward != Vec2::ZERO {
-            transform.rotation = parent_transform.rotation().inverse()
+            let heading = parent_transform.rotation().inverse()
                 * Quat::from_rotation_y(forward.x.atan2(forward.y));
+            // An animal stops on its dock and turns to face along it with its
+            // turning clips, as `zt.exe` docks it through locomotion
+            // (`FUN_0061ded7`), before it arrives.
+            if animal && transform.rotation.angle_between(heading) > DOCK_TURN_TOLERANCE_RADIANS {
+                let facing = heading * Vec3::Z;
+                commands.entity(entity).remove::<Destination>().insert(
+                    openzt2_zoo_state::locomotion::locomotion_types::TurnToHeading {
+                        heading_radians: facing.x.atan2(facing.z),
+                        tolerance_radians: DOCK_TURN_TOLERANCE_RADIANS,
+                    },
+                );
+                if let Some(mut velocity) = velocity {
+                    velocity.0 = Vec3::ZERO;
+                }
+                if let Some(mut route) = route {
+                    route.clear();
+                }
+                if let Some(mut steering) = steering {
+                    steering.desired_velocity = Vec3::ZERO;
+                }
+                continue;
+            }
+            transform.rotation = heading;
         }
         if let Some(mut velocity) = velocity {
             velocity.0 = Vec3::ZERO;

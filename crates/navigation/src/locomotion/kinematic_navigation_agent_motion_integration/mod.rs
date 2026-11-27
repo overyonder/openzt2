@@ -23,6 +23,15 @@ use openzt2_zoo_state::locomotion::locomotion_types::Steering;
 use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+/// Beyond this from the way it walks, an animal turns on the spot first.
+const ANIMAL_TURN_IN_PLACE_RADIANS: f32 = std::f32::consts::FRAC_PI_3;
+
+/// How close to its way an animal turns on the spot before it walks.
+const ANIMAL_TURN_TOLERANCE_RADIANS: f32 = 10.0 * std::f32::consts::PI / 180.0;
+
+/// How fast a walking animal turns towards its way.
+const ANIMAL_WALKING_TURN_RATE_RADIANS_PER_SECOND: f32 = std::f32::consts::FRAC_PI_2;
+
 pub(super) fn integrate_non_physics_planned_navigation_motion(
     mut commands: Commands,
     animation_samples: LocomotionAnimationSamples,
@@ -48,6 +57,8 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
             Option<&Docking>,
             Option<&LocomotionAnimationSource>,
             Option<&openzt2_zoo_state::locomotion::locomotion_types::EntityPursuit>,
+            Has<openzt2_zoo_state::animal_lifecycle::types::Animal>,
+            Has<openzt2_zoo_state::locomotion::locomotion_types::TurnToHeading>,
         ),
         (Without<DirectLocomotion>, Without<RigidBody>),
     >,
@@ -66,14 +77,53 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
         docking,
         animation_source,
         pursuit,
+        animal,
+        turning,
     ) in &mut non_physics_navigation_agents
     {
+        // An animal turning on the spot stays put until it faces its way.
+        if turning {
+            local_velocity.0 = Vec3::ZERO;
+            continue;
+        }
+        let mut steering_velocity = steering.desired_velocity;
+        // Swimmers and fliers turn as they go; turning clips are for ground.
+        if animal && locomotion_mode.copied().unwrap_or_default() == LocomotionMode::Ground {
+            let wanted = planned_route.current().map_or(Vec2::ZERO, |point| {
+                (point - local_transform.translation).xz()
+            });
+            if wanted.length_squared() > 1.0e-6 {
+                let facing = local_transform.rotation * Vec3::Z;
+                let error = (wanted.x.atan2(wanted.y) - facing.x.atan2(facing.z)
+                    + std::f32::consts::PI)
+                    .rem_euclid(std::f32::consts::TAU)
+                    - std::f32::consts::PI;
+                // A way far round, such as a destination behind, is faced on
+                // the spot with turning clips first, as `zt.exe` plans a turn
+                // before a walk; a smaller one is taken while walking, at a
+                // limited rate, rather than at once.
+                if error.abs() > ANIMAL_TURN_IN_PLACE_RADIANS {
+                    commands.entity(navigation_agent_entity).insert(
+                        openzt2_zoo_state::locomotion::locomotion_types::TurnToHeading {
+                            heading_radians: wanted.x.atan2(wanted.y),
+                            tolerance_radians: ANIMAL_TURN_TOLERANCE_RADIANS,
+                        },
+                    );
+                    local_velocity.0 = Vec3::ZERO;
+                    continue;
+                }
+                let step = ANIMAL_WALKING_TURN_RATE_RADIANS_PER_SECOND * fixed_delta_seconds;
+                let heading = Quat::from_rotation_y(error.clamp(-step, step)) * facing;
+                steering_velocity = Vec3::new(heading.x, 0.0, heading.z).normalize_or_zero()
+                    * steering.desired_velocity.length();
+            }
+        }
         let playback = animation_samples.get(navigation_agent_entity, animation_source);
         let animation_mean_speed = animation_source
             .map_or(navigation_agent.max_speed_mps, |source| {
                 source.mean_speed_mps
             });
-        let (desired_velocity, sampled_rotation) = super::sampled_animation_motion_projection::project_sampled_animation_motion_to_steering(steering.desired_velocity, animation_mean_speed, fixed_delta_seconds, &local_transform, playback);
+        let (desired_velocity, sampled_rotation) = super::sampled_animation_motion_projection::project_sampled_animation_motion_to_steering(steering_velocity, animation_mean_speed, fixed_delta_seconds, &local_transform, playback);
         let requested_velocity_change = desired_velocity - local_velocity.0;
         local_velocity.0 += requested_velocity_change
             .clamp_length_max(navigation_agent.acceleration_mps2 * fixed_delta_seconds);
@@ -131,7 +181,7 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
         if horizontal_velocity.length_squared() > 0.0001 {
             let direction =
                 if playback.is_some_and(|(motion, controller)| motion.owns_playback(controller)) {
-                    steering.desired_velocity.xz()
+                    steering_velocity.xz()
                 } else {
                     horizontal_velocity
                 };
