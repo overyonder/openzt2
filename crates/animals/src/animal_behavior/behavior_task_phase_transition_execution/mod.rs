@@ -115,9 +115,12 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
     }
     let failed = if pending_failure.is_some() {
         if behavior_task.phase == BehaviorTaskExecutionPhase::Set {
-            if let Some(frame) = continuations.pop(actor_entity, &mut commands) {
+            if let Some((frame, target)) = continuations.pop(actor_entity, &mut commands) {
                 let depth = behavior_task.depth.saturating_sub(1);
                 behavior_task.restore_suspended_instruction(&frame, depth, tick);
+                if let Some(target) = target {
+                    behavior_task.target = target;
+                }
                 commands.trigger(BehaviorProgramBoundary {
                     entity: actor_entity,
                     tick,
@@ -152,9 +155,12 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
         if instruction.is_some_and(|instruction| instruction.is_current(&behavior_task)) {
             return;
         }
-        if let Some(frame) = continuations.pop(actor_entity, &mut commands) {
+        if let Some((frame, target)) = continuations.pop(actor_entity, &mut commands) {
             let depth = behavior_task.depth.saturating_sub(1);
             behavior_task.restore_suspended_instruction(&frame, depth, tick);
+            if let Some(target) = target {
+                behavior_task.target = target;
+            }
             continue_behavior_program(actor_entity, tick, &mut commands);
             return;
         }

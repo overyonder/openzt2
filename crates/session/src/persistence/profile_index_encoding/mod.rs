@@ -366,19 +366,19 @@ pub(super) fn decode_stored_profile_index(
                 )
             } else {
                 (
-                    decode_length_prefixed_canonical_json_profile_settings_value(
+                    decode_length_prefixed_json_profile_settings_value(
                         profile_index_bytes,
                         &mut profile_index_byte_cursor,
                     )?,
-                    decode_length_prefixed_canonical_json_profile_settings_value(
+                    decode_length_prefixed_json_profile_settings_value(
                         profile_index_bytes,
                         &mut profile_index_byte_cursor,
                     )?,
-                    decode_length_prefixed_canonical_json_profile_settings_value(
+                    decode_length_prefixed_json_profile_settings_value(
                         profile_index_bytes,
                         &mut profile_index_byte_cursor,
                     )?,
-                    decode_length_prefixed_canonical_json_profile_settings_value(
+                    decode_length_prefixed_json_profile_settings_value(
                         profile_index_bytes,
                         &mut profile_index_byte_cursor,
                     )?,
@@ -413,7 +413,7 @@ pub(super) fn decode_stored_profile_index(
         };
         let mut attributes: std::collections::BTreeMap<String, String> =
             if profile_index_format_version >= 6 {
-                decode_length_prefixed_canonical_json_profile_settings_value(
+                decode_length_prefixed_json_profile_settings_value(
                     profile_index_bytes,
                     &mut profile_index_byte_cursor,
                 )?
@@ -521,9 +521,7 @@ fn append_length_prefixed_canonical_json_profile_settings_value(
     Ok(())
 }
 
-fn decode_length_prefixed_canonical_json_profile_settings_value<
-    T: serde::de::DeserializeOwned + serde::Serialize,
->(
+fn decode_length_prefixed_json_profile_settings_value<T: serde::de::DeserializeOwned>(
     profile_index_bytes: &[u8],
     profile_index_byte_cursor: &mut usize,
 ) -> Result<T, ProfileFailure> {
@@ -542,13 +540,10 @@ fn decode_length_prefixed_canonical_json_profile_settings_value<
     let canonical_json_profile_settings_bytes = profile_index_bytes
         .get(*profile_index_byte_cursor..canonical_json_profile_settings_end_byte_offset)
         .ok_or(ProfileFailure::CorruptIndex)?;
+    // The index checksum covers these bytes, so a value written before a
+    // settings field existed still decodes with that field's default.
     let profile_settings_value = serde_json::from_slice(canonical_json_profile_settings_bytes)
         .map_err(|_| ProfileFailure::CorruptIndex)?;
-    if serde_json::to_vec(&profile_settings_value).map_err(|_| ProfileFailure::CorruptIndex)?
-        != canonical_json_profile_settings_bytes
-    {
-        return Err(ProfileFailure::CorruptIndex);
-    }
     *profile_index_byte_cursor = canonical_json_profile_settings_end_byte_offset;
     Ok(profile_settings_value)
 }

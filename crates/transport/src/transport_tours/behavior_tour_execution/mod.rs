@@ -46,7 +46,6 @@ struct SuspendedTourInstruction {
     execution: u64,
     depth: usize,
     frame: BehaviorTaskReturnFrame,
-    target: Option<Entity>,
 }
 
 pub(super) fn register(app: &mut App) {
@@ -77,7 +76,7 @@ fn begin_tour(
     activation: On<WhenBehaviorAction<RunBehaviorTour>>,
     mut guests: Query<(
         &RunningBehaviorInstruction,
-        &mut BehaviorTaskExecutionState,
+        &BehaviorTaskExecutionState,
         &WorldMember,
         &Transform,
         &NavAgent,
@@ -99,7 +98,7 @@ fn begin_tour(
     mut commands: Commands,
 ) {
     let actor = activation.entity;
-    let Ok((instruction, mut task, member, pose, agent, mut requests, suspended, progress)) =
+    let Ok((instruction, task, member, pose, agent, mut requests, suspended, progress)) =
         guests.get_mut(actor)
     else {
         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
@@ -108,11 +107,10 @@ fn begin_tour(
     if !instruction.is_current(&task) {
         return;
     }
-    if let Some(suspended) = suspended.filter(|suspended| {
+    if suspended.is_some_and(|suspended| {
         suspended.execution == task.execution_id
             && task.is_at_exact_frame(&suspended.frame, suspended.depth)
     }) {
-        task.target = suspended.target;
         commands.entity(actor).remove::<SuspendedTourInstruction>();
         if matches!(progress, Some(TourProgress::Disembarked)) {
             if let Ok(clock) = clocks.get(member.root) {
@@ -358,7 +356,6 @@ fn start_seated_tour_feedback(
                 execution: task.execution_id,
                 depth: task.depth,
                 frame: task.create_return_frame_after_action(task.action),
-                target: task.target,
             });
         step.enter_set(
             request.rider,

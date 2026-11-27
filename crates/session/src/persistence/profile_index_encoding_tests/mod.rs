@@ -124,6 +124,56 @@ fn older_profile_versions_restore_defaults_and_migrate_the_album_setting() {
 }
 
 #[test]
+fn settings_written_before_a_field_existed_still_decode() {
+    use super::profile_index_encoding::decode_stored_profile_index;
+    use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
+    use openzt2_interface_state::{
+        input::input_types::GameActionInputBindings,
+        settings::{audio_settings_types::AudioSettings, display_settings_types::DisplaySettings},
+    };
+    let id = create_test_profile_identifier(1);
+    let mut graphics = serde_json::to_value(GraphicsSettings::default()).unwrap();
+    graphics
+        .as_object_mut()
+        .unwrap()
+        .remove("particle_budget_tier")
+        .expect("the graphics settings carry a particle budget tier");
+    let mut bytes = b"OZT2PROF".to_vec();
+    bytes.extend_from_slice(&5_u32.to_le_bytes());
+    bytes.extend_from_slice(&1_u32.to_le_bytes());
+    bytes.extend_from_slice(&id.0);
+    bytes.extend_from_slice(&[0; 32]);
+    bytes.extend_from_slice(&id.0);
+    bytes.extend_from_slice(&10_u64.to_le_bytes());
+    bytes.extend_from_slice(&[0; 16]);
+    bytes.extend_from_slice(&[1, 0]);
+    for count in [7_u32, 2, 1, 3, 1] {
+        bytes.extend_from_slice(&count.to_le_bytes());
+    }
+    for settings in [
+        serde_json::to_vec(&AudioSettings::default()).unwrap(),
+        serde_json::to_vec(&GameActionInputBindings::default()).unwrap(),
+        serde_json::to_vec(&DisplaySettings::default()).unwrap(),
+        serde_json::to_vec(&graphics).unwrap(),
+    ] {
+        bytes.extend_from_slice(&(settings.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&settings);
+    }
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.push(0);
+    bytes.extend_from_slice(&3_u16.to_le_bytes());
+    bytes.extend_from_slice(b"Ava");
+    let mut checksum = blake3::Hasher::new();
+    checksum.update(&bytes[..32]);
+    checksum.update(&bytes[64..]);
+    bytes[32..64].copy_from_slice(checksum.finalize().as_bytes());
+    let (profiles, selected) = decode_stored_profile_index(&bytes).unwrap();
+    assert_eq!(selected, Some(id));
+    assert_eq!(profiles[0].record.profile_display_name, "Ava");
+    assert_eq!(profiles[0].graphics.particle_budget_tier, None);
+}
+
+#[test]
 fn independently_bounded_variables_round_trip_across_profiles() {
     use super::profile_index_encoding::{decode_stored_profile_index, encode_stored_profile_index};
     let records: Vec<_> = (1..=3)

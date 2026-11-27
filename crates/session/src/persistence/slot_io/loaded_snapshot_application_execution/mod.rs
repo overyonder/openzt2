@@ -128,6 +128,7 @@ fn finish_snapshot_restore(
                 reason
             }
         };
+        warn!(?reason, source = ?pending.source, "saved game could not be restored");
         match pending.source {
             SavedGameSource::Native(slot) => {
                 publish_persistence_failure_for_slot_operation(

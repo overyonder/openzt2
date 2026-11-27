@@ -5,7 +5,8 @@ use openzt2_interface_state::ui::ui_document_lifecycle_contracts::{
 
 use bevy::{prelude::*, text::EditableText};
 use openzt2_game_data::ui_document::{
-    action::persistence::UiPersistenceAction, document::UiDocumentRole,
+    action::{persistence::UiPersistenceAction, presentation::UiPresentationAction},
+    document::UiDocumentRole,
 };
 use openzt2_interface_state::persistence::saved_game_source_types::{
     LoadOriginalSavedGame, SavedGameSource,
@@ -29,7 +30,9 @@ use openzt2_interface_state::persistence::profile_types::SelectProfile;
 use openzt2_interface_state::persistence::save_slot_types::DeleteWorldSnapshotFromSlot;
 use openzt2_interface_state::persistence::save_slot_types::LoadSaveSlotCatalogue;
 use openzt2_interface_state::persistence::save_slot_types::LoadWorldSnapshotFromSlot;
+use openzt2_interface_state::persistence::save_slot_types::SaveSlotCatalogue;
 use openzt2_interface_state::persistence::save_slot_types::SaveSlotId;
+use openzt2_ui::authored_ui_presentation_action_application::RequestUiPresentationAction;
 
 use super::{
     persistence_failure_types::{
@@ -105,6 +108,10 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
         With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
     >,
     dialog_owner: GameViewDocumentOwner,
+    (save_slot_catalogue, mut presentation): (
+        Res<SaveSlotCatalogue>,
+        MessageWriter<RequestUiPresentationAction>,
+    ),
 ) {
     for activated_ui_node in activated_ui_nodes.read() {
         let Ok((authored_persistence_action_range, ui_document_owner)) =
@@ -169,25 +176,10 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                             save_slot_identifier: SaveSlotId(*save_slot),
                         });
                 }
-                UiPersistenceAction::SaveWorldSnapshotToSelectedSlot => {
-                    if matches!(
-                        super::save_slot_catalogue_ui_presentation::selected_save_slot_in_document(
-                            ui_document_owner.0,
-                            &selected_rows,
-                            &lists
-                        ),
-                        Some(SavedGameSource::Original(_))
-                    ) {
-                        continue;
-                    }
-                    let slot = match activated_save_slot() {
-                        Some(SavedGameSource::Native(slot)) => slot.0,
-                        Some(SavedGameSource::Original(_)) => continue,
-                        None => ui_values
-                            .get(activated_ui_node.node)
-                            .map_or(0, |value| value.0.max(0) as u32),
-                    };
-                    let submitted_world_display_name =
+                UiPersistenceAction::SaveWorldSnapshotUnderSubmittedName {
+                    overwrite_confirmed,
+                } => {
+                    let Some(name) =
                         editable_text_nodes
                             .iter()
                             .find_map(|(text, text_owner, policy)| {
@@ -195,44 +187,77 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                                     && policy.is_some_and(|policy| {
                                         policy.accepts_only_legal_filename_characters()
                                     }))
-                                .then(|| text.value().to_string())
-                            });
+                                .then(|| text.value().to_string().trim().to_owned())
+                            })
+                    else {
+                        continue;
+                    };
+                    // A save is known by its name, as the original's save files
+                    // are: an existing name is overwritten only once confirmed,
+                    // and a new name takes the first unused slot.
+                    let existing = save_slot_catalogue
+                        .save_slot_records
+                        .iter()
+                        .find(|record| {
+                            record.world_display_name.trim().to_lowercase() == name.to_lowercase()
+                        })
+                        .map(|record| record.save_slot_identifier);
+                    let slot = existing.unwrap_or_else(|| {
+                        SaveSlotId(
+                            (0..)
+                                .find(|slot| {
+                                    !save_slot_catalogue
+                                        .save_slot_records
+                                        .iter()
+                                        .any(|record| record.save_slot_identifier.0 == *slot)
+                                })
+                                .unwrap_or(0),
+                        )
+                    });
                     info!(target: "openzt2_persistence", document = ?ui_document_owner.0,
-                        slot, draft = ?submitted_world_display_name, "save dialog submission");
-                    if let Some(name) = submitted_world_display_name {
-                        let name = name.trim();
-                        if name.is_empty() || name.chars().any(char::is_control) {
-                            persistence_action_messages
-                                .world_snapshot_persistence_failures
-                                .write(WorldSnapshotPersistenceFailed {
-                                    persistence_operation:
-                                        WorldSnapshotPersistenceOperation::SaveToSlot,
-                                    save_slot_identifier: SaveSlotId(slot),
-                                    failure_reason:
-                                        WorldSnapshotPersistenceFailure::CorruptSnapshotSection,
-                                });
-                            continue;
-                        }
-                        if name.len()
-                            > super::slot_io::world_snapshot_types::MAXIMUM_WORLD_DISPLAY_NAME_UTF8_BYTE_COUNT
-                        {
-                            persistence_action_messages.world_snapshot_persistence_failures.write(WorldSnapshotPersistenceFailed {
-                                persistence_operation: WorldSnapshotPersistenceOperation::SaveToSlot,
-                                save_slot_identifier: SaveSlotId(slot),
-                                failure_reason: WorldSnapshotPersistenceFailure::CapacityExceeded,
+                        slot = slot.0, %name, overwrite_confirmed, "save dialog submission");
+                    if name.is_empty() || name.chars().any(char::is_control) {
+                        persistence_action_messages
+                            .world_snapshot_persistence_failures
+                            .write(WorldSnapshotPersistenceFailed {
+                                persistence_operation:
+                                    WorldSnapshotPersistenceOperation::SaveToSlot,
+                                save_slot_identifier: slot,
+                                failure_reason:
+                                    WorldSnapshotPersistenceFailure::CorruptSnapshotSection,
                             });
-                            continue;
-                        }
-                        if let Ok(ui_document_root) = live_world_roots.single() {
-                            commands
-                                .entity(ui_document_root)
-                                .insert(Name::new(name.to_owned()));
-                        }
+                        continue;
+                    }
+                    if name.len()
+                        > super::slot_io::world_snapshot_types::MAXIMUM_WORLD_DISPLAY_NAME_UTF8_BYTE_COUNT
+                    {
+                        persistence_action_messages.world_snapshot_persistence_failures.write(WorldSnapshotPersistenceFailed {
+                            persistence_operation: WorldSnapshotPersistenceOperation::SaveToSlot,
+                            save_slot_identifier: slot,
+                            failure_reason: WorldSnapshotPersistenceFailure::CapacityExceeded,
+                        });
+                        continue;
+                    }
+                    if existing.is_some() && !overwrite_confirmed {
+                        presentation.write(RequestUiPresentationAction {
+                            document_root: ui_document_owner.0,
+                            action: UiPresentationAction::SetTargetNodeVisible {
+                                target_node: UiDocumentRole::node_id(
+                                    ui_document_asset.canonical_ui_document().role,
+                                    "overwrite save",
+                                ),
+                                visible: true,
+                            },
+                        });
+                        continue;
+                    }
+                    if let Ok(world_root) = live_world_roots.single() {
+                        commands.entity(world_root).insert(Name::new(name));
                     }
                     persistence_action_messages
                         .save_world_snapshot_requests
                         .write(SaveSnapshotFromDialog {
-                            slot: SaveSlotId(slot),
+                            slot,
                             dialog: save_dialog,
                         });
                 }

@@ -52,7 +52,9 @@ pub(super) fn lower_persistence_command(
         })),
         "ZT_SAVEGAME" => Ok(UiActionRecord::Persistence(UiPersistenceActionRecord {
             trigger,
-            action: UiPersistenceAction::SaveWorldSnapshotToSelectedSlot,
+            action: UiPersistenceAction::SaveWorldSnapshotUnderSubmittedName {
+                overwrite_confirmed: event.string.as_deref() == Some("confirmed"),
+            },
         })),
         "ZT_LOAD_AFTER_SAVE" => Ok(UiActionRecord::Persistence(UiPersistenceActionRecord {
             trigger,

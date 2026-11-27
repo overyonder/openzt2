@@ -20,11 +20,20 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavigateTo;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailure;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestGeneration;
+use openzt2_zoo_state::locomotion::locomotion_types::{EntranceNavigationConnection, SpatialGrid};
 
 use super::{
     guest_destination_and_viewing_execution::{begin_viewing, cancel_failed_guest_destinations},
     guest_simulation_types::{Guest, GuestDestination, GuestNavigationRequest, GuestPhase},
 };
+
+fn spawn_map_grid(app: &mut App) {
+    app.world_mut().spawn(SpatialGrid {
+        width: 100,
+        height: 100,
+        ..Default::default()
+    });
+}
 
 #[test]
 fn only_current_guest_navigation_failure_releases_destination() {
@@ -32,6 +41,7 @@ fn only_current_guest_navigation_failure_releases_destination() {
     app.add_message::<NavigationFailed>()
         .add_message::<NavigateTo>()
         .add_systems(Update, cancel_failed_guest_destinations);
+    spawn_map_grid(&mut app);
     let destination = app.world_mut().spawn_empty().id();
     let guest = app
         .world_mut()
@@ -74,6 +84,7 @@ fn failed_entrance_route_retries_without_admitting_or_accepting_stale_failures()
     app.add_message::<NavigationFailed>()
         .add_message::<NavigateTo>()
         .add_systems(Update, cancel_failed_guest_destinations);
+    spawn_map_grid(&mut app);
     let root = app.world_mut().spawn_empty().id();
     let other_root = app.world_mut().spawn_empty().id();
     let entrance_position = Vec3::new(10.0, 0.0, 20.0);
@@ -104,6 +115,8 @@ fn failed_entrance_route_retries_without_admitting_or_accepting_stale_failures()
                 acceleration_mps2: 1.0,
                 capabilities: NavFlags::GUEST,
             },
+            // Still walking in from the authored arrival point off the map.
+            Transform::from_xyz(-80.0, 0.0, 20.0),
         ))
         .id();
     for _ in 0..2 {
@@ -132,6 +145,14 @@ fn failed_entrance_route_retries_without_admitting_or_accepting_stale_failures()
         app.world().get::<GuestPhase>(guest),
         Some(&GuestPhase::Arriving)
     );
+    // The retried request keeps the walk from off the map to the gate.
+    let connection = app
+        .world()
+        .get::<EntranceNavigationConnection>(guest)
+        .unwrap();
+    assert_eq!(connection.request_id, requests[0].request_id);
+    assert_eq!(connection.gate, entrance_position);
+    assert!(connection.inbound);
 }
 
 #[test]

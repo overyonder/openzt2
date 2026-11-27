@@ -22,7 +22,7 @@ impl ResolvedGaitClip {
         let joint = clip
             .metadata
             .and_then(|metadata| metadata.root_motion_joint.as_ref())
-            .map(|joint| AuthoredId::from_key(&joint.joint_asset_key));
+            .map(openzt2_game_data::animation::animation_clip_metadata::AuthoredAnimationRootMotionJoint::joint_id);
         let duration =
             std::time::Duration::from_millis(u64::from(clip.duration_milliseconds)).as_secs_f32();
         let motion = clip

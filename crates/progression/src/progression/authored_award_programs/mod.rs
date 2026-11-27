@@ -551,11 +551,13 @@ pub(super) fn process_authored_award_programs(
                     }
                     AwardEffect::RefreshFame => apply_fame_before_panel = true,
                     AwardEffect::ShowPanel if apply_fame_before_panel => {
+                        debug!(program = %program.name, "award program shows the award panel");
                         effects
                             .display_after_fame
                             .write(ShowAwardPanelAfterFame(root));
                     }
                     AwardEffect::ShowPanel => {
+                        debug!(program = %program.name, "award program shows the award panel");
                         effects
                             .display
                             .write(AwardProgramEffect::ShowAwardPanel { root });

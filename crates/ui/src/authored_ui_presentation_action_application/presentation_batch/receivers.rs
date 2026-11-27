@@ -64,6 +64,8 @@ pub(super) struct DocumentWrites<'w, 's> {
     controls: Query<'w, 's, &'static SimulationControl>,
     operations: MessageWriter<'w, AuthoredUiDocumentOperation>,
     documents: crate::projection::ui_document_opening::LiveUiDocumentEffects<'w, 's>,
+    game_view:
+        openzt2_interface_state::ui::ui_document_lifecycle_contracts::GameViewDocumentOwner<'w, 's>,
 }
 
 impl DocumentWrites<'_, '_> {
@@ -87,6 +89,7 @@ impl DocumentWrites<'_, '_> {
             controls,
             operations,
             documents,
+            game_view,
         } = self;
         let transfer_pause = controls
             .single()
@@ -123,14 +126,17 @@ impl DocumentWrites<'_, '_> {
             }
             _ => unreachable!(),
         };
-        if let Some(document) = documents.document_of_role(context.lifecycle_owner, role) {
+        // A document that hides as it opens another, such as the in-game
+        // options opening the save prompt, must not take that one with it.
+        let owner = game_view.owner(context.lifecycle_owner);
+        if let Some(document) = documents.document_of_role(owner, role) {
             documents.apply(document, operation, &mut |activation| {
                 emitted.push(activation)
             });
             return;
         }
         operations.write(AuthoredUiDocumentOperation {
-            owner: context.lifecycle_owner,
+            owner,
             role,
             operation,
             transfer_pause,

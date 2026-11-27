@@ -8,9 +8,17 @@ use openzt2_ui::authored_modal_presentation::UiAuthoredModalPresentation;
 #[derive(Component)]
 pub(super) struct InGameOptionsOverlay;
 
+/// The overlay's options have been on screen. A newly loaded document can
+/// still be hidden for its first frames, so only a shown overlay can finish.
+#[derive(Component)]
+pub(super) struct InGameOptionsOverlayShown;
+
 pub(super) fn close_finished_in_game_options_overlays(
     mut commands: Commands,
-    overlays: Query<(Entity, Option<&Children>), With<InGameOptionsOverlay>>,
+    overlays: Query<
+        (Entity, Option<&Children>, Has<InGameOptionsOverlayShown>),
+        With<InGameOptionsOverlay>,
+    >,
     roots: Query<&Visibility, With<UiDocumentRoot>>,
     hierarchy: Query<&Children>,
     modals: Query<(&UiAuthoredModalPresentation, &Visibility)>,
@@ -21,7 +29,7 @@ pub(super) fn close_finished_in_game_options_overlays(
             commands.entity(failure.owner).despawn();
         }
     }
-    for (overlay, children) in &overlays {
+    for (overlay, children, was_shown) in &overlays {
         let Some(root) = children
             .into_iter()
             .flatten()
@@ -40,7 +48,9 @@ pub(super) fn close_finished_in_game_options_overlays(
                         modal.is_modal() && *visibility != Visibility::Hidden
                     })
                 });
-        if !shown {
+        if shown && !was_shown {
+            commands.entity(overlay).insert(InGameOptionsOverlayShown);
+        } else if !shown && was_shown {
             commands.entity(overlay).despawn();
         }
     }

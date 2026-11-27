@@ -289,9 +289,10 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                 }
                 continue;
             }
-            // Authored needs measure deprivation on 0..100; welfare messages
-            // adjust wellness on 0..1000, as in species need initialization.
-            let wellness_delta_q16 = value_q16.saturating_mul(-10);
+            let wellness_delta_q16 =
+                openzt2_zoo_state::need_adjustment::wellness_delta_from_authored_deprivation_q16(
+                    value_q16,
+                );
             debug!(?animal, fact = ?modification.modified_fact, value_q16,
                 "behavior fact modification applied");
             match modification.modified_fact {

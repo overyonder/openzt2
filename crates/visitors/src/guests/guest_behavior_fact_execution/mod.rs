@@ -63,6 +63,12 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
     mut containers: Query<&mut FacilityContainedWaste>,
     mut fossil_centers: Query<&mut AuthoredFloatAttributes>,
     mut caffeine_flags: Query<&mut CaffeineFlags>,
+    // Guests viewing or meeting an animal change its privacy and social needs.
+    (animals, mut animal_privacy, mut animal_social): (
+        Query<(), With<openzt2_zoo_state::animal_lifecycle::types::Animal>>,
+        MessageWriter<openzt2_zoo_state::animal_welfare::types::AdjustPrivacy>,
+        MessageWriter<openzt2_zoo_state::animal_welfare::types::AdjustSocial>,
+    ),
     mut commands: Commands,
 ) {
     let bone_level = AssetId::from_key("f_bonelevel");
@@ -79,6 +85,23 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
         // Validate the whole action before changing a need or consuming RNG.
         // An unresolved role or unsupported fact must enter the authored failure path.
         if !modifications.iter().all(|modification| {
+            if resolve_behavior_entity_role_to_live_entity(
+                modification.affected_entity_role,
+                actor,
+                task.target,
+            )
+            .is_some_and(|subject| animals.contains(subject))
+            {
+                return modification.modification_operation
+                    == BehaviorFactModificationOperation::Add
+                    && matches!(
+                        modification.modified_fact,
+                        BehaviorFact::Privacy | BehaviorFact::Social
+                    )
+                    && price_effect
+                        .sample(modification.modification_value, task.target, |_| 0)
+                        .is_some();
+            }
             let caffeine = matches!(
                 modification.modified_fact,
                 BehaviorFact::CaffeineMode | BehaviorFact::DeCaffeineMode
@@ -161,6 +184,24 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                     random.0.range_u32(count).unwrap_or(0)
                 })
                 .expect("scalar context was validated before application");
+            if animals.contains(subject) {
+                let delta_q16 =
+                    openzt2_zoo_state::need_adjustment::wellness_delta_from_authored_deprivation_q16(
+                        authored_delta,
+                    );
+                if modification.modified_fact == BehaviorFact::Privacy {
+                    animal_privacy.write(openzt2_zoo_state::animal_welfare::types::AdjustPrivacy {
+                        animal: subject,
+                        delta_q16,
+                    });
+                } else {
+                    animal_social.write(openzt2_zoo_state::animal_welfare::types::AdjustSocial {
+                        animal: subject,
+                        delta_q16,
+                    });
+                }
+                continue;
+            }
             if modification.modified_fact == BehaviorFact::BoneLevel {
                 let mut attributes = fossil_centers
                     .get_mut(subject)
@@ -234,7 +275,7 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                 satisfaction
                     .get_mut(subject)
                     .expect("validated guest satisfaction")
-                    .add_wellness_q16(authored_delta.saturating_neg().saturating_mul(10));
+                    .add_wellness_q16(openzt2_zoo_state::need_adjustment::wellness_delta_from_authored_deprivation_q16(authored_delta));
                 continue;
             }
             match modification.modified_fact {
@@ -287,7 +328,10 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
             }
             // Native needs are pressure percentages; canonical guest components
             // are wellness permille, as in their source initialization and decay.
-            let delta = authored_delta.saturating_mul(-10);
+            let delta =
+                openzt2_zoo_state::need_adjustment::wellness_delta_from_authored_deprivation_q16(
+                    authored_delta,
+                );
             let (value, residual) = match modification.modified_fact {
                 BehaviorFact::Hunger => {
                     let need = &mut *hunger;

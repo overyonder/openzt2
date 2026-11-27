@@ -33,6 +33,8 @@ pub(in crate::ui_document::source) const GRAPHICS_DETAIL_SETTING_ROW_DOCUMENT: &
     "ui/fragment/ui/layout/optionsslider.xml";
 pub(in crate::ui_document::source) const LOAD_SLOT_ROW_DOCUMENT: &str =
     "ui/fragment/ui/layout/loadentry.xml";
+pub(in crate::ui_document::source) const SAVE_SLOT_ROW_DOCUMENT: &str =
+    "ui/fragment/ui/layout/saveentry.xml";
 pub(in crate::ui_document::source) const PROFILE_ROW_DOCUMENT: &str =
     "ui/fragment/ui/layout/profileentry.xml";
 pub(in crate::ui_document::source) const CAMPAIGN_ROW_DOCUMENT: &str =

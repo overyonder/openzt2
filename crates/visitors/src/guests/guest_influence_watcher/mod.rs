@@ -181,7 +181,11 @@ pub(super) fn apply_due_guest_influence(
                     entries: range.feedback.clone(),
                 });
             }
-            happiness.add_wellness_q16(range.happiness_adjustment_q16.saturating_mul(-10));
+            happiness.add_wellness_q16(
+                openzt2_zoo_state::need_adjustment::wellness_delta_from_authored_deprivation_q16(
+                    range.happiness_adjustment_q16,
+                ),
+            );
             departure.0 = departure
                 .0
                 .saturating_add(range.departure_adjustment_q16)

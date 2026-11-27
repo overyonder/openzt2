@@ -56,7 +56,8 @@ pub(super) fn retire_replaced_view_meter(
 }
 
 /// Starts, holds and ends observation for the running view action.
-/// The observation's area is the task's target, the path viewed from.
+/// The observation's area is the task's target, the path viewed from. Its
+/// emote sets look at and affect the viewed animal, so they target it.
 pub(super) fn watch_animals_for_current_view_actions(
     activation: In<Option<Entity>>,
     clock: Single<&ZooClock>,
@@ -279,8 +280,8 @@ pub(super) fn watch_animals_for_current_view_actions(
                             let [minimum, maximum] = emote.view_meter_range;
                             minimum <= score && score < maximum
                         });
-                        if let Some(selected) =
-                            emote.and_then(|emote| set(emote.behavior_set, None))
+                        if let Some(selected) = emote
+                            .and_then(|emote| set(emote.behavior_set, Some(Some(viewing.subject))))
                         {
                             instruction.enter_set(guest, selected, &mut commands);
                             continue;

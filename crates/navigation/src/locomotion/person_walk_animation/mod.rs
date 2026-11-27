@@ -158,6 +158,12 @@ pub(super) fn project_person_motion_to_walk_animation(
         }
         let task_animation = awaited_clip || held_clip;
         let moving = navigating || direct;
+        // A person's heads and carried props play the same gait clips. Once
+        // another controller supplies its root motion, one without its own
+        // root-motion binding leaves the person's speed to that controller.
+        let another_controller_drives = source
+            .as_ref()
+            .is_some_and(|source| source.controller != controller_entity);
         if !moving || task_animation || enabled.is_some_and(|enabled| !enabled.0) {
             if source
                 .as_ref()
@@ -280,7 +286,9 @@ pub(super) fn project_person_motion_to_walk_animation(
             && !waggle.is_some_and(|(_, weight)| weight > 0.0)
             && !base_node_present
         {
-            if let Some(agent) = agent.filter(|_| moving && row.is_some()) {
+            if let Some(agent) =
+                agent.filter(|_| moving && row.is_some() && !another_controller_drives)
+            {
                 agent
                     .map_unchanged(|agent| &mut agent.max_speed_mps)
                     .set_if_neq(0.0);
@@ -353,7 +361,9 @@ pub(super) fn project_person_motion_to_walk_animation(
         });
         let sampled_rate = sampled.map(|(rate, _)| rate);
         if exact_clip.is_none() && !base_node_present {
-            if let Some(agent) = agent.filter(|_| moving && row.is_some()) {
+            if let Some(agent) =
+                agent.filter(|_| moving && row.is_some() && !another_controller_drives)
+            {
                 agent
                     .map_unchanged(|agent| &mut agent.max_speed_mps)
                     .set_if_neq(0.0);
@@ -394,7 +404,9 @@ pub(super) fn project_person_motion_to_walk_animation(
             },
         );
         let Ok(clip) = resolved else {
-            if let Some(agent) = agent.filter(|_| moving && row.is_some()) {
+            if let Some(agent) =
+                agent.filter(|_| moving && row.is_some() && !another_controller_drives)
+            {
                 agent
                     .map_unchanged(|agent| &mut agent.max_speed_mps)
                     .set_if_neq(0.0);
@@ -435,7 +447,8 @@ pub(super) fn project_person_motion_to_walk_animation(
             },
             |(_, rate, _)| rate,
         );
-        if let Some(speed) = guest_speed {
+        let drives_speed = binding.is_some() || !another_controller_drives;
+        if let Some(speed) = guest_speed.filter(|_| drives_speed) {
             if let Some(agent) = agent.as_mut() {
                 agent
                     .reborrow()
@@ -443,7 +456,7 @@ pub(super) fn project_person_motion_to_walk_animation(
                     .set_if_neq(speed);
             }
         }
-        if row.is_some() {
+        if row.is_some() && drives_speed {
             if let Some(agent) = agent.take() {
                 let active = controller.animation_clip_asset_key == wanted
                     && controller.playback_speed_permille == rate

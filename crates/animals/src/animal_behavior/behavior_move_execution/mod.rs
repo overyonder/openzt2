@@ -75,7 +75,10 @@ pub(super) fn start_current_supported_behavior_move_actions(
                 &RunningBehaviorInstruction,
                 &RunBehaviorMove,
             ),
-            Option<&StaffRole>,
+            (
+                Option<&StaffRole>,
+                Option<&openzt2_zoo_state::guests::guest_simulation_types::GuestArchetype>,
+            ),
             Option<&NavAgent>,
             Has<super::behavior_set_start_request_types::AmbientBehaviorSubject>,
         ),
@@ -114,7 +117,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
         actor,
         member,
         (mut behavior_task, instruction, running_action),
-        staff_role,
+        (staff_role, guest_archetype),
         navigation_agent,
         ambient,
     ) in behavior_action_actors(&mut behavior_tasks, activation.0)
@@ -136,9 +139,10 @@ pub(super) fn start_current_supported_behavior_move_actions(
         let definitions = active_world_definitions.get(&world_definition_assets);
         if !ambient
             && !animal_actors.contains(actor)
-            && !staff_mode_has_authored_locomotion(
+            && !person_has_authored_ground_locomotion(
                 move_action.locomotion_speed,
                 staff_role,
+                guest_archetype,
                 definitions,
             )
         {
@@ -484,24 +488,34 @@ fn move_start_has_navigation_agent(navigation_agent: Option<&NavAgent>) -> bool 
     navigation_agent.is_some()
 }
 
-fn staff_mode_has_authored_locomotion(
+/// A move at an authored speed needs the person's authored ground gaits: a
+/// staff member's role or a guest's archetype supplies them.
+fn person_has_authored_ground_locomotion(
     locomotion_speed: Option<
         openzt2_game_data::behavior::action::wander::BehaviorGroundLocomotionSpeed,
     >,
     staff_role: Option<&StaffRole>,
+    guest_archetype: Option<&openzt2_zoo_state::guests::guest_simulation_types::GuestArchetype>,
     definitions: Option<WorldDefinitionsView<'_>>,
 ) -> bool {
     if locomotion_speed.is_none() {
         return true;
     }
-    staff_role
-        .and_then(|role| definitions?.find_staff(role.0))
-        .is_some_and(|role| {
-            role.locomotion_tables.iter().any(|table| {
-                table.binder == openzt2_game_data::AssetId::from_key("ground")
-                    && !table.rows.is_empty()
-            })
+    let tables = staff_role
+        .and_then(|role| {
+            Some(
+                definitions?
+                    .find_staff(role.0)?
+                    .locomotion_tables
+                    .as_slice(),
+            )
         })
+        .or_else(|| definitions?.guest_locomotion_tables(guest_archetype?.0));
+    tables.is_some_and(|tables| {
+        tables.iter().any(|table| {
+            table.binder == openzt2_game_data::AssetId::from_key("ground") && !table.rows.is_empty()
+        })
+    })
 }
 
 #[cfg(test)]

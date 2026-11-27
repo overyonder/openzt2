@@ -21,6 +21,15 @@ pub struct AuthoredAnimationRootMotionJoint {
     pub initial_translation: [f32; 3],
 }
 
+impl AuthoredAnimationRootMotionJoint {
+    /// Skeleton joints are identified by their lowercased names, so a clip
+    /// naming `Bip01` drives the model's `bip01` joint.
+    #[must_use]
+    pub fn joint_id(&self) -> crate::AssetId {
+        crate::AssetId::from_key(&self.joint_asset_key.to_ascii_lowercase())
+    }
+}
+
 #[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
 pub struct AuthoredAnimationRootMotionTransform {
     pub translation_from_first_to_last_frame: [f32; 3],

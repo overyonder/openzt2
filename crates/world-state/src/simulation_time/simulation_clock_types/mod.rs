@@ -32,13 +32,17 @@ pub struct ZooCalendar {
     pub day: u8,
 }
 
-/// Calendar month ordinal, updated only when the zoo enters a new month.
+/// Months since January of year 1, updated only when the zoo enters a new
+/// month. January of year 1 is month 0.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ZooMonth(pub u32);
 
 impl From<ZooCalendar> for ZooMonth {
     fn from(calendar: ZooCalendar) -> Self {
-        Self(u32::from(calendar.year) * 12 + u32::from(calendar.month.saturating_sub(1)))
+        Self(
+            u32::from(calendar.year.saturating_sub(1)) * 12
+                + u32::from(calendar.month.saturating_sub(1)),
+        )
     }
 }
 
@@ -219,3 +223,6 @@ impl ZooDayCadence {
 /// An authored text node showing the localized zoo date.
 #[derive(Component)]
 pub struct UiZooDateText;
+
+#[cfg(test)]
+mod tests;

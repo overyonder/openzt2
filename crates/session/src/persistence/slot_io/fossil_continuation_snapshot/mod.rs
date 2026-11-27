@@ -84,6 +84,14 @@ struct FossilAssemblySnapshot {
 }
 
 impl FossilContinuation {
+    /// The fossil sites and recovered pieces this record recreates.
+    pub(super) fn persistent_identifiers(&self) -> impl Iterator<Item = u64> + '_ {
+        self.sites
+            .iter()
+            .map(|site| site.id)
+            .chain(self.pieces.iter().map(|piece| piece.id))
+    }
+
     pub(super) fn valid(&self, next: u64) -> bool {
         let mut ids = BTreeSet::new();
         let mut occupied = BTreeSet::new();

@@ -276,6 +276,7 @@ fn capture_behavior_frame(
         subjects,
         action: frame.action,
         repetitions: frame.repetitions,
+        resumes_with_target: None,
     })
 }
 
@@ -315,9 +316,15 @@ fn capture_behavior_actor_snapshots(
             next_action_tick: task.next_action_tick,
             interaction_slot: task.interaction_slot,
             stack: continuations
-                .frames(actor.entity)
-                .map(|frame| capture_behavior_frame(frame, documents))
-                .collect::<Result<_, _>>()?,
+                .frames_with_targets(actor.entity)
+                .map(|(frame, target)| {
+                    let mut snapshot = capture_behavior_frame(frame, documents)?;
+                    snapshot.resumes_with_target = target
+                        .map(|target| target.map(reference).transpose())
+                        .transpose()?;
+                    Ok(snapshot)
+                })
+                .collect::<Result<_, WorldSnapshotPersistenceFailure>>()?,
             score,
             failing: actor.pending_behavior_task_failure.is_some(),
         };

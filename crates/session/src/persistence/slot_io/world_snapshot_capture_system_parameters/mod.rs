@@ -170,10 +170,17 @@ pub(super) struct EconomyCaptureQueries<'w, 's> {
         'w,
         's,
         EntityRef<'static>,
+        // Guests, fossil sites and recovered fossil pieces are recreated by the
+        // runtime continuation after the economy section has been applied.
         (
             With<PersistentId>,
             Without<bevy::ecs::resource::IsResource>,
             Without<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
+            Without<openzt2_zoo_state::extinct_animals::fossil_recovery_types::FossilSiteKind>,
+            Without<openzt2_zoo_state::extinct_animals::fossil_recovery_types::DigPit>,
+            Without<
+                openzt2_zoo_state::extinct_animals::fossil_collection_and_assembly_types::CollectedFossilPiece,
+            >,
         ),
     >,
     pub(super) roots: Query<

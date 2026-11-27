@@ -18,7 +18,9 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigateTo;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestGeneration;
-use openzt2_zoo_state::locomotion::locomotion_types::{SpatialGrid, SpatialGridMembership};
+use openzt2_zoo_state::locomotion::locomotion_types::{
+    EntranceNavigationConnection, SpatialGrid, SpatialGridMembership,
+};
 use openzt2_zoo_state::maintenance::maintenance_types::AnimalHabitatWaste;
 use openzt2_zoo_state::maintenance::maintenance_types::LooseLitterWaste;
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
@@ -595,12 +597,14 @@ pub(super) fn cancel_failed_guest_destinations(
             &GuestPhase,
             &WorldMember,
             &NavAgent,
+            &Transform,
             Has<EntranceFailureReported>,
             Has<GuestEntranceApproach>,
         ),
         With<Guest>,
     >,
     entrances: Query<(&PersistentId, &WorldMember, &ZooEntrance)>,
+    grid: Single<&SpatialGrid>,
     mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut navigate: MessageWriter<NavigateTo>,
     mut commands: Commands,
@@ -614,7 +618,7 @@ pub(super) fn cancel_failed_guest_destinations(
             commands
                 .entity(failure.entity)
                 .remove::<(GuestDestination, Viewing, GuestViewingTarget)>();
-            let Ok((phase, member, agent, reported, approaching)) =
+            let Ok((phase, member, agent, transform, reported, approaching)) =
                 arriving_guests.get(failure.entity)
             else {
                 continue;
@@ -650,6 +654,17 @@ pub(super) fn cancel_failed_guest_destinations(
                 destination: entrance.inside,
                 arrival_radius_m: agent.radius_m,
             });
+            // A guest still off the map walks to the gate before the route
+            // planner takes over, for the retried request as for the first.
+            if grid.cell_of(transform.translation.xz()).is_none() {
+                commands
+                    .entity(failure.entity)
+                    .insert(EntranceNavigationConnection {
+                        request_id,
+                        gate: entrance.arrival,
+                        inbound: true,
+                    });
+            }
         }
     }
 }

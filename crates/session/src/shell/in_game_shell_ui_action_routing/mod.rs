@@ -112,9 +112,15 @@ pub(super) fn route_authored_in_game_shell_ui_actions(
                             });
                             continue;
                         }
-                        if let Ok(mut selection) = information.selected_catalogue_entry.single_mut()
+                        // Escape clears a chosen catalogue entry first; with
+                        // nothing chosen it opens the options.
+                        if let Some(mut selection) = information
+                            .selected_catalogue_entry
+                            .single_mut()
+                            .ok()
+                            .filter(|selection| selection.0.is_some())
                         {
-                            selection.set_if_neq(SelectedCatalogueEntry(None));
+                            *selection = SelectedCatalogueEntry(None);
                             continue;
                         }
                     }

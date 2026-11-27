@@ -497,14 +497,13 @@ fn bind_clip_root_motion(
     source: &AnimationClipSourceAsset,
     clip: &AnimationClip,
 ) -> Option<BoundLocomotionRootMotion> {
-    let root = &source
+    let root_joint = source
         .authored_animation_clip_metadata
         .root_motion_joint
-        .as_ref()?
-        .joint_asset_key;
-    let name = root.to_ascii_lowercase();
-    let joint = openzt2_game_data::AssetId::from_key(&name);
-    let target = AnimationTargetId::from_name(&Name::new(name));
+        .as_ref()?;
+    let root = &root_joint.joint_asset_key;
+    let joint = root_joint.joint_id();
+    let target = AnimationTargetId::from_name(&Name::new(root.to_ascii_lowercase()));
     let range = 0.0..clip.duration();
     let full_cycle = LocomotionRootMotionCycle::from_clip(clip, root, range);
     Some(BoundLocomotionRootMotion {

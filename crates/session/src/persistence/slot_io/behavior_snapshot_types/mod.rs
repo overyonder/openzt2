@@ -97,6 +97,10 @@ pub(super) struct BehaviorFrameSnapshot {
     pub phase: BehaviorTaskExecutionPhase,
     pub action: usize,
     pub repetitions: u32,
+    /// The target a suspended instruction resumes with, when the set it
+    /// entered had a target of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumes_with_target: Option<Option<BehaviorSnapshotEntityReference>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

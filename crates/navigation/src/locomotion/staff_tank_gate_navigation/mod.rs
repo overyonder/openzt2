@@ -699,7 +699,7 @@ pub(super) fn execute_staff_tank_gate_journeys(
                 journey.failed = true;
                 break;
             };
-            let joint = openzt2_game_data::AssetId::from_key(&root.joint_asset_key);
+            let joint = root.joint_id();
             let Some(parent) = rig.and_then(|rig| rig.root_parent(joint, &parents, &transforms))
             else {
                 journey.failed = true;

@@ -831,6 +831,9 @@ pub fn apply_behavior_instruction_completion(
                         target: task.target,
                     });
                 }
+                if set.target.is_some() {
+                    suspended.insert(super::continuations::SuspendedBehaviorTarget(task.target));
+                }
                 task.depth += 1;
                 task.program = set.program;
                 task.document = set.document.clone();
@@ -881,8 +884,14 @@ pub fn resume_suspended_behavior_instruction(
     {
         return;
     }
+    let target = (task.depth > resume.depth)
+        .then(|| continuations.suspended_target(resume.actor, resume.depth))
+        .flatten();
     continuations.truncate(resume.actor, resume.depth, &mut commands);
     task.restore_suspended_instruction(&resume.instruction, resume.depth, resume.tick);
+    if let Some(target) = target {
+        task.target = target;
+    }
     match resume.outcome {
         BehaviorResumeOutcome::Retry => {}
         BehaviorResumeOutcome::Advance => {

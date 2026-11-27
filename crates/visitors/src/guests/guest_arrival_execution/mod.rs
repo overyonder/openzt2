@@ -1,4 +1,4 @@
-use super::guest_arrival_calculations::{arrival_roll_passes, displaced_from_entrance_gate, generation_delay_ns, guest_population_cap, guest_spawn_probability};
+use super::guest_arrival_calculations::{arrival_roll_passes, arriving_guest_placement, generation_delay_ns, guest_population_cap, guest_spawn_probability};
 use super::guest_definition_queries::find_guest_definition;
 use super::guest_definition_queries::guest_need_rows;
 use bevy::ecs::system::SystemParam;
@@ -433,11 +433,7 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
                 });
                 continue;
             };
-            let offset = policy.arrival_offset_m.map(|value| -value);
-            (
-                displaced_from_entrance_gate(entrance.arrival, gate.rotation(), offset),
-                gate.rotation() * Quat::from_rotation_y(std::f32::consts::PI),
-            )
+            arriving_guest_placement(entrance.arrival, gate.rotation(), policy.arrival_offset_m)
         } else {
             let [x, z] = policy.default_emitter_m;
             (
@@ -462,6 +458,7 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
             ));
         let mut generation = NavigationRequestGeneration::default();
         let request_id = generation.advance();
+        let transform = Transform::from_translation(position).with_rotation(rotation);
         let entity = commands
             .spawn((
                 Guest,
@@ -477,7 +474,11 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
                     definition: guest_id,
                 },
                 PrefabPresentation::new(prefab),
-                Transform::from_translation(position).with_rotation(rotation),
+                transform,
+                // Route planning for this arrival can run in a fixed step
+                // before transform propagation, so the guest starts with its
+                // world pose already set.
+                GlobalTransform::from(transform),
                 Visibility::Inherited,
                 NavAgent {
                     radius_m: f32::from(definition.radius_cm) * 0.01,

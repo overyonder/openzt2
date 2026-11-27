@@ -280,13 +280,18 @@ pub(super) fn restore_snapshot_sections(
         .and_then(|runtime| runtime.domain_continuation.as_ref())
         .map_or(&[][..], |domain| domain.guests.as_slice());
     super::guest_continuation_snapshot::validate_guest_continuation(guests, world_definitions)?;
-    for guest in guests {
-        if !complete_persistent_identifiers.insert(guest.id)
-            || !planned_identifiers.insert(guest.id)
-        {
+    // Guests, fossil sites and recovered fossil pieces are recreated by the
+    // runtime continuation, so their identities come from its records.
+    let fossil_ids = runtime_continuation
+        .as_ref()
+        .and_then(|runtime| runtime.domain_continuation.as_ref()?.fossils.as_ref())
+        .into_iter()
+        .flat_map(super::fossil_continuation_snapshot::FossilContinuation::persistent_identifiers);
+    for id in guests.iter().map(|guest| guest.id).chain(fossil_ids) {
+        if !complete_persistent_identifiers.insert(id) || !planned_identifiers.insert(id) {
             return Err(WorldSnapshotPersistenceFailure::DuplicatePersistentEntityIdentifier);
         }
-        maximum_persistent_identifier = maximum_persistent_identifier.max(guest.id);
+        maximum_persistent_identifier = maximum_persistent_identifier.max(id);
     }
     for id in behavior_snapshot_records
         .iter()

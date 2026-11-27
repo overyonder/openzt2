@@ -116,3 +116,6 @@ pub(super) fn capture_economy_snapshot_records_from_live_world(
         entity_economy_records,
     })
 }
+
+#[cfg(test)]
+mod tests;

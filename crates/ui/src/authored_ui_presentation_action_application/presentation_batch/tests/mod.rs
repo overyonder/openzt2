@@ -80,3 +80,56 @@ fn options_message_of_the_day_hider_emits_show_then_hide_in_one_pass() {
         [(hider, UiTrigger::Show), (hider, UiTrigger::Hide)]
     );
 }
+
+#[test]
+fn a_dialog_opened_from_an_overlay_belongs_to_the_game_view() {
+    use openzt2_interface_state::ui::ui_document_lifecycle_contracts::InGameUiOwner;
+    let mut app = App::new();
+    app.init_resource::<Assets<UiDocumentAsset>>()
+        .init_resource::<Assets<LocalizationAsset>>()
+        .init_resource::<LocalizationPrecedenceIndex>()
+        .init_resource::<bevy::ui::UiStack>()
+        .init_resource::<InputFocus>()
+        .init_resource::<UiPointerCapture>()
+        .add_message::<UiNodeActivated>()
+        .add_message::<UiSliderValueChanged>()
+        .add_message::<RequestUiPresentationAction>()
+        .add_message::<AuthoredUiDocumentOperation>()
+        .add_message::<crate::animation::UiAnimationPlaybackRequest>()
+        .add_message::<crate::authored_timed_action_sequence::UiSelectionWaitEnded>()
+        .add_message::<TimedUiPresentationCommitted>()
+        .add_message::<PlayAudioClip>()
+        .add_systems(Update, apply_ordered_presentation_batches);
+
+    let game_view = app.world_mut().spawn(InGameUiOwner).id();
+    // The in-game options overlay closes, and takes its children with it, as
+    // its Load Game button opens the save prompt.
+    let overlay = app.world_mut().spawn(ChildOf(game_view)).id();
+    let root = app
+        .world_mut()
+        .spawn((
+            UiDocumentRoot {
+                document: Handle::default(),
+            },
+            ChildOf(overlay),
+        ))
+        .id();
+    let prompt = UiDocumentRole::Modal.node_id("save current game");
+    app.world_mut().write_message(RequestUiPresentationAction {
+        document_root: root,
+        action: UiPresentationAction::SetDocumentNodeVisible {
+            document_role: UiDocumentRole::Modal,
+            target_node: prompt,
+            visible: true,
+        },
+    });
+    app.update();
+
+    let owners: Vec<_> = app
+        .world_mut()
+        .resource_mut::<Messages<AuthoredUiDocumentOperation>>()
+        .drain()
+        .map(|operation| (operation.role, operation.owner))
+        .collect();
+    assert_eq!(owners, [(UiDocumentRole::Modal, game_view)]);
+}

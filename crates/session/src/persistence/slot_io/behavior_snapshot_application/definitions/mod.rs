@@ -78,6 +78,7 @@ pub(super) fn actor_references(
     record: &BehaviorTaskActorSnapshot,
 ) -> impl Iterator<Item = &BehaviorSnapshotEntityReference> {
     record.task.target.iter().chain(&record.task.object)
+        .chain(record.task.stack.iter().filter_map(|frame| frame.resumes_with_target.as_ref()?.as_ref()))
         .chain(record.membership.iter().map(|membership| &membership.container))
         .chain(record.water_target.iter().map(|water| &water.region))
         .chain(record.staff_job.iter().flat_map(|job| job.target.iter().chain(&job.rejected_staff)))

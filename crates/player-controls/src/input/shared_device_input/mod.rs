@@ -1,5 +1,6 @@
 use bevy::{
     camera::RenderTarget,
+    input::mouse::MouseButtonInput,
     picking::pointer::{
         Location, PointerAction, PointerButton, PointerId, PointerInput, PointerLocation,
         PointerPressState,
@@ -17,9 +18,11 @@ pub(super) fn publish_active_device_axes_and_pointer(
     time: Res<Time<Real>>,
     keyboard: Query<&KeyboardMouseControlSample>,
     gamepads: Query<(Entity, &GamepadControlSample), With<Gamepad>>,
-    mut active: ResMut<ActiveInputDevice>,
-    mut axes: ResMut<DeviceControlAxes>,
-    physical_buttons: Res<ButtonInput<MouseButton>>,
+    (mut active, mut axes): (ResMut<ActiveInputDevice>, ResMut<DeviceControlAxes>),
+    (physical_buttons, mut mouse_inputs): (
+        Res<ButtonInput<MouseButton>>,
+        MessageReader<MouseButtonInput>,
+    ),
     mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
     mut pointer: Query<(&PointerId, &mut PointerLocation, &PointerPressState)>,
     mut events: MessageWriter<PointerInput>,
@@ -73,21 +76,25 @@ pub(super) fn publish_active_device_axes_and_pointer(
             controller,
             time.delta_secs(),
             &physical_buttons,
+            mouse_inputs.read(),
             &mut events,
         ) {
             next_axes.look = look;
         }
+    } else {
+        mouse_inputs.clear();
     }
     axes.set_if_neq(next_axes);
 }
 
-fn publish_pointer_events(
+fn publish_pointer_events<'a>(
     (window_entity, mut window): (Entity, Mut<Window>),
     mut previous_location: Mut<PointerLocation>,
     held: &PointerPressState,
     controller: Option<&GamepadControlSample>,
     elapsed_seconds: f32,
     physical_buttons: &ButtonInput<MouseButton>,
+    mouse_inputs: impl Iterator<Item = &'a MouseButtonInput>,
     events: &mut MessageWriter<PointerInput>,
 ) -> Option<Vec2> {
     let target =
@@ -118,18 +125,6 @@ fn publish_pointer_events(
     } else {
         physical
     };
-    let next = [
-        physical_buttons.pressed(MouseButton::Left)
-            || controller.is_some_and(|controller| controller.primary),
-        physical_buttons.pressed(MouseButton::Right)
-            || controller.is_some_and(|controller| controller.secondary),
-        physical_buttons.pressed(MouseButton::Middle),
-    ];
-    let was_pressed = [
-        held.is_primary_pressed(),
-        held.is_secondary_pressed(),
-        held.is_middle_pressed(),
-    ];
     let location = Location {
         target,
         position: position.or(previous).unwrap_or_default(),
@@ -147,9 +142,49 @@ fn publish_pointer_events(
     } else if previous.is_some() {
         previous_location.location = None;
     }
-    for (index, button) in PointerButton::iter().enumerate() {
-        if next[index] != was_pressed[index] {
-            let action = if next[index] {
+    publish_pointer_button_events(
+        &location,
+        held,
+        controller,
+        physical_buttons,
+        mouse_inputs,
+        events,
+    );
+    look
+}
+
+fn publish_pointer_button_events<'a>(
+    location: &Location,
+    held: &PointerPressState,
+    controller: Option<&GamepadControlSample>,
+    physical_buttons: &ButtonInput<MouseButton>,
+    mouse_inputs: impl Iterator<Item = &'a MouseButtonInput>,
+    events: &mut MessageWriter<PointerInput>,
+) {
+    let mut pointer_buttons = [
+        (
+            MouseButton::Left,
+            PointerButton::Primary,
+            held.is_primary_pressed(),
+            controller.is_some_and(|controller| controller.primary),
+        ),
+        (
+            MouseButton::Right,
+            PointerButton::Secondary,
+            held.is_secondary_pressed(),
+            controller.is_some_and(|controller| controller.secondary),
+        ),
+        (
+            MouseButton::Middle,
+            PointerButton::Middle,
+            held.is_middle_pressed(),
+            false,
+        ),
+    ];
+    let mut write_transition = |button, held: &mut bool, pressed| {
+        if *held != pressed {
+            *held = pressed;
+            let action = if pressed {
                 PointerAction::Press(button)
             } else {
                 PointerAction::Release(button)
@@ -160,6 +195,28 @@ fn publish_pointer_events(
                 action,
             ));
         }
+    };
+
+    // A physical press and release can both arrive before picking runs.
+    for input in mouse_inputs {
+        if let Some((_, button, held, controller_pressed)) = pointer_buttons
+            .iter_mut()
+            .find(|(mouse_button, ..)| *mouse_button == input.button)
+        {
+            write_transition(
+                *button,
+                held,
+                *controller_pressed || input.state.is_pressed(),
+            );
+        }
     }
-    look
+
+    // Controller changes use the combined held state of the shared pointer.
+    for (mouse_button, button, mut held, controller_pressed) in pointer_buttons {
+        write_transition(
+            button,
+            &mut held,
+            controller_pressed || physical_buttons.pressed(mouse_button),
+        );
+    }
 }

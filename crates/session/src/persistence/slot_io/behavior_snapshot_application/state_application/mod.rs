@@ -90,9 +90,15 @@ pub(super) fn apply_prepared_behavior_actor(
     commands
         .entity(actor)
         .remove::<BehaviorTaskExecutionState>();
-    for frame in prepared.stack {
+    for (frame, saved) in prepared.stack.into_iter().zip(&record.task.stack) {
         openzt2_zoo_state::behavior_task_execution_types::continuations::suspend_behavior_frame(
-            actor, frame, commands,
+            actor,
+            frame,
+            saved
+                .resumes_with_target
+                .as_ref()
+                .map(|target| target.as_ref().map(resolve)),
+            commands,
         );
     }
     let mut entity = commands.entity(actor);

@@ -5,7 +5,6 @@ use openzt2_game_assets::{
     animation::animation_set_asset_types::AnimationClipSourceAsset,
     application_lifecycle::GamePhase,
 };
-use openzt2_game_data::AssetId;
 use openzt2_world_state::{
     animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner,
     animation_playback::{
@@ -118,7 +117,7 @@ fn bind_fence_action_root_motion(
         }) else {
             continue;
         };
-        let root = AssetId::from_key(&joint.joint_asset_key);
+        let root = joint.joint_id();
         let Some(parent) =
             joints
                 .iter_many(rig.joints())

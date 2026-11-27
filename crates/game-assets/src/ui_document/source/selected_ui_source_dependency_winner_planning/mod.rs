@@ -19,7 +19,7 @@ use crate::{
             DISPLAY_RESOLUTION_ROW_DOCUMENT, FINANCE_VALUE_ROW_DOCUMENT,
             GRAPHICS_DETAIL_SETTING_ROW_DOCUMENT, LOAD_SLOT_ROW_DOCUMENT, MULTILIST_ROW_DOCUMENTS,
             NATIVE_FINANCE_ROW_DOCUMENTS, OVERVIEW_LEGEND_ROW_DOCUMENT, PROFILE_ROW_DOCUMENT,
-            ZOO_MESSAGE_ROW_DOCUMENT,
+            SAVE_SLOT_ROW_DOCUMENT, ZOO_MESSAGE_ROW_DOCUMENT,
         },
     },
 };
@@ -414,6 +414,11 @@ pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
                 "ui/layout/load.xml",
                 "ui/layout/loadentry.xml",
                 LOAD_SLOT_ROW_DOCUMENT,
+            ),
+            (
+                "ui/layout/save.xml",
+                "ui/layout/saveentry.xml",
+                SAVE_SLOT_ROW_DOCUMENT,
             ),
             (
                 "ui/layout/freeformselection.xml",

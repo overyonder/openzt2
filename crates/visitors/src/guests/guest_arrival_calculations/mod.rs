@@ -40,6 +40,21 @@ pub(super) fn displaced_from_entrance_gate(
     entrance + gate_rotation * Vec3::new(offset_m[0], 0.0, -offset_m[1])
 }
 
+/// An arriving guest faces the gate: the original turns the entrance frame
+/// by a half turn and places the guest at the negated arrival displacement in
+/// that turned frame, which is the side departing guests leave by.
+pub(super) fn arriving_guest_placement(
+    entrance: Vec3,
+    gate_rotation: Quat,
+    arrival_offset_m: [f32; 2],
+) -> (Vec3, Quat) {
+    let facing_gate = gate_rotation * Quat::from_rotation_y(std::f32::consts::PI);
+    (
+        displaced_from_entrance_gate(entrance, facing_gate, arrival_offset_m.map(|value| -value)),
+        facing_gate,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,5 +75,18 @@ mod tests {
             generation_delay_ns([2_000_000_000; 2], || panic!("constant delay drew")),
             2_000_000_000
         );
+    }
+
+    #[test]
+    fn guests_arrive_from_the_side_they_leave_by_facing_the_gate() {
+        let gate = Vec3::new(21.0, 13.0, -144.0);
+        let rotation = Quat::from_rotation_y(0.7);
+        // The shipped guest manager's arrival and departure displacements.
+        let (arrival, heading) = arriving_guest_placement(gate, rotation, [0.0, -100.0]);
+        let departure = displaced_from_entrance_gate(gate, rotation, [-2.0, -100.0]);
+        let outward = rotation * Vec3::Z;
+        assert!((arrival - gate).dot(outward) > 99.0);
+        assert!((departure - gate).dot(outward) > 99.0);
+        assert!((heading * Vec3::Z).dot(outward) < -0.99);
     }
 }

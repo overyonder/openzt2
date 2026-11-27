@@ -3,6 +3,13 @@ use std::time::Duration;
 use bevy::prelude::*;
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 
+/// Authored needs measure deprivation on 0..100 while animal welfare and
+/// guest needs keep wellness on 0..1000, so a deprivation delta lowers wellness tenfold.
+#[must_use]
+pub fn wellness_delta_from_authored_deprivation_q16(deprivation_q16: i32) -> i32 {
+    deprivation_q16.saturating_mul(-10)
+}
+
 /// Fires at most once per thinker step, including when the next delay is zero.
 pub fn tick_need_adjustment(
     timer: &mut Timer,

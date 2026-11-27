@@ -26,17 +26,28 @@ use openzt2_interface_state::persistence::save_slot_types::SaveSlotCatalogueRead
 pub(super) fn request_save_slot_catalogue_list_row_count_updates(
     mut save_slot_catalogue_ready_messages: MessageReader<SaveSlotCatalogueReady>,
     save_slot_catalogue: Res<SaveSlotCatalogue>,
-    ui_list_nodes: Query<(Entity, Ref<UiListPolicy>, &UiDocumentOwner)>,
+    ui_list_nodes: Query<(
+        Entity,
+        Ref<UiListPolicy>,
+        &UiDocumentOwner,
+        &openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::RequestedUiListRowCount,
+    )>,
     roots: Query<&UiDocumentRoot>,
     documents: Res<Assets<UiDocumentAsset>>,
     mut ui_list_row_count_updates: MessageWriter<SetUiListRowCount>,
 ) {
     let save_slot_catalogue_became_ready =
         save_slot_catalogue_ready_messages.read().next().is_some();
-    for (ui_list_entity, ui_list_policy, owner) in &ui_list_nodes {
+    for (ui_list_entity, ui_list_policy, owner, requested) in &ui_list_nodes {
         let presents_saved_games =
             ui_list_policy.source == UiWidgetLiveCollectionSource::SavedGameSlots;
-        if presents_saved_games && (save_slot_catalogue_became_ready || ui_list_policy.is_added()) {
+        // A list whose document opens without a catalogue reload, such as the
+        // Save dialog, still needs its first row count.
+        if presents_saved_games
+            && (save_slot_catalogue_became_ready
+                || ui_list_policy.is_added()
+                || requested.0.is_none())
+        {
             ui_list_row_count_updates.write(SetUiListRowCount {
                 list: ui_list_entity,
                 count: save_slot_catalogue
@@ -168,6 +179,79 @@ pub(super) fn project_save_slot_catalogue_records_onto_saved_game_list_rows(
     }
 }
 
+/// The Save dialog offers the zoo's own name to save under.
+pub(super) fn offer_zoo_name_in_save_dialog(
+    mut name_fields: Query<
+        (
+            &mut bevy::text::EditableText,
+            &UiDocumentOwner,
+            &openzt2_ui::authored_text_edit_bevy_adaptation::UiTextEditPolicy,
+        ),
+        Added<bevy::text::EditableText>,
+    >,
+    roots: Query<&UiDocumentRoot>,
+    documents: Res<Assets<UiDocumentAsset>>,
+    zoos: Query<&Name, With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>>,
+) {
+    let Ok(zoo) = zoos.single() else {
+        return;
+    };
+    for (mut text, owner, policy) in &mut name_fields {
+        let saves = roots
+            .get(owner.0)
+            .ok()
+            .and_then(|root| documents.get(&root.document))
+            .is_some_and(|document| {
+                document.canonical_ui_document().role == UiDocumentRole::SaveGame
+            });
+        if saves && policy.accepts_only_legal_filename_characters() && text.value() != zoo.as_str()
+        {
+            text.clear();
+            text.editor_mut().set_text(zoo.as_str());
+        }
+    }
+}
+
+/// Choosing a save in the Save dialog puts its name in the name field, so
+/// saving overwrites it and deleting names it.
+pub(super) fn copy_chosen_save_name_into_save_dialog(
+    rows: Query<(&ChildOf, &UiSelected, &SavedGameSource), (With<UiListRow>, Changed<UiSelected>)>,
+    lists: Query<(&UiListPolicy, &UiDocumentOwner)>,
+    save_slot_catalogue: Res<SaveSlotCatalogue>,
+    mut name_fields: Query<(
+        &mut bevy::text::EditableText,
+        &UiDocumentOwner,
+        &openzt2_ui::authored_text_edit_bevy_adaptation::UiTextEditPolicy,
+    )>,
+) {
+    for (parent, selected, source) in &rows {
+        let SavedGameSource::Native(slot) = *source else {
+            continue;
+        };
+        let Some((_, document)) = lists.get(parent.parent()).ok().filter(|(policy, _)| {
+            selected.0 && policy.source == UiWidgetLiveCollectionSource::SavedGameSlots
+        }) else {
+            continue;
+        };
+        let Some(record) = save_slot_catalogue
+            .save_slot_records
+            .iter()
+            .find(|record| record.save_slot_identifier == slot)
+        else {
+            continue;
+        };
+        for (mut text, owner, policy) in &mut name_fields {
+            if owner.0 == document.0
+                && policy.accepts_only_legal_filename_characters()
+                && text.value() != record.world_display_name.as_str()
+            {
+                text.clear();
+                text.editor_mut().set_text(&record.world_display_name);
+            }
+        }
+    }
+}
+
 pub(super) fn selected_save_slot_in_document(
     document_root: Entity,
     rows: &Query<(&ChildOf, &UiSelected, &SavedGameSource), With<UiListRow>>,
@@ -186,8 +270,10 @@ pub(super) fn selected_save_slot_in_document(
 pub(super) fn load_save_slot_from_submitted_row(
     mut activations: MessageReader<UiNodeActivated>,
     rows: Query<(&ChildOf, &SavedGameSource), With<UiListRow>>,
-    lists: Query<&UiListPolicy>,
+    lists: Query<(&UiListPolicy, &UiDocumentOwner)>,
     parents: Query<&ChildOf>,
+    roots: Query<&UiDocumentRoot>,
+    documents: Res<Assets<UiDocumentAsset>>,
     mut loads: MessageWriter<LoadWorldSnapshotFromSlot>,
     mut original_loads: MessageWriter<LoadOriginalSavedGame>,
 ) {
@@ -199,9 +285,12 @@ pub(super) fn load_save_slot_from_submitted_row(
             .chain(parents.iter_ancestors::<ChildOf>(activation.node))
             .find_map(|entity| {
                 let (parent, value) = rows.get(entity).ok()?;
-                (lists.get(parent.parent()).ok()?.source
-                    == UiWidgetLiveCollectionSource::SavedGameSlots)
-                    .then_some(value)
+                // Only the Load dialog loads a submitted row; the Save
+                // dialog's rows press its Save button instead.
+                let (policy, owner) = lists.get(parent.parent()).ok()?;
+                (policy.source == UiWidgetLiveCollectionSource::SavedGameSlots
+                    && presents_originals(owner.0, &roots, &documents))
+                .then_some(value)
             })
         else {
             continue;

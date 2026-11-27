@@ -161,6 +161,9 @@ impl Plugin for PersistencePlugin {
                     (
                         persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests,
                         save_slot_catalogue_ui_presentation::load_save_slot_from_submitted_row,
+                        save_slot_catalogue_ui_presentation::offer_zoo_name_in_save_dialog,
+                        save_slot_catalogue_ui_presentation::copy_chosen_save_name_into_save_dialog
+                            .before(persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests),
                         save_slot_catalogue_ui_presentation::project_original_save_delete_control_state
                             .after(save_slot_catalogue_ui_presentation::project_save_slot_catalogue_records_onto_saved_game_list_rows),
                     ).after(openzt2_interface_state::ui::UiSet::Interaction),

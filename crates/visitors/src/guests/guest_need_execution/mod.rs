@@ -313,7 +313,7 @@ pub(super) fn compile_guest_archetype_tables(
                     viewing: definition.viewing_need.map(|need| need.adjustment_q16),
                     happiness: definition
                         .happiness_need
-                        .map(|need| need.adjustment_q16.saturating_mul(-10)),
+                        .map(|need| openzt2_zoo_state::need_adjustment::wellness_delta_from_authored_deprivation_q16(need.adjustment_q16)),
                 },
             );
         }
