@@ -319,10 +319,23 @@ pub(super) fn reconcile_ui_list_rows(
             image_selection_index,
             false,
         );
-        if lists
-            .get(pending_row.list)
-            .is_ok_and(|policy| policy.source == UiWidgetLiveCollectionSource::ScenarioObjectives)
-        {
+        let source = lists.get(pending_row.list).map(|policy| policy.source).ok();
+        if matches!(
+            source,
+            Some(
+                UiWidgetLiveCollectionSource::ZooMessageLatest
+                    | UiWidgetLiveCollectionSource::ZooMessageHistory
+            )
+        ) {
+            // `messagenormal.xml` authors its row as `w="0" walign="max"`, the
+            // list box's full width, so the message text wraps at its own
+            // authored width instead of collapsing to one word per line.
+            commands
+                .entity(root)
+                .entry::<Node>()
+                .and_modify(|mut node| node.width = percent(100.0));
+        }
+        if source == Some(UiWidgetLiveCollectionSource::ScenarioObjectives) {
             // `ZTGoalPanel` places each objective's status list box directly in
             // the panel, and each authors `walign="max"`: the row and its list
             // boxes span the panel, and the label (`x="30" walign="max"`) runs

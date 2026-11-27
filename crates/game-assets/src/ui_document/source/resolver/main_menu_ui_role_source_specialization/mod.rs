@@ -2,6 +2,7 @@
 
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 
+use crate::source_document::ui::model::SourceUiNode;
 use crate::source_document::ui::parser::SourceUiDocument;
 
 pub(super) fn specialize_main_menu_ui_source_document_for_semantic_role(
@@ -25,6 +26,9 @@ pub(super) fn specialize_main_menu_ui_source_document_for_semantic_role(
                 )
             )
         });
+        // The original never shows its developer tools menu, which the
+        // Ultimate Collection nests inside the menu layout.
+        remove_tools_menu(&mut source.root);
     } else if role == UiDocumentRole::Splash {
         source.root.children.iter_mut().for_each(|child| {
             child.state.visible = matches!(
@@ -52,4 +56,10 @@ pub(super) fn specialize_main_menu_ui_source_document_for_semantic_role(
             .iter_mut()
             .for_each(|child| child.state.visible = true);
     }
+}
+
+fn remove_tools_menu(node: &mut SourceUiNode) {
+    node.children
+        .retain(|child| child.name.as_deref() != Some("Tools Menu"));
+    node.children.iter_mut().for_each(remove_tools_menu);
 }

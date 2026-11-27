@@ -71,3 +71,11 @@ pub struct TankGeometryEditAcknowledged {
     pub application: EditApplication,
     pub accepted: bool,
 }
+
+/// A scenario script's request to move every tank's wall tops to this height.
+#[derive(Message, Debug, Clone, Copy, PartialEq)]
+pub struct SetTankWallHeights(pub f32);
+
+/// Marks a tank edit made by a script, which the player's tank tool leaves alone.
+#[derive(Component)]
+pub struct ScriptedTankGeometryEdit;

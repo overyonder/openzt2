@@ -16,6 +16,7 @@ use crate::{
             DISPLAY_RESOLUTION_ROW_DOCUMENT, FINANCE_VALUE_ROW_DOCUMENT,
             GRAPHICS_DETAIL_SETTING_ROW_DOCUMENT, LOAD_SLOT_ROW_DOCUMENT, MULTILIST_ROW_DOCUMENTS,
             NATIVE_FINANCE_ROW_DOCUMENTS, OVERVIEW_LEGEND_ROW_DOCUMENT, PROFILE_ROW_DOCUMENT,
+            ZOO_MESSAGE_ROW_DOCUMENT,
         },
     },
 };
@@ -49,7 +50,7 @@ pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
                                 .insert(format!("*\0{lookup_key}"), selected_winner_path.clone());
                         });
                     }
-                    "nif" | "bfb" => {
+                    "nif" | "bfb" | "glb" | "gltf" => {
                         let selected_scene_labelled_asset_path =
                             native_model_scene_labelled_asset_path(&selected_winner_path);
                         lookup_keys
@@ -295,8 +296,13 @@ pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
             ),
             (
                 "ui/layout/freeformselection.xml",
-                "ui/layout/scenariobutton.xml",
+                "ui/layout/campaign/unlocked.xml",
                 CAMPAIGN_SCENARIO_ROW_DOCUMENT,
+            ),
+            (
+                "ui/layout/message.xml",
+                "ui/layout/messagenormal.xml",
+                ZOO_MESSAGE_ROW_DOCUMENT,
             ),
             (
                 "ui/layout/profiledialog.xml",

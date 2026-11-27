@@ -480,9 +480,12 @@ fn lower_authored_terrain_water_surface_material_presentation(
                 "maxAmplitude",
             )?,
             chop_percent: required_source_node_number(ripple_wave_source_node, "chop")?,
-            speed_metres_per_second: required_source_node_number(ripple_wave_source_node, "speed")?,
-            ramp_minimum_metres: required_source_node_number(ripple_wave_source_node, "rampmin")?,
-            ramp_maximum_metres: required_source_node_number(ripple_wave_source_node, "rampmax")?,
+            speed_metres_per_second: source_node_number(ripple_wave_source_node, "speed")?
+                .unwrap_or(0.2),
+            ramp_minimum_metres: source_node_number(ripple_wave_source_node, "rampmin")?
+                .unwrap_or(4.0),
+            ramp_maximum_metres: source_node_number(ripple_wave_source_node, "rampmax")?
+                .unwrap_or(15.0),
         },
     })
 }
@@ -671,16 +674,44 @@ fn required_source_node_attribute<'a>(
 ) -> io::Result<&'a str> {
     source_node
         .attribute(attribute_name)
-        .ok_or_else(|| invalid_terrain_source("authored node is missing a required attribute"))
+        .ok_or_else(|| missing_source_node_attribute(source_node, attribute_name))
 }
 
 fn required_source_node_number(
     source_node: &OrderedSourceDocumentNode,
     attribute_name: &str,
 ) -> io::Result<f32> {
-    parse_blue_fang_terrain_number(required_source_node_attribute(source_node, attribute_name)?)
-        .filter(|value| value.is_finite())
-        .ok_or_else(|| invalid_terrain_source("authored node has an invalid numeric attribute"))
+    source_node_number(source_node, attribute_name)?
+        .ok_or_else(|| missing_source_node_attribute(source_node, attribute_name))
+}
+
+fn source_node_number(
+    source_node: &OrderedSourceDocumentNode,
+    attribute_name: &str,
+) -> io::Result<Option<f32>> {
+    source_node
+        .attribute(attribute_name)
+        .map(|value| {
+            parse_blue_fang_terrain_number(value)
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| {
+                    invalid_terrain_source(&format!(
+                        "{} has an invalid numeric attribute {attribute_name}",
+                        source_node.name
+                    ))
+                })
+        })
+        .transpose()
+}
+
+fn missing_source_node_attribute(
+    source_node: &OrderedSourceDocumentNode,
+    attribute_name: &str,
+) -> io::Error {
+    invalid_terrain_source(&format!(
+        "{} is missing required attribute {attribute_name}",
+        source_node.name
+    ))
 }
 
 fn required_source_node_boolean(

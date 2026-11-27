@@ -227,6 +227,33 @@ pub(super) fn apply_scenario_ui_commands(
                     world.write_message(openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::SelectConstructionTool(tool));
                 });
             }
+            ScenarioUiCommand::TankWallHeight(height) => {
+                let height = *height;
+                commands.queue(move |world: &mut World| {
+                    world.write_message(
+                        openzt2_zoo_state::aquatic::tank_geometry_edit_types::SetTankWallHeights(
+                            height,
+                        ),
+                    );
+                });
+            }
+            ScenarioUiCommand::ZooMessage {
+                text,
+                timeout_seconds,
+            } => {
+                let text = text.clone();
+                let timeout_seconds = *timeout_seconds;
+                commands.queue(move |world: &mut World| {
+                    let now = world.resource::<Time<Real>>().elapsed_secs_f64();
+                    world
+                        .get_resource_or_init::<openzt2_interface_state::information::zoo_message_types::ZooMessages>()
+                        .messages
+                        .push(openzt2_interface_state::information::zoo_message_types::ZooMessage {
+                            text,
+                            expires_at_seconds: now + timeout_seconds,
+                        });
+                });
+            }
             ScenarioUiCommand::PlacementObject(definition) => {
                 let definition = *definition;
                 commands.queue(move |world: &mut World| {

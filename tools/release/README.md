@@ -123,8 +123,10 @@ Linux packages. The APK includes the patched shader libraries and licences.
 
 ## Publication
 
-Manual workflow runs upload artifacts. Version tags publish after every target
-succeeds and the collected files match the target catalogue and checksums.
-Unexpected, duplicate and missing packages stop publication. The tag matches
-the workspace version with a `v` prefix, and prerelease tags remain prereleases.
+A version tag lists its release on openzt2.org/download at once, with every
+target shown as still building. Each target uploads its packages and checksums
+to the release bucket as soon as it finishes, and the download page shows them
+from then on. A target that fails, or never finishes, is marked failed when the
+run ends. The tag matches the workspace version with a `v` prefix, and
+prerelease tags remain prereleases.
 

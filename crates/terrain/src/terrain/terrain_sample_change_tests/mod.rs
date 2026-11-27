@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use crate::terrain::terrain_change_tracking_types::TerrainDirty;
 use crate::terrain::terrain_change_tracking_types::TerrainDirtyFlags;
+use crate::terrain::terrain_change_tracking_types::TerrainDirtyRegion;
 use crate::terrain::terrain_sample_change_calculations::merge_terrain_dirty_sample_rectangle_and_advance_revision;
 
 #[test]
@@ -21,9 +22,12 @@ fn dirty_terrain_sample_rectangles_coalesce_and_revision_advances_once() {
     assert_eq!(
         merged_dirty_rectangle,
         TerrainDirty {
-            min: UVec2::new(2, 6),
-            max: UVec2::new(8, 12),
             flags: TerrainDirtyFlags::HEIGHT | TerrainDirtyFlags::WATER,
+            render: Some(TerrainDirtyRegion {
+                min: UVec2::new(2, 6),
+                max: UVec2::new(8, 12),
+                flags: TerrainDirtyFlags::HEIGHT | TerrainDirtyFlags::WATER,
+            }),
             revision: 2,
         }
     );

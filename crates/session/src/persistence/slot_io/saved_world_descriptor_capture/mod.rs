@@ -186,6 +186,7 @@ mod tests {
                 starting_cash_cents: 5000,
                 difficulty: AssetId([7; 16]),
                 name_key: AssetId([8; 16]),
+                short_name_key: AssetId([8; 16]),
                 description_key: AssetId([9; 16]),
             }],
         };

@@ -6,8 +6,8 @@ mod prefab_render_layer_camera_matching;
 
 mod authored_effect_technique_pass_submission_order;
 mod authored_model_material_pass_projection;
+mod effect_environment_registers;
 mod gltf_model_scene_instantiation;
-mod material_render_view_invalidation;
 mod model_scene_visibility_and_shadow_projection;
 mod prefab_ambient_light_projection;
 mod prefab_fixed_function_world_lighting_projection;
@@ -30,8 +30,6 @@ use openzt2_world_state::model_render::ModelRenderPresentationSet;
 
 use authored_model_material_pass_projection::{
     invalidate_authored_model_material_pass_projection, project_authored_model_material_passes,
-    project_effect_pass_material_instances_for_additional_render_views,
-    update_per_draw_effect_transform_semantics,
 };
 use gltf_model_scene_instantiation::{
     complete_hidden_prefab_model_asset_release_after_world_instance_despawn,
@@ -96,7 +94,7 @@ impl Plugin for ModelRenderPlugin {
         app.add_systems(
             PostUpdate,
             environment_layer_rendering::project_environment_layers_to_model_primitives
-                .after(project_effect_pass_material_instances_for_additional_render_views),
+                .after(project_authored_model_material_passes),
         );
         app.configure_sets(
             PostUpdate,
@@ -129,12 +127,9 @@ impl Plugin for ModelRenderPlugin {
                 update_fixed_function_world_light_buffer
                     .after(project_prefab_ambient_light_contributions)
                     .after(VisibilitySystems::CheckVisibility),
-                update_per_draw_effect_transform_semantics
+                effect_environment_registers::write_effect_environment_registers
                     .after(TransformSystems::Propagate)
-                    .after(VisibilitySystems::MarkNewlyHiddenEntitiesInvisible)
-                    .after(project_prefab_ambient_light_contributions)
-                    .after(project_effect_pass_material_instances_for_additional_render_views)
-                    .after(project_prefab_fixed_function_world_lighting_policies),
+                    .after(VisibilitySystems::CheckVisibility),
                 crate::model_render::authored_effect_technique_pass_submission_order::project_authored_effect_opaque_base_pass_order
                     .after(project_prefab_fixed_function_world_lighting_policies)
                     .in_set(ModelRenderCommandConsumers::ProjectMaterialBindings),
@@ -166,11 +161,8 @@ impl Plugin for ModelRenderPlugin {
                     .after(TransformSystems::Propagate)
                     .after(project_model_scene_visibility_and_shadow_policy)
                     .in_set(ModelRenderPresentationSet::SourceMaterials),
-                project_effect_pass_material_instances_for_additional_render_views
-                    .after(project_authored_model_material_passes)
-                    .before(VisibilitySystems::VisibilityPropagate),
                 crate::model_render::world_entity_model_suppression::project_world_entity_model_suppression
-                    .after(project_effect_pass_material_instances_for_additional_render_views)
+                    .after(project_authored_model_material_passes)
                     .in_set(ModelRenderPresentationSet::VisibilityInputCommands),
                 // The policy selects a context in the shared light buffer.
                 // Material projection does not read the buffer contents.

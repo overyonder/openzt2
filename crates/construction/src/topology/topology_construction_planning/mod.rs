@@ -315,13 +315,24 @@ pub(super) fn calculate_gate_replacement_plan(
     if has_gate || protected {
         return Err(PlacementFailure::Occupied);
     }
-    if definitions
+    let Some(host) = definitions
         .find_fence(fence.definition)
-        .is_none_or(|host| host.gate == AssetId::default())
-    {
+        .filter(|host| host.gate != AssetId::default())
+    else {
         return Err(PlacementFailure::InvalidTopology);
-    }
-    Ok((edge, Money(price)))
+    };
+    // The replaced segment is recycled, so its sale refund comes off the
+    // gate's price: a $90 tank entrance on a $125 wall refunding 80% nets $10.
+    let refund = definitions
+        .find_object(AssetId(host.object.0))
+        .and_then(
+            openzt2_zoo_state::economy::object_sale_refund::calculate_authored_object_sale_refund,
+        )
+        .ok_or(PlacementFailure::InvalidTopology)?;
+    price
+        .checked_sub(refund.0)
+        .map(|cost| (edge, Money(cost)))
+        .ok_or(PlacementFailure::InvalidTopology)
 }
 
 pub(super) fn calculate_path_construction_plan(

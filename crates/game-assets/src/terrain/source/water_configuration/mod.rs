@@ -64,7 +64,7 @@ pub(crate) fn lower_water_configuration(
     let shore = child(root, "shore")
         .map(|node| -> io::Result<_> {
             Ok(TerrainWaterShoreConfiguration {
-                tint_rgba255: colour(node, "tint")?,
+                tint_rgba255: rgba_colour(node, "tint")?,
                 bottom_rate: Some(number(node, "botRate")?.unwrap_or(0.01)),
                 bottom_size: Some(
                     number(node, "botSize")?
@@ -103,8 +103,8 @@ pub(crate) fn lower_water_configuration(
     let side = child(root, "side")
         .map(|node| -> io::Result<_> {
             Ok(TerrainWaterSideConfiguration {
-                colour_rgba255: colour(node, "color")?,
-                lit_colour_rgba255: colour(node, "lit")?,
+                colour_rgba255: rgba_colour(node, "color")?,
+                lit_colour_rgba255: rgba_colour(node, "lit")?,
             })
         })
         .transpose()?;
@@ -610,18 +610,52 @@ fn colour<const N: usize>(
     name: &str,
 ) -> io::Result<Option<[u8; N]>> {
     vector::<N>(node, name)?
+        .map(colour_channels)
+        .transpose()
+}
+
+fn rgba_colour(node: &OrderedSourceDocumentNode, name: &str) -> io::Result<Option<[u8; 4]>> {
+    numbers(node, name)?
         .map(|values| {
-            if values
-                .iter()
-                .any(|value| !(0.0..=255.0).contains(value) || value.fract() != 0.0)
-            {
-                return Err(invalid("invalid water configuration colour"));
-            }
-            Ok(values.map(|value| value as u8))
+            let rgba = match values.as_slice() {
+                [red, green, blue] => [*red, *green, *blue, 255.0],
+                [red, green, blue, alpha] => [*red, *green, *blue, *alpha],
+                _ => return Err(invalid("water configuration vector has wrong length")),
+            };
+            colour_channels(rgba)
         })
         .transpose()
 }
 
+fn colour_channels<const N: usize>(values: [f32; N]) -> io::Result<[u8; N]> {
+    if values
+        .iter()
+        .any(|value| !(0.0..=255.0).contains(value) || value.fract() != 0.0)
+    {
+        return Err(invalid("invalid water configuration colour"));
+    }
+    Ok(values.map(|value| value as u8))
+}
+
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source_document::blue_fang_source_document_parsing::parse_blue_fang_source_document;
+
+    #[test]
+    fn water_tint_accepts_rgb_and_preserves_authored_alpha() {
+        let document = parse_blue_fang_source_document(
+            AssetPath::new("water.xml"),
+            br#"<water><shore tint="12 34 56"/><side color="12 34 56 78"/></water>"#,
+        )
+        .unwrap();
+        let shore = child(&document.root, "shore").unwrap();
+        let side = child(&document.root, "side").unwrap();
+        assert_eq!(rgba_colour(shore, "tint").unwrap(), Some([12, 34, 56, 255]));
+        assert_eq!(rgba_colour(side, "color").unwrap(), Some([12, 34, 56, 78]));
+    }
 }

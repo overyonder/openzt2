@@ -103,7 +103,9 @@ impl TerrainWaterRegionFade {
 }
 
 /// Aggregated visibility of the region's actual rendered surface groups.
+/// Region owners parent their rays and particles, so they are spatial.
 #[derive(Component, Debug, Default)]
+#[require(Transform, Visibility)]
 pub struct TerrainWaterRegionVisibility(pub bool);
 
 #[cfg(test)]

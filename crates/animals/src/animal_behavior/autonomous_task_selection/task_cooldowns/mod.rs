@@ -1,7 +1,7 @@
 //! Authored task delays. A delayed task can't be selected again by the same
 //! animal until its sampled delay has passed after the task ended. It also
 //! waits out a delay once it becomes possible for the animal, so a rampaging
-//! ankylosaur runs around before it bashes its fence, as in `zt.exe`.
+//! ankylosaur runs around before it bashes its fence, as in the original game.
 
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;

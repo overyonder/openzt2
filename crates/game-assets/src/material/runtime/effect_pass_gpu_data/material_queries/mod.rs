@@ -1,9 +1,9 @@
 //! Material input dependencies and texture queries.
 
-use super::super::resolved_effect_transform_bindings::{
-    FOG_INPUT, LIGHT_INPUT, MODEL_INPUT, VIEW_INPUT, WIND_INPUT,
+use super::{
+    EffectPassMaterial, EffectPassTextureAssets, EFFECT_ENVIRONMENT_REGISTER_BUFFER,
+    FIXED_FUNCTION_WORLD_LIGHT_BUFFER,
 };
-use super::{EffectPassMaterial, EffectPassTextureAssets, FIXED_FUNCTION_WORLD_LIGHT_BUFFER};
 use bevy::prelude::*;
 
 impl EffectPassTextureAssets {
@@ -22,6 +22,7 @@ impl EffectPassTextureAssets {
             texture6,
             texture7,
             fixed_function_world_lights: FIXED_FUNCTION_WORLD_LIGHT_BUFFER,
+            environment_registers: EFFECT_ENVIRONMENT_REGISTER_BUFFER,
         }
     }
 
@@ -58,47 +59,6 @@ impl EffectPassTextureAssets {
 }
 
 impl EffectPassMaterial {
-    pub fn programmable_inputs_changed(
-        &self,
-        model: bool,
-        view: bool,
-        wind: bool,
-        light: bool,
-        fog: bool,
-    ) -> bool {
-        self.parameter_input_dependencies
-            & ((u8::from(model) * MODEL_INPUT)
-                | (u8::from(view) * VIEW_INPUT)
-                | (u8::from(wind) * WIND_INPUT)
-                | (u8::from(light) * LIGHT_INPUT)
-                | (u8::from(fog) * FOG_INPUT))
-            != 0
-    }
-
-    pub fn has_dynamic_effect_parameter_bindings(&self) -> bool {
-        !self.dynamic_parameter_register_bindings.is_empty()
-            || self
-                .model_reflection_projections
-                .iter()
-                .any(Option::is_some)
-            || self
-                .fixed_transform_bindings
-                .iter()
-                .any(|binding| binding.input_dependencies() != 0)
-    }
-
-    /// Only model/view inputs require a draw-specific register bank. Wind and
-    /// world lighting have identical values for every instance of this asset.
-    pub const fn requires_draw_specific_shader_registers(&self) -> bool {
-        self.parameter_input_dependencies & (MODEL_INPUT | VIEW_INPUT | FOG_INPUT) != 0
-    }
-
-    /// Model-only registers remain valid in reflection/refraction cameras;
-    /// only camera-dependent inputs require a separate view projection.
-    pub const fn requires_view_specific_shader_registers(&self) -> bool {
-        self.parameter_input_dependencies & (VIEW_INPUT | FOG_INPUT) != 0
-    }
-
     pub(in crate::material) fn present_texture_asset_count(&self) -> usize {
         self.texture_assets.present_texture_asset_count()
     }

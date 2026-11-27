@@ -24,6 +24,8 @@ pub(super) struct StoredProfileRecordAndSettings {
     pub(super) graphics: GraphicsSettings,
     pub(super) online_messages:
         openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy,
+    pub(super) modder_tools:
+        openzt2_interface_state::settings::modder_tools_settings_types::ModderToolsSettings,
 }
 
 #[derive(Component)]
@@ -55,6 +57,8 @@ pub(super) enum ProfileFilesystemTaskCompletion {
         graphics: GraphicsSettings,
         online_messages:
             openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy,
+        modder_tools:
+            openzt2_interface_state::settings::modder_tools_settings_types::ModderToolsSettings,
     },
     SettingsSaved,
     Deleted {

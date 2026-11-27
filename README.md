@@ -11,7 +11,7 @@ in Rust with Bevy and is in early beta, with gameplay still in development.
 
 ## Downloads
 
-Download a package from [GitHub Releases](https://github.com/overyonder/openzt2/releases).
+Download a package from [openzt2.org/download](https://openzt2.org/download/) (requires signing in with Discord as a member of the [Songstorm Studios Discord](https://discord.gg/ZPqPCCtVFh)).
 You'll need your own Zoo Tycoon 2 Ultimate Collection game files to play.
 
 ✅ marks a built release package. The [packaging guide](tools/release/README.md)
@@ -74,7 +74,7 @@ Bug reports and missing features are tracked in
 
 Visit [openzt2.org](https://openzt2.org) for project details, use
 [Discussions][discussions] for questions and package requests, or join the
-[Restorers Discord](https://discord.gg/bvcd3ZjSe9) for development updates.
+[Songstorm Studios Discord](https://discord.gg/ZPqPCCtVFh) for community discussion and releases, or the [over|yonder Discord](https://discord.gg/v26xkGUBwX) for development updates.
 
 ## License
 

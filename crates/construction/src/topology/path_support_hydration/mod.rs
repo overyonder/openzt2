@@ -26,7 +26,7 @@ pub(super) struct PathSupportPrefab(pub(super) AssetId);
 
 /// A base that authors `fitLowest` reaches the lowest ground within its
 /// `fitRadius`; with no radius every sample is the centre.
-// ponytail: centre plus eight ring samples, not every vertex in the radius.
+// Centre plus eight ring samples, not every vertex in the radius.
 const FIT_LOWEST_SAMPLE_DIRECTIONS: [Vec2; 9] = [
     Vec2::ZERO,
     Vec2::X,

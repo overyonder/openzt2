@@ -200,7 +200,7 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
     }
 }
 
-pub(super) fn replace_text_in_list_row_and_descendants(
+pub(crate) fn replace_text_in_list_row_and_descendants(
     entity: Entity,
     value: &str,
     children: &Query<&Children>,

@@ -1,4 +1,4 @@
-//! `zt.exe`'s rampage manager (`BFGRampageMgr`, `config/rampage.xml`): every
+//! Rampages, as `BFGRampageMgr` in `config/rampage.xml` configures them: every
 //! 3.5 s an animal that can rampage and isn't content may start one, more likely the
 //! more bad need points it has. A rampage lasts about five minutes, and the
 //! animal can't start another for five more.
@@ -34,7 +34,7 @@ pub(crate) struct RampageSchedule {
 }
 
 /// The chance, in percent, that an animal starts a rampage at one check, as
-/// `zt.exe`'s rampage manager works it out (0x6eb2fd, called from 0x6eb0e6).
+/// the original game works it out.
 ///
 /// An animal with more than `maxGoodPoints` good need points doesn't
 /// rampage. Otherwise its bad points, up to `maxBadPoints`, raise the chance

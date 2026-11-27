@@ -40,9 +40,16 @@ pub(super) fn orient_prefab_model_billboards_toward_active_camera_on_matching_re
             (*mode, *transform, parent.map(ChildOf::parent))
         };
         let layers = inherited_layers.get(entity);
-        let Some((camera, ..)) = cameras.iter().find(|(_, camera, camera_layers)| {
-            camera.is_active && camera_layers.unwrap_or_default().intersects(&layers)
-        }) else {
+        // Water reflection and refraction captures also see the world's layers,
+        // but render to textures before the view that shows them. Face the
+        // view drawn last, which is the one on screen.
+        let Some((camera, ..)) = cameras
+            .iter()
+            .filter(|(_, camera, camera_layers)| {
+                camera.is_active && camera_layers.unwrap_or_default().intersects(&layers)
+            })
+            .max_by_key(|(_, camera, _)| camera.order)
+        else {
             continue;
         };
         let helper = transforms.p0();

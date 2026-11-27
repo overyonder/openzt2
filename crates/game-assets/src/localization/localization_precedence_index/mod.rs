@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use bevy::prelude::*;
+use bevy::{
+    asset::{AssetLoadFailedEvent, LoadState},
+    prelude::*,
+};
 use openzt2_game_data::AssetId;
 
 use super::{
@@ -42,20 +45,23 @@ impl LocalizationPrecedenceIndex {
         asset_server: &AssetServer,
         assets: &Assets<LocalizationAsset>,
     ) -> bool {
-        if self.localization_asset_handles.iter().any(|handle| {
-            matches!(
-                asset_server.load_state(handle.id()),
-                bevy::asset::LoadState::Failed(_)
-            )
-        }) {
-            return false;
-        }
         self.indexed_archive_revision.is_none()
             || self.localization_index_is_dirty
-            || self
-                .localization_asset_handles
-                .iter()
-                .any(|handle| !assets.contains(handle.id()))
+            || self.has_unsettled_assets(asset_server, assets)
+    }
+
+    fn has_unsettled_assets(
+        &self,
+        server: &AssetServer,
+        assets: &Assets<LocalizationAsset>,
+    ) -> bool {
+        self.localization_asset_handles.iter().any(|handle| {
+            !assets.contains(handle.id())
+                && !matches!(
+                    server.get_load_state(handle.id()),
+                    Some(LoadState::Failed(_))
+                )
+        })
     }
 
     pub fn borrow_loaded_localization_view<'a>(
@@ -107,26 +113,32 @@ pub(super) fn load_english_localization_assets_after_archive_revision(
 
 pub(super) fn index_loaded_localization_entries_after_asset_events(
     mut localization_asset_events: MessageReader<AssetEvent<LocalizationAsset>>,
+    mut failures: MessageReader<AssetLoadFailedEvent<LocalizationAsset>>,
+    server: Res<AssetServer>,
     localization_assets: Res<Assets<LocalizationAsset>>,
     mut localization_precedence_index: ResMut<LocalizationPrecedenceIndex>,
 ) {
-    if localization_asset_events
+    let assets_changed = localization_asset_events
         .read()
-        .any(|event| !matches!(event, AssetEvent::Unused { .. }))
-    {
+        .any(|event| !matches!(event, AssetEvent::Unused { .. }));
+    let failed = failures.read().count() != 0;
+    if assets_changed || failed {
         localization_precedence_index.localization_index_is_dirty = true;
     }
     if !localization_precedence_index.localization_index_is_dirty
-        || localization_precedence_index
-            .localization_asset_handles
-            .iter()
-            .any(|handle| localization_assets.get(handle).is_none())
+        || localization_precedence_index.has_unsettled_assets(&server, &localization_assets)
     {
         return;
     }
     localization_precedence_index.localization_entry_asset_index = localization_precedence_index
         .localization_asset_handles
         .iter()
+        .filter(|handle| {
+            !matches!(
+                server.get_load_state(handle.id()),
+                Some(LoadState::Failed(_))
+            )
+        })
         .filter_map(|handle| localization_assets.get(handle).map(|asset| (handle, asset)))
         .flat_map(|(handle, asset)| {
             asset
@@ -137,4 +149,59 @@ pub(super) fn index_loaded_localization_entries_after_asset_events(
         })
         .collect();
     localization_precedence_index.localization_index_is_dirty = false;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        asset_source::{create_bevy_asset_source_for_enabled_z2f_archives, tests::TestDirectory},
+        localization::LocalizationAssetPlugin,
+    };
+    use bevy::{
+        app::TaskPoolPlugin,
+        asset::{io::AssetSourceId, AssetPlugin},
+    };
+    use std::{
+        io,
+        time::{Duration, Instant},
+    };
+
+    #[test]
+    fn malformed_catalogue_does_not_hide_valid_localisation() -> io::Result<()> {
+        let directory = TestDirectory::new()?;
+        let archive = directory.archive("localisation.z2f", &[
+            ("lang/1033/good_strings.xml", br#"<ZT2Strings><LOC_STRING _locID="mainmenu:profile_default">Default</LOC_STRING></ZT2Strings>"#),
+            ("lang/1033/bad_strings.xml", b"<"),
+        ])?;
+        let (source, archives) = create_bevy_asset_source_for_enabled_z2f_archives(vec![archive])?;
+        let mut app = App::new();
+        app.register_asset_source(AssetSourceId::Default, source)
+            .insert_resource(archives)
+            .add_plugins((
+                TaskPoolPlugin::default(),
+                AssetPlugin::default(),
+                LocalizationAssetPlugin,
+            ));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            app.update();
+            let world = app.world();
+            let server = world.resource::<AssetServer>();
+            let index = world.resource::<LocalizationPrecedenceIndex>();
+            let assets = world.resource::<Assets<LocalizationAsset>>();
+            if !index.has_pending_catalogue_loads(server, assets) {
+                let view = index.borrow_loaded_localization_view(assets).unwrap();
+                assert_eq!(
+                    view.find_plain_localized_text(AssetId::from_key("mainmenu:profile_default")),
+                    Some("Default")
+                );
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::other("localisation catalogue never settled"));
+            }
+            std::thread::yield_now();
+        }
+    }
 }

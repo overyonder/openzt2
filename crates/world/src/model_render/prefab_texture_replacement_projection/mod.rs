@@ -16,7 +16,7 @@ pub(super) struct ProjectedPrefabTextureReplacementMaterial {
     original: Handle<EffectPassMaterial>,
 }
 
-// ponytail: walks every owner's tree each frame; fine for staff counts, gate on
+// Walks every owner's tree each frame; fine for staff counts, gate on
 // change detection if owners grow to guests.
 pub(super) fn project_prefab_texture_replacements_onto_effect_pass_materials(
     mut commands: Commands,

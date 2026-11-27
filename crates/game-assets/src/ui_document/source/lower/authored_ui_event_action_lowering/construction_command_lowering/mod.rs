@@ -52,7 +52,7 @@ pub(super) fn lower_construction_command(
         "ZT_SETPLACEMENTOBJECT" => Ok(UiActionRecord::Construction(UiConstructionActionRecord {
             trigger,
             action: UiConstructionAction::SetPlacementObject {
-                definition: canonical_source_value_resolution::lower_optional_authored_semantic_key_to_asset_id(event.string.as_deref().or(event.value.as_deref())),
+                definition: canonical_source_value_resolution::lower_optional_authored_object_key_to_asset_id(event.string.as_deref().or(event.value.as_deref())),
             },
         })),
         "ZT_UNDOACTION" => Ok(UiActionRecord::Construction(UiConstructionActionRecord {
@@ -78,7 +78,7 @@ pub(super) fn lower_construction_command(
         "ZT_SELL_PHYSOBJ" => Ok(UiActionRecord::Construction(UiConstructionActionRecord {
             trigger,
             action: UiConstructionAction::SellPhysicalObject {
-                definition: canonical_source_value_resolution::lower_optional_authored_semantic_key_to_asset_id(event.string.as_deref().or(event.value.as_deref())),
+                definition: canonical_source_value_resolution::lower_optional_authored_object_key_to_asset_id(event.string.as_deref().or(event.value.as_deref())),
             },
         })),
         "ZT_CLEARMODE" => Ok(UiActionRecord::Construction(UiConstructionActionRecord {

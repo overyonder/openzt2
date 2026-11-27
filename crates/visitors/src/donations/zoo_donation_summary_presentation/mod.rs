@@ -56,8 +56,10 @@ pub(super) fn project_zoo_donation_category_totals_into_authored_summary(
                     continue;
                 };
                 text.0.clear();
-                let dollars = amount_cents / 100;
-                let _ = write!(text.0, "${dollars}");
+                openzt2_zoo_state::economy::currency_formatting::write_whole_dollar_currency_with_thousands_separators(
+                    &mut text.0,
+                    amount_cents,
+                );
                 if let Some(localization) = localization {
                     let unformatted_text = std::mem::take(&mut text.0);
                     if localization

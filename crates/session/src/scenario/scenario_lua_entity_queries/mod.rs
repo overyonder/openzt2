@@ -299,10 +299,18 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
             let kind_name = kind.to_ascii_lowercase();
             for (entity, edge, is_gate) in queries.fence_edges.iter() {
                 // Authored types place every gate under `gate` and every other run
-                // under `fence`, beside its own definition.
-                let matched = edge.definition == fence_kind
-                    || (kind_name == "gate" && is_gate)
-                    || (kind_name == "fence" && !is_gate);
+                // under `fence`, beside its own definition. A gate keeps its host
+                // fence's definition here but counts as the host's gate type, as
+                // the Marine Mania tutorial's tank entrance step expects.
+                let matched = if is_gate {
+                    kind_name == "gate"
+                        || queries
+                            .world_definitions
+                            .and_then(|definitions| definitions.find_fence(edge.definition))
+                            .is_some_and(|host| host.gate == fence_kind)
+                } else {
+                    edge.definition == fence_kind || kind_name == "fence"
+                };
                 if !matched {
                     continue;
                 }

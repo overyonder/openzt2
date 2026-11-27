@@ -52,6 +52,8 @@ impl SelectedUiSourceResolutionProfile {
                 (UiDocumentRole::InGameHud, "ui/layout/cursormoneylayout.xml".into()),
                 (UiDocumentRole::InGameHud, "ui/layout/cameraset.xml".into()),
                 (UiDocumentRole::InGameHud, "ui/layout/message.xml".into()),
+                // Buttons that find a diseased or rampaging animal.
+                (UiDocumentRole::InGameHud, "ui/layout/animalfindbuttons.xml".into()),
             ],
             hotkey_path: Some("ui/hotkeys/hotkeys.xml".into()),
             interaction_mode_path: Some("ui/modes/modes.xml".into()),

@@ -1,5 +1,5 @@
 import bevy_pbr::render::{
-    mesh_functions::{get_world_from_local, mesh_normal_local_to_world, mesh_position_local_to_clip},
+    mesh_functions::{get_world_from_local, get_local_from_world, mesh_normal_local_to_world, mesh_position_local_to_clip},
     mesh_view_bindings::view,
     skinning::{skin_model, skin_normals},
 };
@@ -27,6 +27,7 @@ struct VertexOutput {
     @location(4) lit_diffuse: vec4<f32>,
     @location(5) camera_reflection: vec3<f32>,
     @location(6) lit_specular: vec3<f32>,
+    @location(7) @interpolate(flat) instance_index: u32,
 };
 
 struct FixedFunctionFragmentInputs {
@@ -35,6 +36,7 @@ struct FixedFunctionFragmentInputs {
     diffuse: vec4<f32>,
     camera_reflection: vec3<f32>,
     specular: vec3<f32>,
+    instance_index: u32,
 };
 
 @vertex
@@ -61,6 +63,7 @@ fn vertex(input: VertexInput) -> VertexOutput {
     let camera_position = (view.view_from_world * world_from_local * vec4(input.position, 1.0)).xyz;
     let camera_normal = normalize((view.view_from_world * vec4(output.normal, 0.0)).xyz);
     output.camera_reflection = reflect(normalize(camera_position), camera_normal);
+    output.instance_index = input.instance_index;
     return output;
 }
 
@@ -106,6 +109,14 @@ struct FixedFunctionWorldLights {
 
 const D3D9_DIRECTIONAL_LIGHT_REFERENCE_ILLUMINANCE: f32 = 100000.0;
 
+// A material whose transforms depend on the camera, mesh or environment
+// replaces this function with ones computed from them.
+// openzt2:texture-transform-begin
+fn texture_transform(stage: u32, instance_index: u32) -> mat4x4<f32> {
+    return transforms.values[stage];
+}
+// openzt2:texture-transform-end
+
 fn state(stage: u32, offset: u32) -> u32 {
     // MojoShader exposes the 18 compact FX texture-stage states in source order.
     let component = offset % 4u;
@@ -124,7 +135,7 @@ fn coordinates(stage: u32, input: FixedFunctionFragmentInputs, programmable_vert
         default: {}
     }
     let flags = state(stage, 16u);
-    if ((flags & 0xffu) != 0u) { value = transforms.values[stage] * value; }
+    if ((flags & 0xffu) != 0u) { value = texture_transform(stage, input.instance_index) * value; }
     if ((flags & 0x100u) != 0u && value.w != 0.0) { value /= value.w; }
     return value;
 }
@@ -281,6 +292,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     fragment_inputs.diffuse = input.lit_diffuse;
     fragment_inputs.camera_reflection = input.camera_reflection;
     fragment_inputs.specular = input.lit_specular;
+    fragment_inputs.instance_index = input.instance_index;
     return evaluate_fixed_function_texture_stages(fragment_inputs, false);
 }
 

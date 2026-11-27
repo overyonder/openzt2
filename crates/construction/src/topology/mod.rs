@@ -89,6 +89,7 @@ impl Plugin for TopologyPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TopologyIndex>()
             .init_resource::<TopologyGrid>()
+            .init_resource::<topology_construction_interaction::RectangularEnclosureGatePrompt>()
             .init_resource::<ElevatedPathSurfacePresentationAssets>()
             .init_resource::<path_placement_highlight_presentation::PathPlacementHighlightAssets>()
             .add_message::<PlaceFence>()
@@ -106,6 +107,7 @@ impl Plugin for TopologyPlugin {
             .add_systems(
                 Update,
                 (
+                    topology_construction_interaction::track_rectangular_enclosure_gate_prompt,
                     restart_fence_preview_from_committed_endpoint,
                     restart_path_preview_from_committed_endpoint,
                     topology_construction_interaction::rotate_closed_fence_placement_heading,

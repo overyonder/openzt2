@@ -40,7 +40,12 @@ fn calculate_topology_snapshot_deletion_refund(
                 &definitions.find_path(definition)?.object
             };
             let object = definitions.find_object(AssetId(object.0))?;
-            total.checked_add(object.price_cents)
+            // The authored `destroy` credit, 80% of the price for walls.
+            let refund =
+                openzt2_zoo_state::economy::object_sale_refund::calculate_authored_object_sale_refund(
+                    object,
+                )?;
+            total.checked_add(refund.0)
         })?
         .checked_neg()
 }

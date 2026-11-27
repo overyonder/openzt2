@@ -39,4 +39,8 @@ pub enum UiWidgetLiveCollectionSource {
     FinanceTourDonations,
     FinanceShowDonations,
     SavedGameSlots,
+    /// The zoo message bar's newest message.
+    ZooMessageLatest,
+    /// Every zoo message, shown when the bar's queue is opened.
+    ZooMessageHistory,
 }

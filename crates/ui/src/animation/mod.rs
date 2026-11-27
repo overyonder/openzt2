@@ -167,11 +167,14 @@ fn apply_rect(node: &mut Node, animation: &UiShowHideAnimation, amount: f32, ori
     ];
     for (index, component) in components.into_iter().enumerate() {
         let value = match origin {
-            // A moving receiver positions the authored region itself.
+            // A moving receiver positions the authored region itself. An
+            // animated coordinate replaces the region's own offset from the
+            // receiver: the cursor price, authored at x=-80 y=-30 with an
+            // animation ending at 0,0, sits at the pointer in the original.
             Some(origin) => {
                 let value = animated(index).unwrap_or(animation.base_rect[index]);
                 if index < 2 {
-                    origin[index] + animation.base_rect[index] + value
+                    origin[index] + value
                 } else {
                     value
                 }
@@ -299,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn moving_receiver_origin_keeps_authored_region_offset_during_rise() {
+    fn moving_receiver_animation_replaces_the_authored_region_offset() {
         let animation = UiShowHideAnimation {
             elapsed_ms: 400.0,
             duration_ms: 800.0,
@@ -321,8 +324,8 @@ mod tests {
 
         apply_rect(&mut node, &animation, 0.5, Some(Vec2::new(600.0, 400.0)));
 
-        assert_eq!(node.left, px(520.0));
-        assert_eq!(node.top, px(320.0));
+        assert_eq!(node.left, px(600.0));
+        assert_eq!(node.top, px(350.0));
         assert_eq!(node.width, px(100.0));
         assert_eq!(node.height, px(30.0));
     }

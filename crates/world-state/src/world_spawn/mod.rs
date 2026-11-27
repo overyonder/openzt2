@@ -8,6 +8,7 @@ pub mod prefab_authored_rotation_cycle_advancement;
 pub mod prefab_authored_transform_animation_advancement;
 pub mod prefab_fixed_function_world_lighting_policy;
 pub mod prefab_model_level_of_detail_visibility_range;
+pub mod prefab_model_replacement;
 pub mod prefab_model_readiness;
 pub mod prefab_model_tint;
 pub mod prefab_object_presentation_attachment_projection;

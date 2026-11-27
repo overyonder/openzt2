@@ -48,6 +48,7 @@ pub enum UiBooleanPropertyBindingSource {
     SelectedEntitySellable,
     ProfilePresent,
     SelectedWorldAdjustableCash,
+    SelectedWorldStartingCashShown,
     SelectedWorldUnlimitedCash,
     SelectedWorldDifficulty,
     AnimalDiseased,
@@ -207,6 +208,7 @@ pub enum UiTextPropertyBindingSource {
     SelectedWorldSize,
     SelectedWorldDescription,
     SelectedWorldStartingCash,
+    SelectedWorldDifficulty,
     /// Localized overview of the active scenario, shown by the goal panel's
     /// authored Introduction presentation.
     ScenarioDescription,

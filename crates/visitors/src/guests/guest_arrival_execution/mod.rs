@@ -250,7 +250,15 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
     } else {
         0
     };
-    let count = forced_count.saturating_add(scheduled_count);
+    // The original spawns a guest only while the zoo holds an animal for
+    // guests to view, whatever asked for the arrival, so an empty tutorial zoo
+    // earns no admissions. Its check also asks for a viewing intersection with
+    // the animal's habitat, which this simulation does not model yet.
+    let count = if animals.is_empty() {
+        0
+    } else {
+        forced_count.saturating_add(scheduled_count)
+    };
     if scheduled_due || forced_count != 0 {
         debug!(
             tick = clock.tick,

@@ -168,6 +168,7 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
             default_tank_wall_height_cm: 400,
             minimum_tank_wall_height_cm: 0,
             hill_threshold_cm: 600,
+            gate_wizard_placement_object: None,
         }),
         tank_depth_policy: Some(TankDepthPolicy {
             minimum_water_depth_cm: 100,
