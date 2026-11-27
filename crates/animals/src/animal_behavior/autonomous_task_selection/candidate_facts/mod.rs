@@ -151,7 +151,12 @@ impl AnimalCandidateFactsItem<'_, '_> {
                 return self.boolean_state(fact) == Some(true);
             }
         }
-        matches_static_type(required, authored_types, self.species.species, self.variant.0)
+        matches_static_type(
+            required,
+            authored_types,
+            self.species.species,
+            self.variant.0,
+        )
     }
 
     fn boolean_state(&self, state: BehaviorEntityStateEligibilityFact) -> Option<bool> {

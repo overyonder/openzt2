@@ -29,6 +29,7 @@ fn missing_registry_does_not_retain_a_cleared_or_replaced_preview() {
                     definition: AssetId([1; 16]),
                     scene,
                     catalogue_revision: 0,
+                    subject: None,
                 },
             ))
             .id();
@@ -83,6 +84,7 @@ fn removed_ui_owner_retires_one_portrait_hierarchy_and_preserves_other_camera_ow
                 definition: AssetId([1; 16]),
                 catalogue_revision: 0,
                 scene,
+                subject: None,
             });
         scenes.push(scene);
         cameras.push(camera);

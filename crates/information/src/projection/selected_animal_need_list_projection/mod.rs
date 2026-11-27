@@ -1,7 +1,10 @@
 use bevy::prelude::*;
 use openzt2_game_data::{
-    species::NeedKind, ui_document::widget_live_collection::UiWidgetLiveCollectionSource,
+    species::NeedKind, ui_document::widget_live_collection::UiWidgetLiveCollectionSource, AssetId,
 };
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
+use openzt2_ui::authored_tooltip_presentation::UiShortTooltipKey;
+use openzt2_ui::authored_tooltip_presentation::UiTooltipStatusKey;
 
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
@@ -10,13 +13,17 @@ use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types:
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue;
 use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualLayer;
-use openzt2_ui::authored_multi_icon_presentation::UiMultiIconPolicy;
+use openzt2_ui::authored_multi_icon_presentation::{UiMultiIconKey, UiMultiIconPolicy};
+use openzt2_zoo_state::animal_health::types::Disease;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
+use openzt2_zoo_state::animal_lifecycle::types::Pregnancy;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 use openzt2_zoo_state::animal_welfare::types::EnvironmentNeed;
 use openzt2_zoo_state::animal_welfare::types::ExerciseNeed;
+use openzt2_zoo_state::animal_welfare::types::HealthNeed;
 use openzt2_zoo_state::animal_welfare::types::Hunger;
 use openzt2_zoo_state::animal_welfare::types::HygieneNeed;
+use openzt2_zoo_state::animal_welfare::types::NeedPoints;
 use openzt2_zoo_state::animal_welfare::types::PrivacyNeed;
 use openzt2_zoo_state::animal_welfare::types::RestNeed;
 use openzt2_zoo_state::animal_welfare::types::SocialNeed;
@@ -61,6 +68,266 @@ pub(crate) fn request_selected_animal_need_list_row_counts(
     }
 }
 
+/// Rows of the animal panel's state display: happiness and health, and
+/// pregnancy while the animal is pregnant, as `needsitem.xml` icons.
+pub(crate) fn request_selected_animal_state_row_counts(
+    lists: Query<(Entity, &UiListPolicy, &UiDocumentOwner)>,
+    information_panels: Query<&InfoPanel>,
+    animals: Query<Has<Pregnancy>, With<Animal>>,
+    mut requested: Local<bevy::platform::collections::HashMap<Entity, u16>>,
+    mut row_count_requests: MessageWriter<SetUiListRowCount>,
+) {
+    requested.retain(|list, _| lists.contains(*list));
+    for (list_entity, list_policy, document_owner) in &lists {
+        if list_policy.source != UiWidgetLiveCollectionSource::SelectedAnimalStates {
+            continue;
+        }
+        let count = information_panels
+            .get(document_owner.0)
+            .ok()
+            .and_then(|panel| animals.get(panel.subject).ok())
+            .map_or(0, |pregnant| if pregnant { 3 } else { 2 });
+        if requested.insert(list_entity, count) != Some(count) {
+            row_count_requests.write(SetUiListRowCount {
+                list: list_entity,
+                count,
+            });
+        }
+    }
+}
+
+/// `needsitem.xml` icon indices for the state rows.
+const HAPPY_ICON: &str = "animal_happy";
+const NOT_HAPPY_ICON: &str = "animal_not_happy";
+const PREGNANT_ICON: &str = "animal_pregnant";
+const SICK_ICON: &str = "animal_sick";
+const WELL_ICON: &str = "animal_well";
+
+/// The happiness row's fill and colour: need points are bad minus good, from
+/// -100 to 100. Below 0 the animal is satisfied, from 0 pressing, and from
+/// half the maximum critical.
+fn happiness_row(points: &NeedPoints) -> (&'static str, f32, Color) {
+    let balance = (points.bad - points.good).clamp(-100.0, 100.0);
+    let icon = if balance < 0.0 {
+        HAPPY_ICON
+    } else {
+        NOT_HAPPY_ICON
+    };
+    let color = if balance < 0.0 {
+        SATISFIED_COLOR
+    } else if balance < 50.0 {
+        PRESSING_COLOR
+    } else {
+        CRITICAL_COLOR
+    };
+    (icon, (balance + 100.0) / 2.0, color)
+}
+
+pub(super) const SATISFIED_COLOR: Color = Color::srgb(0.0, 1.0, 0.0);
+pub(super) const PRESSING_COLOR: Color = Color::srgb(1.0, 1.0, 0.0);
+pub(super) const CRITICAL_COLOR: Color = Color::srgb(1.0, 0.0, 20.0 / 255.0);
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub(crate) fn project_selected_animal_states_to_authored_list_rows(
+    species_assets: Res<Assets<SpeciesAsset>>,
+    species_index: Res<SpeciesAssets>,
+    lists: Query<(&UiListPolicy, &UiDocumentOwner)>,
+    information_panels: Query<&InfoPanel>,
+    animals: Query<
+        (
+            &SpeciesHandle,
+            Option<&NeedPoints>,
+            Option<&HealthNeed>,
+            Has<Disease>,
+        ),
+        With<Animal>,
+    >,
+    rows: Query<(
+        Entity,
+        &UiListRow,
+        Option<&UiShortTooltipKey>,
+        Option<&UiTooltipStatusKey>,
+    )>,
+    mut commands: Commands,
+    multi_icons: Query<
+        (Entity, &UiDocumentOwner, Option<&UiMultiIconKey>),
+        With<UiMultiIconPolicy>,
+    >,
+    mut foreground_layouts: Query<(Entity, &Name, &UiDocumentOwner, &mut Node)>,
+    mut foreground_visuals: Query<(&ChildOf, &mut ImageNode), With<UiVisualLayer>>,
+) {
+    let species_view = species_index.get(&species_assets);
+    for (row_entity, row, tooltip, status) in &rows {
+        let Ok((list_policy, document_owner)) = lists.get(row.list) else {
+            continue;
+        };
+        if list_policy.source != UiWidgetLiveCollectionSource::SelectedAnimalStates {
+            continue;
+        }
+        let Ok(panel) = information_panels.get(document_owner.0) else {
+            continue;
+        };
+        let Ok((species, points, health, sick)) = animals.get(panel.subject) else {
+            continue;
+        };
+        // An animal restored without them reads as content and healthy.
+        let points = points.copied().unwrap_or_default();
+        let health = health.map_or(MAX_NEED_Q16, |health| health.0);
+        let (icon, fill_percent, color, tooltip_key) = match row.index {
+            0 => {
+                let (icon, fill, color) = happiness_row(&points);
+                (icon, fill, color, "entityneeds:animal_happy")
+            }
+            1 => {
+                let wellness_permille =
+                    u16::try_from(health.clamp(0, MAX_NEED_Q16) / Q16_ONE).unwrap_or_default();
+                let thresholds = species_view
+                    .and_then(|view| view.find(species.species))
+                    .and_then(|species| {
+                        species
+                            .needs
+                            .iter()
+                            .find(|need| need.kind == NeedKind::Health)
+                    });
+                let color = if wellness_permille
+                    <= thresholds
+                        .and_then(|need| need.critical_wellness_threshold)
+                        .unwrap_or_default()
+                {
+                    CRITICAL_COLOR
+                } else if wellness_permille
+                    <= thresholds
+                        .and_then(|need| need.pressing_wellness_threshold)
+                        .unwrap_or_default()
+                {
+                    PRESSING_COLOR
+                } else {
+                    SATISFIED_COLOR
+                };
+                (
+                    if sick { SICK_ICON } else { WELL_ICON },
+                    100.0 - f32::from(wellness_permille) / 10.0,
+                    color,
+                    if sick {
+                        "entityneeds:animal_sick"
+                    } else {
+                        "entityneeds:animal_well"
+                    },
+                )
+            }
+            _ => (
+                PREGNANT_ICON,
+                0.0,
+                SATISFIED_COLOR,
+                "entityneeds:animal_pregnant",
+            ),
+        };
+        // Happiness reads Satisfied, Pressing or Critical; health Healthy,
+        // Unhealthy or Sick; pregnancy names itself in full.
+        let status_key = match row.index {
+            0 => Some(status_label(color)),
+            1 => Some(if sick {
+                "entityneeds:sick"
+            } else if color == SATISFIED_COLOR {
+                "entityneeds:healthy"
+            } else {
+                "entityneeds:unhealthy"
+            }),
+            _ => None,
+        };
+        set_tooltip_status(&mut commands, row_entity, status, status_key);
+        let tooltip_key = AssetId::from_key(tooltip_key);
+        if tooltip.map(|tooltip| tooltip.0) != Some(tooltip_key) {
+            // A plain icon item takes no hits; its tooltip needs the pointer.
+            commands.entity(row_entity).insert((
+                UiShortTooltipKey(tooltip_key),
+                Pickable::default(),
+                UiPointerInteraction::default(),
+            ));
+        }
+        set_multi_icon_key(&mut commands, row_entity, icon, &multi_icons);
+        set_need_icon_fill(
+            row_entity,
+            fill_percent,
+            color,
+            &mut foreground_layouts,
+            &mut foreground_visuals,
+        );
+    }
+}
+
+/// Shows a row's icon by its `needsitem.xml` key.
+pub(super) fn set_multi_icon_key(
+    commands: &mut Commands,
+    row: Entity,
+    key: &str,
+    icons: &Query<(Entity, &UiDocumentOwner, Option<&UiMultiIconKey>), With<UiMultiIconPolicy>>,
+) {
+    let key = AssetId::from_key(key);
+    for (icon, owner, current) in icons {
+        if owner.0 == row && current.map(|current| current.0) != Some(key) {
+            commands.entity(icon).insert(UiMultiIconKey(key));
+        }
+    }
+}
+
+/// The `needs.xml` word for a need's colour band.
+pub(super) fn status_label(color: Color) -> &'static str {
+    if color == SATISFIED_COLOR {
+        "entityneeds:satisfied"
+    } else if color == PRESSING_COLOR {
+        "entityneeds:pressing"
+    } else {
+        "entityneeds:critical"
+    }
+}
+
+pub(super) fn set_tooltip_status(
+    commands: &mut Commands,
+    row: Entity,
+    current: Option<&UiTooltipStatusKey>,
+    next: Option<&str>,
+) {
+    let next = next.map(|key| UiTooltipStatusKey(AssetId::from_key(key)));
+    if current.copied() == next {
+        return;
+    }
+    match next {
+        Some(status) => {
+            commands.entity(row).insert(status);
+        }
+        None => {
+            commands.entity(row).remove::<UiTooltipStatusKey>();
+        }
+    }
+}
+
+/// Fills a `needsitem.xml` icon's foreground from the bottom up.
+pub(super) fn set_need_icon_fill(
+    row_entity: Entity,
+    fill_percent: f32,
+    color: Color,
+    foreground_layouts: &mut Query<(Entity, &Name, &UiDocumentOwner, &mut Node)>,
+    foreground_visuals: &mut Query<(&ChildOf, &mut ImageNode), With<UiVisualLayer>>,
+) {
+    for (foreground_entity, name, owner, mut node) in foreground_layouts.iter_mut() {
+        if owner.0 != row_entity || !name.as_str().eq_ignore_ascii_case("icon foreground") {
+            continue;
+        }
+        let next_height = Val::Percent(fill_percent);
+        let next_top = Val::Percent(100.0 - fill_percent);
+        if node.height != next_height || node.top != next_top {
+            node.height = next_height;
+            node.top = next_top;
+        }
+        for (parent, mut image) in foreground_visuals.iter_mut() {
+            if parent.parent() == foreground_entity && image.color != color {
+                image.color = color;
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
     species_assets: Res<Assets<SpeciesAsset>>,
@@ -82,7 +349,13 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
         ),
         With<Animal>,
     >,
-    rows: Query<(Entity, &UiListRow)>,
+    rows: Query<(
+        Entity,
+        &UiListRow,
+        Option<&UiShortTooltipKey>,
+        Option<&UiTooltipStatusKey>,
+    )>,
+    mut commands: Commands,
     mut multi_icons: Query<(&UiDocumentOwner, &mut UiValue), With<UiMultiIconPolicy>>,
     mut foreground_layouts: Query<(Entity, &Name, &UiDocumentOwner, &mut Node)>,
     mut foreground_visuals: Query<(&ChildOf, &mut ImageNode), With<UiVisualLayer>>,
@@ -90,7 +363,7 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
     let Some(species_view) = species_index.get(&species_assets) else {
         return;
     };
-    for (row_entity, row) in &rows {
+    for (row_entity, row, tooltip, status) in &rows {
         let Ok((list_policy, document_owner)) = lists.get(row.list) else {
             continue;
         };
@@ -112,6 +385,17 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
             continue;
         };
 
+        // The icon names its need when hovered, as the original's tooltip.
+        let tooltip_key = AssetId::from_key(need_tooltip_key(need_kind));
+        if tooltip.map(|tooltip| tooltip.0) != Some(tooltip_key) {
+            // A plain icon item takes no hits; its tooltip needs the pointer.
+            commands.entity(row_entity).insert((
+                UiShortTooltipKey(tooltip_key),
+                Pickable::default(),
+                UiPointerInteraction::default(),
+            ));
+        }
+
         for (owner, mut icon_value) in &mut multi_icons {
             if owner.0 == row_entity && icon_value.0 != authored_icon_index {
                 icon_value.0 = authored_icon_index;
@@ -124,28 +408,27 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
         let foreground_color = if wellness_permille
             <= species_need.critical_wellness_threshold.unwrap_or_default()
         {
-            Color::srgb(1.0, 0.0, 20.0 / 255.0)
+            CRITICAL_COLOR
         } else if wellness_permille <= species_need.pressing_wellness_threshold.unwrap_or_default()
         {
-            Color::srgb(1.0, 1.0, 0.0)
+            PRESSING_COLOR
         } else {
-            Color::srgb(0.0, 1.0, 0.0)
+            SATISFIED_COLOR
         };
 
-        for (foreground_entity, name, owner, mut node) in &mut foreground_layouts {
-            if owner.0 != row_entity || !name.as_str().eq_ignore_ascii_case("icon foreground") {
-                continue;
-            }
-            let next_height = Val::Percent(foreground_height_percent);
-            if node.height != next_height {
-                node.height = next_height;
-            }
-            for (parent, mut image) in &mut foreground_visuals {
-                if parent.parent() == foreground_entity && image.color != foreground_color {
-                    image.color = foreground_color;
-                }
-            }
-        }
+        set_tooltip_status(
+            &mut commands,
+            row_entity,
+            status,
+            Some(status_label(foreground_color)),
+        );
+        set_need_icon_fill(
+            row_entity,
+            foreground_height_percent,
+            foreground_color,
+            &mut foreground_layouts,
+            &mut foreground_visuals,
+        );
     }
 }
 
@@ -161,6 +444,23 @@ type SelectedAnimalNeedComponents<'a> = (
     &'a SocialNeed,
     &'a StimulationNeed,
 );
+
+/// The `needs.xml` label naming an animal need, such as "Hunger:".
+fn need_tooltip_key(need: NeedKind) -> &'static str {
+    match need {
+        NeedKind::Environment => "entityneeds:animal_environment",
+        NeedKind::Hunger => "entityneeds:animal_hunger",
+        NeedKind::Thirst => "entityneeds:animal_thirst",
+        NeedKind::Rest => "entityneeds:animal_rest",
+        NeedKind::Exercise => "entityneeds:animal_exercise",
+        NeedKind::Privacy => "entityneeds:animal_privacy",
+        NeedKind::Hygiene => "entityneeds:animal_hygiene",
+        NeedKind::Social => "entityneeds:animal_social",
+        NeedKind::Stimulation => "entityneeds:animal_stimulation",
+        NeedKind::Reproduction => "entityneeds:animal_reproduction",
+        NeedKind::Health | NeedKind::Bathroom => "entityneeds:animal_well",
+    }
+}
 
 fn selected_animal_need_row_value(
     source: UiWidgetLiveCollectionSource,
@@ -196,5 +496,52 @@ fn selected_animal_need_row_value(
             Some((NeedKind::Stimulation, 9, needs.9 .0))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tooltip_tests {
+    use super::*;
+
+    #[test]
+    fn happiness_fills_and_colours_by_need_point_balance() {
+        let points = |good, bad| NeedPoints {
+            good,
+            bad,
+            seconds_until_update: 0.0,
+        };
+        assert_eq!(
+            happiness_row(&points(80.0, 0.0)),
+            (HAPPY_ICON, 10.0, SATISFIED_COLOR)
+        );
+        assert_eq!(
+            happiness_row(&points(0.0, 20.0)),
+            (NOT_HAPPY_ICON, 60.0, PRESSING_COLOR)
+        );
+        assert_eq!(
+            happiness_row(&points(0.0, 100.0)),
+            (NOT_HAPPY_ICON, 100.0, CRITICAL_COLOR)
+        );
+    }
+
+    #[test]
+    fn each_shown_need_has_its_own_label() {
+        let shown = [
+            NeedKind::Environment,
+            NeedKind::Hunger,
+            NeedKind::Thirst,
+            NeedKind::Rest,
+            NeedKind::Exercise,
+            NeedKind::Privacy,
+            NeedKind::Hygiene,
+            NeedKind::Social,
+            NeedKind::Stimulation,
+        ];
+        let keys: std::collections::HashSet<_> = shown.into_iter().map(need_tooltip_key).collect();
+        assert_eq!(keys.len(), shown.len());
+        assert_eq!(
+            need_tooltip_key(NeedKind::Hunger),
+            "entityneeds:animal_hunger"
+        );
     }
 }

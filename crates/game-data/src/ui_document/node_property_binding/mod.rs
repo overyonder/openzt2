@@ -141,6 +141,9 @@ pub enum UiTextPropertyBindingSource {
     StaffRoleName,
     StaffAssignmentName,
     StaffCurrentJobName,
+    /// The selected animal's, guest's or staff member's current authored
+    /// action, such as "Going to treat Lucy".
+    SelectedEntityCurrentAction,
     FacilityServiceName,
     HabitatPrimaryBiomeName,
     HabitatBiomeName {

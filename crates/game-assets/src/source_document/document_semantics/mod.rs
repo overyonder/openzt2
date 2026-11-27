@@ -57,6 +57,11 @@ pub fn classify_source_document(document: &OrderedSourceDocument) -> SourceDocum
     {
         return SourceDocumentKind::Ui;
     }
+    // `peoplenames.xml` authors its name pools as `LOC_STRING`s under
+    // `lang/`, but they are a world definition the name pools lower from.
+    if path.ends_with("/peoplenames.xml") {
+        return SourceDocumentKind::WorldDefinitions;
+    }
     if contains_element(document, "LOC_STRING") || path.starts_with("lang/") {
         return SourceDocumentKind::Localization;
     }
@@ -222,4 +227,26 @@ fn contains_element(document: &OrderedSourceDocument, wanted: &str) -> bool {
         .root
         .element_children()
         .any(|node| descendants(node, wanted))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source_document::{
+        blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
+    };
+
+    #[test]
+    fn people_names_are_world_definitions_not_localization() {
+        let names = br#"<ZT2Strings><LOC_STRING _locID="personname:Guest_Adult_F" delimiter=" "><first><name>Ann</name></first><last><name>Lee</name></last></LOC_STRING></ZT2Strings>"#;
+        let document = |path| parse_blue_fang_source_document(AssetPath::new(path), names).unwrap();
+        assert_eq!(
+            classify_source_document(&document("lang/1033/peoplenames.xml")),
+            SourceDocumentKind::WorldDefinitions
+        );
+        assert_eq!(
+            classify_source_document(&document("lang/1033/zoonames.xml")),
+            SourceDocumentKind::Localization
+        );
+    }
 }

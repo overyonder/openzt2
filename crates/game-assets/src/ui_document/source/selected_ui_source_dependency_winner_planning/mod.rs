@@ -199,19 +199,21 @@ pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
         // through the same selected archive overlay as explicit UI document
         // references so the typed list retains the winning Bevy dependency.
         if source_document_path == "ui/layout/entityinfo.xml" {
-            if let Some(selected_need_row_path) = asset_archives
-                .resolve_ui_reference(Path::new(&source_document_path), "needsitem.xml")
-            {
-                let selected_need_row_path =
-                    selected_need_row_path.to_string_lossy().replace('\\', "/");
-                ["ui/layout/needsitem.xml", selected_need_row_path.as_str()]
-                    .into_iter()
-                    .for_each(|lookup_key| {
-                        resolved_dependencies.documents.insert(
-                            format!("*\0{}", AssetPath::new(lookup_key).key()),
-                            selected_need_row_path.clone(),
-                        );
-                    });
+            // The thought and inventory lists' rows come from native code the same way.
+            for row in ["needsitem.xml", "thoughtitem.xml", "iconitem.xml"] {
+                if let Some(selected_row_path) =
+                    asset_archives.resolve_ui_reference(Path::new(&source_document_path), row)
+                {
+                    let selected_row_path = selected_row_path.to_string_lossy().replace('\\', "/");
+                    [format!("ui/layout/{row}"), selected_row_path.clone()]
+                        .iter()
+                        .for_each(|lookup_key| {
+                            resolved_dependencies.documents.insert(
+                                format!("*\0{}", AssetPath::new(lookup_key).key()),
+                                selected_row_path.clone(),
+                            );
+                        });
+                }
             }
         }
         if source_document_path == "ui/layout/shell.xml" {

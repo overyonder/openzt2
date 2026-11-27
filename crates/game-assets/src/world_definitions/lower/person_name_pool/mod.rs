@@ -23,7 +23,7 @@ pub(super) fn bind_person_names(
     for pool in record
         .source_document_element()
         .element_children()
-        .filter(|child| canonicalize_source_document_record_key(child.name.as_str()) == "locstring")
+        .filter(|child| child.name.eq_ignore_ascii_case("LOC_STRING"))
     {
         let key_text = required_element(&pool, &["_locID", "locID"])?;
         let key = id(key_text);

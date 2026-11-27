@@ -160,3 +160,25 @@ fn disease_manager_keeps_each_disease_and_its_exposure_rules() {
     assert!(!scratch.search_for_targets);
     assert!(love.force_only);
 }
+
+#[test]
+fn english_people_names_lower_to_name_pools() {
+    let names = parse_blue_fang_source_document(
+        AssetPath::new("lang/1033/peoplenames.xml"),
+        br#"<ZT2Strings><LOC_STRING _locID="personname:Guest_Adult_F" delimiter=" "><first><name>Ann</name></first><last><name>Lee</name></last></LOC_STRING></ZT2Strings>"#,
+    )
+    .unwrap();
+    let document = lower_resolved_world_definition_source_document_closure_to_canonical_document(
+        &[names],
+        &BlueFangActorManifestModelAndSceneResolutionIndex::default(),
+        "lang/1033/peoplenames.xml",
+        [0, 0],
+    )
+    .unwrap()
+    .expect("the name pools lower");
+    let pool = &document.person_name_pools[0];
+    assert_eq!(
+        (pool.first_names.as_slice(), pool.last_names.as_slice()),
+        (&["Ann".to_owned()][..], &["Lee".to_owned()][..])
+    );
+}

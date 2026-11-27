@@ -291,7 +291,11 @@ impl Plugin for GameUiPlugin {
                         authored_window_interaction::drag_authored_windows_from_accumulated_pointer_motion,
                         authored_drag_gesture::apply_authored_drag_gestures_to_bevy_layout_or_scroll_position,
                         authored_tooltip_presentation::update_authored_tooltip_presentations,
-                        authored_multi_icon_presentation::present_multi_icons
+                        (
+                            authored_multi_icon_presentation::select_multi_icons_by_key,
+                            authored_multi_icon_presentation::present_multi_icons,
+                        )
+                            .chain()
                             .after(projection::project_ui_documents),
                         (authored_fame_star_presentation::create_fame_star_scenes,
                          authored_fame_star_presentation::hydrate_fame_stars,

@@ -170,6 +170,13 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
             );
         application.add_systems(
             FixedUpdate,
+            behavior_feedback_dispatch_execution::record_dispatched_behavior_feedback
+                .after(behavior_feedback_dispatch_execution::dispatch_current_authored_behavior_feedback_and_advance)
+                .in_set(FixedGameSet::Act)
+                .run_if(in_state(GamePhase::InGame)),
+        );
+        application.add_systems(
+            FixedUpdate,
             (
                 behavior_feedback_dispatch_execution::dispatch_current_authored_behavior_feedback_and_advance,
                 interaction_container_cleanup::remove_destroyed_container_memberships,

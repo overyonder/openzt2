@@ -30,10 +30,16 @@ pub struct UiShortTooltipKey(pub AssetId);
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct UiHelpTopicKey(pub(crate) AssetId);
 
+/// A live state shown after a node's tooltip, as the original's need icons
+/// read "Hunger: " followed by "Pressing".
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UiTooltipStatusKey(pub AssetId);
+
 #[derive(Component)]
 pub(super) struct UiTooltipTextPresentation {
     tooltip: Entity,
     key: AssetId,
+    status: Option<AssetId>,
 }
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
@@ -77,6 +83,7 @@ pub(super) fn update_authored_tooltip_presentations(
     )>,
     windows: Query<&Window, With<PrimaryWindow>>,
     canvases: Query<(&UiLogicalCanvas, &UiTransform)>,
+    statuses: Query<&UiTooltipStatusKey>,
 ) {
     let localization = active_localization.borrow_loaded_localization_view(&localizations);
     for (
@@ -111,6 +118,20 @@ pub(super) fn update_authored_tooltip_presentations(
                     .map(|label| (localization, key, label))
             })
         }) {
+            // The status sits on the node that carries the tooltip, or near it.
+            let status = hovered.and_then(|hovered| {
+                let mut entity = hovered;
+                for _ in 0..4 {
+                    if let Ok(status) = statuses.get(entity) {
+                        return Some(status.0);
+                    }
+                    entity = help_nodes.get(entity).ok()?.4?.parent();
+                }
+                None
+            });
+            let status_text = status.and_then(|status| {
+                crate::localized_ui_text_writing::localized_ui_text(localization, status)
+            });
             let changed_target = state.target != hovered;
             if changed_target {
                 state = UiTooltipState {
@@ -118,9 +139,12 @@ pub(super) fn update_authored_tooltip_presentations(
                     ..default()
                 };
             }
-            let has_current_text_presentation = tooltip_text_presentations
-                .iter()
-                .any(|(_, presentation)| presentation.tooltip == entity && presentation.key == key);
+            let has_current_text_presentation =
+                tooltip_text_presentations.iter().any(|(_, presentation)| {
+                    presentation.tooltip == entity
+                        && presentation.key == key
+                        && presentation.status == status
+                });
             if changed_target || !has_current_text_presentation {
                 set_tooltip_text(
                     &mut commands,
@@ -134,6 +158,7 @@ pub(super) fn update_authored_tooltip_presentations(
                     localization,
                     key,
                     label,
+                    status.zip(status_text),
                     &tooltip_text_presentations,
                 );
             }
@@ -227,19 +252,30 @@ fn set_tooltip_text(
     >,
     key: AssetId,
     fallback: &str,
+    status: Option<(AssetId, &str)>,
     tooltip_text_presentations: &Query<(Entity, &UiTooltipTextPresentation)>,
 ) {
     retire_tooltip_text_presentations(commands, tooltip, tooltip_text_presentations);
     text.0.clear();
     text.0.push_str(fallback);
+    if let Some((_, status)) = status {
+        text.0.push_str(status);
+    }
     *base_text_color = TextColor(Color::NONE);
     let content = localization
         .find_localized_rich_content(key)
         .filter(|content| !content.is_empty());
     let tooltip_text_presentation_entity = commands
         .spawn((
-            UiTooltipTextPresentation { tooltip, key },
-            Text::new(content.map_or(fallback, |_| "")),
+            UiTooltipTextPresentation {
+                tooltip,
+                key,
+                status: status.map(|(key, _)| key),
+            },
+            Text::new(content.map_or_else(
+                || format!("{fallback}{}", status.map_or("", |(_, status)| status)),
+                |_| String::new(),
+            )),
             base_font.clone(),
             TextColor(Color::WHITE),
             base_text_layout.clone(),
@@ -347,6 +383,14 @@ fn set_tooltip_text(
         if underlined_text {
             span.insert(Underline);
         }
+    }
+    if let Some((_, status)) = status {
+        commands.spawn((
+            TextSpan::new(status),
+            base_font.clone(),
+            TextColor(Color::WHITE),
+            ChildOf(tooltip_text_presentation_entity),
+        ));
     }
 }
 

@@ -188,3 +188,68 @@ fn a_ruin_or_stump_can_be_put_down_although_it_has_no_placement_data(
     assert_eq!(tables.document.placeables.len(), 2);
     Ok(())
 }
+
+#[test]
+fn a_variant_takes_its_icon_and_name_from_the_family_button(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // As a species' variant inherits the adopt button its species authors.
+    let documents = [
+        ("entities/deer.xml", r#"<BFTypedBinder binderType="Deer"><types><entity><scenery><Deer/></scenery></entity></types><shared><UIToggleButton><UIAspect><default image="deer_icon.dds"/></UIAspect><UIHelpInfo ids="entityname:Deer"/></UIToggleButton><BFPhysObj/></shared></BFTypedBinder>"#),
+        ("entities/deer_m.xml", r#"<BFTypedBinder binderType="Deer_M"><types><entity><scenery><Deer><Deer_M/></Deer></scenery></entity></types><shared><BFPhysObj/></shared></BFTypedBinder>"#),
+    ].map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()))
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
+    let index = SourceIndex::build(&documents)?;
+    let mut tables = WorldDefinitionLoweringTables::default();
+    bind_authored_placement_object(
+        &index.find("Deer_M").ok_or("Deer_M")?,
+        &[],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &mut tables,
+    )?;
+    let object = &tables.document.objects[0];
+    assert_eq!(
+        object.icon,
+        openzt2_game_data::AssetId::from_key("deer_icon.dds")
+    );
+    assert_eq!(
+        object.name_key,
+        openzt2_game_data::AssetId::from_key("entityname:deer")
+    );
+    Ok(())
+}
+
+#[test]
+fn a_variant_takes_its_portrait_from_the_family_icon_binder(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // As a guest look inherits `iconObj="headObj"` from its family.
+    let documents = [
+        ("entities/bust.xml", r#"<BFTypedBinder binderType="Bust"><types><entity><scenery><Bust/></scenery></entity></types><shared><ZTPlacementData iconObj="headObj" icon3Dscale="5.89"/><BFPhysObj/></shared><binder><BFNamedBinder binderName="headObj"><instance><BFPhysObj><BFSceneGraphComponent modelfile="head.nif"/></BFPhysObj></instance></BFNamedBinder></binder></BFTypedBinder>"#),
+        ("entities/bust_a.xml", r#"<BFTypedBinder binderType="Bust_A"><types><entity><scenery><Bust><Bust_A/></Bust></scenery></entity></types><shared><BFPhysObj/></shared></BFTypedBinder>"#),
+    ].map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()))
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
+    let index = SourceIndex::build(&documents)?;
+    let mut tables = WorldDefinitionLoweringTables::default();
+    let scenes = BTreeMap::from([(
+        crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key("head.nif"),
+        "scenes/head.glb".to_owned(),
+    )]);
+    bind_authored_placement_object(
+        &index.find("Bust_A").ok_or("Bust_A")?,
+        &[],
+        &BTreeMap::new(),
+        &scenes,
+        &mut tables,
+    )?;
+    let object = &tables.document.objects[0];
+    assert_eq!(
+        object.catalogue_preview_prefab,
+        Some(openzt2_game_data::AssetId::from_virtual_path(
+            "scenes/head.glb"
+        ))
+    );
+    assert_eq!(object.preview_scale, 5.89);
+    Ok(())
+}

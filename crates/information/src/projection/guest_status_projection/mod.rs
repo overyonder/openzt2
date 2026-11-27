@@ -33,7 +33,12 @@ pub(crate) fn project_live_guest_status_to_visible_information_panels(
         ),
         With<Guest>,
     >,
-    mut values: Query<(&UiDocumentOwner, &UiValueBinding, &mut UiValue)>,
+    mut values: Query<(
+        &UiDocumentOwner,
+        &UiValueBinding,
+        &mut UiValue,
+        Option<&mut Text>,
+    )>,
 ) {
     for (panel_entity, panel, visible) in &panels {
         if !visible.get() {
@@ -42,11 +47,11 @@ pub(crate) fn project_live_guest_status_to_visible_information_panels(
         let Ok(status) = guests.get(panel.subject) else {
             continue;
         };
-        for (owner, binding, mut value) in &mut values {
+        for (owner, binding, mut value, text) in &mut values {
             if owner.0 != panel_entity {
                 continue;
             }
-            value.0 = match &binding.0 {
+            let next = match &binding.0 {
                 UiIntegerPropertyBindingSource::GuestHungerPermille => i64::from(status.0.value),
                 UiIntegerPropertyBindingSource::GuestThirstPermille => i64::from(status.1.value),
                 UiIntegerPropertyBindingSource::GuestEnergyPermille => i64::from(status.2.value),
@@ -60,6 +65,17 @@ pub(crate) fn project_live_guest_status_to_visible_information_panels(
                 UiIntegerPropertyBindingSource::GuestCashCents => status.8 .0 .0,
                 _ => continue,
             };
+            value.set_if_neq(UiValue(next));
+            // The cash field shows its value as text; nothing else renders it.
+            if let (UiIntegerPropertyBindingSource::GuestCashCents, Some(mut text)) =
+                (&binding.0, text)
+            {
+                let mut money = String::new();
+                openzt2_zoo_state::economy::currency_formatting::write_whole_dollar_currency_with_thousands_separators(&mut money, next);
+                if text.0 != money {
+                    text.0 = money;
+                }
+            }
         }
     }
 }

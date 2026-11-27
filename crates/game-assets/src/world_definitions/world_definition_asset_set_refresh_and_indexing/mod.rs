@@ -73,6 +73,10 @@ fn world_definition_source_path(path: &Path, binder_directories: &BTreeSet<PathB
         return !path.starts_with("world/environments/sky/")
             && !path.starts_with("world/environments/skirt/");
     }
+    // Guests' and staff's name pools; only the English ones are lowered.
+    if path == "lang/1033/peoplenames.xml" {
+        return true;
+    }
     if path.starts_with("world/cameras/") {
         return true;
     }
@@ -538,4 +542,22 @@ pub(super) fn index_world_definition_document_records_and_singletons(
     singleton!(StaffWaterCleaning, staff_water_cleaning);
     singleton!(StaffManager, staff_manager);
     singleton!(AnimalAdoptionOffers, animal_adoption_offer_configuration);
+}
+
+#[cfg(test)]
+mod person_name_source_tests {
+    use super::*;
+
+    #[test]
+    fn english_people_names_are_a_world_definition_source() {
+        let none = BTreeSet::new();
+        assert!(world_definition_source_path(
+            Path::new("lang/1033/PeopleNames.xml"),
+            &none
+        ));
+        assert!(!world_definition_source_path(
+            Path::new("lang/1033/zoonames.xml"),
+            &none
+        ));
+    }
 }

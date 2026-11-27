@@ -141,12 +141,30 @@ impl Plugin for InformationPlugin {
             .add_systems(
                 Update,
                 (
+                    projection::selected_animal_need_list_projection::request_selected_animal_state_row_counts,
+                    projection::selected_animal_need_list_projection::project_selected_animal_states_to_authored_list_rows,
+                    projection::selected_entity_feedback_projection::request_selected_entity_thought_row_counts,
+                    projection::selected_guest_need_list_projection::request_selected_guest_need_row_counts,
+                    projection::selected_entity_inventory_projection::request_selected_entity_inventory_row_counts,
+                    projection::selected_entity_inventory_projection::project_selected_entity_inventory_to_list_rows,
+                    projection::selected_guest_need_list_projection::project_selected_guest_needs_to_list_rows,
+                    projection::selected_entity_feedback_projection::project_selected_entity_thoughts_to_list_rows,
+                )
+                    .chain()
+                    .after(projection::selected_animal_need_list_projection::project_selected_animal_needs_to_authored_list_rows)
+                    .in_set(GameSet::Ui)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                Update,
+                (
                     projection::selected_animal_summary_projection::project_selected_entity_information_section_visibility,
                     projection::selected_animal_summary_projection::project_selected_animal_identity_health_and_action_summary,
                     projection::animal_pickup_release_information_projection::project_selected_animal_pickup_release_and_conservation_controls,
                     projection::guest_status_projection::project_live_guest_status_to_visible_information_panels,
                     projection::staff_status_projection::project_maintenance_worker_duties_to_information_panel_controls,
                     projection::staff_status_projection::project_live_staff_status_to_visible_information_panels,
+                    projection::selected_entity_feedback_projection::project_selected_entity_current_action,
                     projection::zoo_status_projection::project_live_zoo_status_to_authored_information_bindings,
                     projection::animal_alert_button_projection::project_animal_alerts_to_find_animal_buttons,
                     (
