@@ -29,6 +29,10 @@ pub struct FenceDefinition {
     /// `s_Broken`: the fence an animal leaves when it bashes this one.
     #[serde(default)]
     pub broken: Option<AssetId>,
+    /// Guests cannot see an animal through it: `b_SeeThrough="false"`, as a
+    /// concrete or brick wall, unlike a chain-link fence.
+    #[serde(default)]
+    pub blocks_view: bool,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]

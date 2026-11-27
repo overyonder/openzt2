@@ -27,6 +27,7 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorDockingCompletion;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
+use openzt2_zoo_state::topology::topology_graph_types::PathTile;
 
 pub(super) fn begin_behavior_target_candidate_selection_updates(
     mut actors: Query<&mut BehaviorTargetRetryDelays>,
@@ -47,7 +48,7 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
         Option<&mut BehaviorTargetRetryDelays>,
     )>,
     entities: Query<()>,
-    target_definitions: Query<&DefinitionId>,
+    target_definitions: Query<(), Or<(With<DefinitionId>, With<PathTile>)>>,
     thinking_actors: Query<
         (),
         (
@@ -84,6 +85,8 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
     for (actor_entity, mut behavior_task, pending_failure, mut retry_delays) in &mut behavior_tasks
     {
         // Region and terrain-point stand-ins are not individual target entities.
+        // A path tile is, as the one a guest fails to reach to view animals
+        // from: unrejected, the guest picks it again on the next update.
         let retry_target = behavior_task
             .target()
             .filter(|target| target_definitions.contains(*target));

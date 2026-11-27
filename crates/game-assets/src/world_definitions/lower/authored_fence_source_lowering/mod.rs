@@ -81,6 +81,15 @@ fn authored_fence_traversal_blocking_flags(
         .ok_or_else(|| BindError::record(record, "invalid authored fence traversal flags"))
 }
 
+/// `b_SeeThrough` from the fence or the nearest type it inherits from, so a
+/// chain-link gate is as see-through as chain link.
+fn authored_fence_is_see_through(record: &RecordView<'_, '_>) -> bool {
+    authored_type_family_components(record, "BFAIEntityDataShared")
+        .into_iter()
+        .find_map(|data| data.attribute_named_any(&["b_SeeThrough"]))
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
+}
+
 fn authored_fence_purchase_button<'index, 'document>(
     record: &RecordView<'index, 'document>,
 ) -> Option<&'document OrderedSourceDocumentNode> {
@@ -219,6 +228,9 @@ pub(super) fn bind_authored_fence(
         segment_length_cm: 300,
         height_cm: 0,
         strength: number_or(record, &["f_FenceStrength", "fenceStrength"], 0)?,
+        // The base fence is opaque; see-through kinds, such as chain link,
+        // say so.
+        blocks_view: !authored_fence_is_see_through(record),
         // A fence names its broken variant as `s_Broken` or as the ruin
         // `ZTEntityDestructionData` leaves when it is destroyed.
         broken: record
@@ -482,6 +494,46 @@ mod tests {
         )
         .expect("valid broken collision scores");
         assert_eq!(broken.raw_flag_bits(), 0);
+    }
+
+    #[test]
+    fn walls_block_the_view_unless_they_say_they_are_see_through() {
+        let documents = [
+            parse(
+                "fence.xml",
+                r#"<BFTypedBinder binderType="fence" abstract="true">
+                    <types><entity><fence/></entity></types>
+                    <shared><BFAIEntityDataShared b_SeeThrough="false"/></shared>
+                </BFTypedBinder>"#,
+            ),
+            parse(
+                "chainlink.xml",
+                r#"<BFTypedBinder binderType="chainlink">
+                    <types><entity><fence><chainlink/></fence></entity></types>
+                    <shared><BFAIEntityDataShared b_SeeThrough="true"/></shared>
+                </BFTypedBinder>"#,
+            ),
+            parse(
+                "chainlinkgate.xml",
+                r#"<BFTypedBinder binderType="chainlinkgate">
+                    <types><entity><fence><chainlink><chainlinkgate/></chainlink></fence></entity></types>
+                    <shared><BFAIEntityDataShared f_FenceStrength="3"/></shared>
+                </BFTypedBinder>"#,
+            ),
+            parse(
+                "concrete.xml",
+                r#"<BFTypedBinder binderType="concrete">
+                    <types><entity><fence><concrete/></fence></entity></types>
+                    <shared><BFAIEntityDataShared f_FenceStrength="8"/></shared>
+                </BFTypedBinder>"#,
+            ),
+        ];
+        let index = SourceIndex::build(&documents).expect("valid source index");
+        let see_through = |name| authored_fence_is_see_through(&index.find(name).expect("fence"));
+        assert!(see_through("chainlink"));
+        // A gate inherits its family's view through it.
+        assert!(see_through("chainlinkgate"));
+        assert!(!see_through("concrete"));
     }
 
     #[test]

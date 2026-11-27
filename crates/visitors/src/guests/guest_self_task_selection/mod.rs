@@ -33,7 +33,13 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState
 use openzt2_zoo_state::economy::price_effect::BehaviorPriceEffectContext;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::economy::service_types::ServiceReservation;
+use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
+use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
+use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
+use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
+use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
+use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
@@ -55,7 +61,15 @@ use target_index::{GuestTarget, GuestTargetIndex};
 #[derive(Default)]
 pub(super) struct GuestSubjectTaskIndex {
     by_subject_types: HashMap<Vec<AssetId>, Vec<(Handle<BehaviorDocumentAsset>, usize)>>,
+    /// The path tiles guests may view animals from, as of `viewing_paths_tick`.
+    viewing_paths: Vec<(Entity, Vec3, Entity, bool)>,
+    viewing_paths_tick: Option<u64>,
 }
+
+/// How often the viewing paths are worked out again. Animals and paths move
+/// little in a second, and scanning every path against every habitat each
+/// update is heavy in a busy zoo.
+const VIEWING_PATH_REFRESH_TICKS: u64 = 60;
 
 pub(super) fn select_idle_guest_tasks(
     (documents, assets, mut subject_tasks): (
@@ -106,9 +120,18 @@ pub(super) fn select_idle_guest_tasks(
     occupancy: Res<InteractionContainerOccupancy>,
     paths: Query<(Entity, &GlobalTransform, &WorldMember, &PathTile)>,
     viewable_animals: Query<
-        (&GlobalTransform, &Visibility, &WorldMember),
-        (With<Animal>, With<HabitatMember>),
+        (&GlobalTransform, &Visibility, &WorldMember, &HabitatMember),
+        With<Animal>,
     >,
+    (habitat_lookup, busy_guests, (regions, fence_edges, topology_nodes)): (
+        (Option<Res<HabitatIndex>>, Option<Res<TopologyGrid>>),
+        Query<&BehaviorTaskExecutionState, With<Guest>>,
+        (
+            Query<&HabitatRegion>,
+            Query<&FenceEdge>,
+            Query<&TopologyNode>,
+        ),
+    ),
     controllers: Query<
         &AnimationPresentationOwner,
         (
@@ -137,37 +160,93 @@ pub(super) fn select_idle_guest_tasks(
         return;
     }
     // The original offers viewing tasks the paths its `viewanimals` sensor
-    // finds: path tiles with an animal in its habitat within viewing range.
+    // finds: path tiles beside a habitat, within the authored viewing
+    // distance of it, with an animal of that habitat within viewing range.
     let view_sensor = AssetId::from_key("viewanimals");
     let path_sensor = AssetId::from_key("path");
-    let viewing_paths = definitions
-        .guest_viewing()
-        .map(|viewing| {
-            let range_squared = viewing.ground_range_m * viewing.ground_range_m;
-            paths
-                .iter()
-                .filter(|(_, path, path_world, _)| {
-                    viewable_animals
-                        .iter()
-                        .any(|(animal, visibility, animal_world)| {
-                            animal_world.root == path_world.root
-                                && *visibility != Visibility::Hidden
-                                && animal
-                                    .translation()
-                                    .xz()
-                                    .distance_squared(path.translation().xz())
-                                    <= range_squared
-                        })
-                })
-                .map(|(path, transform, path_world, tile)| {
-                    let elevated = definitions
-                        .find_path(tile.definition)
-                        .is_some_and(|definition| definition.elevated);
-                    (path, transform.translation(), path_world.root, elevated)
-                })
-                .collect::<Vec<_>>()
+    let (habitats, topology) = habitat_lookup;
+    let beside_habitat = |path: Vec2, habitat: Entity, distance_m: f32| {
+        let (Some(habitats), Some(topology)) = (habitats.as_deref(), topology.as_deref()) else {
+            return true;
+        };
+        path_is_beside_habitat(habitats, *topology, path, habitat, distance_m)
+    };
+    // A wall guests cannot see through, such as concrete, hides the animals
+    // behind it; the sight line enters the habitat across its boundary.
+    let view_is_walled_off = |path: Vec2, animal: Vec2, habitat: Entity| {
+        let (Some(topology), Ok(region)) = (topology.as_deref(), regions.get(habitat)) else {
+            return false;
+        };
+        region.boundary_fence_entities.iter().any(|&fence| {
+            let Ok(edge) = fence_edges.get(fence) else {
+                return false;
+            };
+            let (Ok(a), Ok(b)) = (topology_nodes.get(edge.a), topology_nodes.get(edge.b)) else {
+                return false;
+            };
+            definitions
+                .find_fence(edge.definition)
+                .is_some_and(|definition| definition.blocks_view)
+                && segments_cross(
+                    path,
+                    animal,
+                    topology.cell_translation(a.cell).xz(),
+                    topology.cell_translation(b.cell).xz(),
+                )
         })
-        .unwrap_or_default();
+    };
+    let stale = subject_tasks.viewing_paths_tick.is_none_or(|tick| {
+        clock.tick.saturating_sub(tick) >= VIEWING_PATH_REFRESH_TICKS || tick > clock.tick
+    });
+    if stale {
+        subject_tasks.viewing_paths_tick = Some(clock.tick);
+        subject_tasks.viewing_paths = definitions
+            .guest_viewing()
+            .map(|viewing| {
+                let range_squared = viewing.ground_range_m * viewing.ground_range_m;
+                paths
+                    .iter()
+                    .filter(|(_, path, path_world, _)| {
+                        let path = path.translation().xz();
+                        viewable_animals
+                            .iter()
+                            .any(|(animal, visibility, animal_world, member)| {
+                                animal_world.root == path_world.root
+                                    && *visibility != Visibility::Hidden
+                                    && animal.translation().xz().distance_squared(path)
+                                        <= range_squared
+                                    && beside_habitat(
+                                        path,
+                                        member.habitat_entity,
+                                        viewing.ground_distance_m,
+                                    )
+                                    && !view_is_walled_off(
+                                        path,
+                                        animal.translation().xz(),
+                                        member.habitat_entity,
+                                    )
+                            })
+                    })
+                    .map(|(path, transform, path_world, tile)| {
+                        let elevated = definitions
+                            .find_path(tile.definition)
+                            .is_some_and(|definition| definition.elevated);
+                        (path, transform.translation(), path_world.root, elevated)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+    }
+    let viewing_paths = subject_tasks.viewing_paths.clone();
+    // A viewing task's `reserveTag="Use_Path"` lets one guest view from a
+    // path tile at a time, so watchers spread along the fence instead of
+    // crowding onto the best spot. `GuestViewAnimal_Approach` reserves nothing:
+    // a guest who finds every spot taken walks towards the exhibit instead.
+    let mut reserved_viewing_paths = busy_guests
+        .iter()
+        .filter(|task| task.reservation_tag(&assets).is_some())
+        .filter_map(|task| task.target())
+        .collect::<bevy::platform::collections::HashSet<_>>();
     let mut target_index = None;
     let mut combined_targets = Vec::new();
     for (
@@ -407,7 +486,10 @@ pub(super) fn select_idle_guest_tasks(
             } else if task.targets[0] == "path" {
                 if task.sensor_tag == Some(view_sensor) {
                     for &(path, position, root, elevated) in &viewing_paths {
-                        if root == world.root {
+                        if root == world.root
+                            && (task.reservation_tag.is_none()
+                                || !reserved_viewing_paths.contains(&path))
+                        {
                             consider_target(path, None, Some(elevated), None, position);
                         }
                     }
@@ -483,6 +565,9 @@ pub(super) fn select_idle_guest_tasks(
             debug!(?guest, "idle guest found no task scoring above the minimum");
             continue;
         };
+        if task.reservation_tag.is_some() {
+            reserved_viewing_paths.insert(target);
+        }
         // The authored delay starts once the task ends. An unsupported winner
         // ends at once, so its delay still lets lower-ranked tasks run meanwhile.
         if let Some([minimum, maximum]) =
@@ -530,5 +615,79 @@ pub(super) fn select_idle_guest_tasks(
             interaction_slot: None,
             stack: ArrayVec::new(),
         });
+    }
+}
+
+/// Whether the segments `a0`-`a1` and `b0`-`b1` cross each other.
+fn segments_cross(a0: Vec2, a1: Vec2, b0: Vec2, b1: Vec2) -> bool {
+    let side = |p: Vec2, q: Vec2, r: Vec2| (q - p).perp_dot(r - p);
+    side(a0, a1, b0) * side(a0, a1, b1) < 0.0 && side(b0, b1, a0) * side(b0, b1, a1) < 0.0
+}
+
+/// Whether any of `habitat`'s ground lies closer than `distance_m` to `path`.
+fn path_is_beside_habitat(
+    habitats: &HabitatIndex,
+    topology: TopologyGrid,
+    path: Vec2,
+    habitat: Entity,
+    distance_m: f32,
+) -> bool {
+    let step = topology.spacing_m.max(0.5);
+    let steps = (distance_m / step).ceil() as i32;
+    (-steps..=steps).any(|z| {
+        (-steps..=steps).any(|x| {
+            let offset = Vec2::new(x as f32, z as f32) * step;
+            offset.length_squared() < distance_m * distance_m
+                && locate_habitat_at_world_position(habitats, path + offset, topology)
+                    == Some(habitat)
+        })
+    })
+}
+
+#[cfg(test)]
+mod viewing_path_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_path_near_the_habitat_views_its_animals() {
+        let habitat = Entity::from_raw_u32(7).unwrap();
+        let mut habitats = HabitatIndex::default();
+        habitats.record_habitat_for_topology_cell(IVec2::new(0, 0), habitat);
+        let topology = TopologyGrid::default();
+        assert!(path_is_beside_habitat(
+            &habitats,
+            topology,
+            Vec2::new(5.0, 0.5),
+            habitat,
+            6.0
+        ));
+        // Habitat ground exactly at the viewing distance is too far.
+        assert!(!path_is_beside_habitat(
+            &habitats,
+            topology,
+            Vec2::new(6.5, 0.5),
+            habitat,
+            6.0
+        ));
+        assert!(segments_cross(
+            Vec2::ZERO,
+            Vec2::X * 4.0,
+            Vec2::new(2.0, -1.0),
+            Vec2::new(2.0, 1.0)
+        ));
+        assert!(!segments_cross(
+            Vec2::ZERO,
+            Vec2::X * 4.0,
+            Vec2::new(5.0, -1.0),
+            Vec2::new(5.0, 1.0)
+        ));
+        // A stand 20 m away sees the animal within range but not the habitat.
+        assert!(!path_is_beside_habitat(
+            &habitats,
+            topology,
+            Vec2::new(20.0, 0.5),
+            habitat,
+            6.0
+        ));
     }
 }
