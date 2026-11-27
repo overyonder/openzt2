@@ -352,6 +352,10 @@ impl Plugin for TerrainPlugin {
                         .after(terrain_water_caustics::scene_projection::project_scene_caustic_targets)
                         .after(openzt2_game_assets::material::runtime::texture_coordinate_animation::TextureCoordinateAnimationSet)
                         .after(ModelRenderPresentationSet::SourceMaterials)
+                        .before(bevy::camera::visibility::VisibilitySystems::CalculateBounds)
+                        .before(bevy::pbr::check_entities_needing_specialization::<
+                            openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial,
+                        >)
                         .in_set(ModelRenderPresentationSet::VisibilityInputs),
                     terrain_water_caustics::scene_projection::update_scene_caustic_bindings
                         .after(terrain_water_caustics::scene_projection::project_scene_caustic_passes)

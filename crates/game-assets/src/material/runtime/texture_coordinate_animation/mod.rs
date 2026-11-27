@@ -155,9 +155,10 @@ pub(super) fn register_texture_coordinate_animation(application: &mut App) {
             PostUpdate,
             (
                 project_texture_animation_passes,
-                sample_geometry_texture_animations.after(project_texture_animation_passes),
-            )
-                .in_set(TextureCoordinateAnimationSet),
+                sample_geometry_texture_animations
+                    .after(project_texture_animation_passes)
+                    .in_set(TextureCoordinateAnimationSet),
+            ),
         );
     if let Some(render) = application.get_sub_app_mut(RenderApp) {
         render
@@ -255,7 +256,7 @@ fn project_texture_animation_passes(
 fn sample_geometry_texture_animations(
     mut commands: Commands,
     time: Res<Time>,
-    mut geometries: Query<(
+    mut geometries: Populated<(
         Entity,
         &TextureAnimationPass,
         Option<&GeometryTextureCoordinateAnimationClock>,

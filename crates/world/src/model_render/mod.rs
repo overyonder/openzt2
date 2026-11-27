@@ -32,6 +32,7 @@ use bevy::render::RenderApp;
 use bevy::render::RenderSystems;
 use bevy::transform::TransformSystems;
 
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
 use openzt2_world_state::model_render::ModelRenderPresentationSet;
 
@@ -146,9 +147,9 @@ impl Plugin for ModelRenderPlugin {
         app.add_systems(
             PostUpdate,
             (
-                initialize_model_geometry_texture_coordinate_clocks.before(
-                    openzt2_game_assets::material::runtime::texture_coordinate_animation::TextureCoordinateAnimationSet,
-                ),
+                initialize_model_geometry_texture_coordinate_clocks
+                    .after(instantiate_visible_gltf_model_scenes)
+                    .before(openzt2_game_assets::material::runtime::texture_coordinate_animation::TextureCoordinateAnimationSet),
                 prefab_render_lod_tier_projection::select_prefab_render_lod_from_camera
                     .in_set(ModelRenderPresentationSet::LevelOfDetail),
                 prefab_render_lod_tier_projection::project_prefab_render_lod_tier
@@ -157,12 +158,26 @@ impl Plugin for ModelRenderPlugin {
                 project_prefab_model_level_of_detail_visibility
                     .after(prefab_render_lod_tier_projection::project_prefab_render_lod_tier)
                     .in_set(ModelRenderPresentationSet::LevelOfDetail),
+                project_model_tints_onto_standard_materials
+                    .after(project_authored_model_material_passes)
+                    .after(bevy::app::PropagateSet::<crate::world_spawn::prefab_world_instance_spawning::morph_fade_projection::PrefabMorphOpacity>::default())
+                    .after(bevy::app::PropagateSet::<crate::world_spawn::prefab_world_instance_spawning::morph_fade_projection::NamedPrefabOpacity>::default())
+                    .before(bevy::pbr::check_entities_needing_specialization::<StandardMaterial>),
                 instantiate_visible_gltf_model_scenes
                     .after(VisibilitySystems::VisibilityPropagate)
-                    .before(VisibilitySystems::CalculateBounds),
+                    .before(VisibilitySystems::CalculateBounds)
+                    .before(bevy::pbr::check_entities_needing_specialization::<StandardMaterial>),
+                authored_model_material_pass_projection::synchronize_additional_pass_geometry
+                    .after(ModelRenderPresentationSet::SourceMaterials)
+                    .before(VisibilitySystems::CalculateBounds)
+                    .before(bevy::pbr::check_entities_needing_specialization::<EffectPassMaterial>),
+            ),
+        );
+        app.add_systems(
+            PostUpdate,
+            (
                 retire_hidden_prefab_model_assets
                     .after(VisibilitySystems::VisibilityPropagate)
-                    .after_ignore_deferred(instantiate_visible_gltf_model_scenes)
                     .before(VisibilitySystems::CheckVisibility),
                 mirrored_model_primitive_winding::project_mirrored_and_tinted_model_primitive_meshes
                     .after(bevy::app::AnimationSystems)
@@ -172,21 +187,10 @@ impl Plugin for ModelRenderPlugin {
                     .in_set(ModelRenderPresentationSet::SourceMaterials),
                 project_authored_model_material_passes
                     .in_set(ModelRenderPresentationSet::SourceMaterials),
-                authored_model_material_pass_projection::synchronize_additional_pass_geometry
-                    .after(ModelRenderPresentationSet::SourceMaterials)
-                    .after(ModelRenderPresentationSet::VisibilityInputs)
-                    .before(VisibilitySystems::CalculateBounds),
-                project_model_tints_onto_standard_materials
-                    .after(ModelRenderPresentationSet::SourceMaterials)
-                    .after(bevy::app::PropagateSet::<crate::world_spawn::prefab_world_instance_spawning::morph_fade_projection::PrefabMorphOpacity>::default())
-                    .after(bevy::app::PropagateSet::<crate::world_spawn::prefab_world_instance_spawning::morph_fade_projection::NamedPrefabOpacity>::default()),
             )
-                // Material replacement must reach pipeline specialization in
-                // the same frame as render extraction sees the new binding.
+                // Mesh and material binding changes must reach specialization before extraction.
                 .before(bevy::pbr::check_entities_needing_specialization::<StandardMaterial>)
-                .before(bevy::pbr::check_entities_needing_specialization::<
-                    openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial,
-                >),
+                .before(bevy::pbr::check_entities_needing_specialization::<EffectPassMaterial>),
         );
     }
 }

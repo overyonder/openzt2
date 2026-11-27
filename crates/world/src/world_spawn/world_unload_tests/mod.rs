@@ -36,10 +36,7 @@ fn repeated_unload_retires_owned_hierarchies_before_the_next_system() {
             Update,
             assert_retirement_is_visible_to_the_next_system
                 .after(unload_requested_worlds_and_their_members),
-        )
-        .edit_schedule(Update, |schedule| {
-            schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
-        });
+        );
     let root = app
         .world_mut()
         .spawn(WorldRoot {

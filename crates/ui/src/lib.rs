@@ -115,17 +115,6 @@ impl Plugin for GameUiPlugin {
         app.add_systems(PostUpdate,
             authored_ui_source_rectangle_presentation::project_changed_authored_image_source_rectangles
                 .before(bevy::ui::UiSystems::Layout));
-        app.configure_sets(
-            PostUpdate,
-            (
-                // Let animation apply its input commands before the UI tree walk.
-                bevy::ui::UiSystems::Stack.after_ignore_deferred(bevy::app::AnimationSystems),
-                // Keep the UI clip commands out of the automatic visibility flush.
-                bevy::ui::UiSystems::Clipping.after_ignore_deferred(
-                    bevy::camera::visibility::VisibilitySystems::VisibilityPropagate,
-                ),
-            ),
-        );
         use openzt2_interface_state::information::entity_selection_types::{
             SelectionChanged, SelectionRequest,
         };

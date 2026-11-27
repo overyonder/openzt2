@@ -48,7 +48,7 @@ pub(super) fn instantiate_visible_gltf_model_scenes(
     nodes: Res<Assets<GltfNode>>,
     meshes: Res<Assets<GltfMesh>>,
     mut gltf_asset_events: MessageReader<AssetEvent<Gltf>>,
-    mut roots: Query<
+    mut roots: Populated<
         (
             Entity,
             Mut<PrefabModel>,
