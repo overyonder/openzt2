@@ -1,6 +1,8 @@
 mod locomotion_root_motion;
 // Runtime animation playback, authored events, attachments, and Bevy player projection.
 
+mod animation_held_prop_projection;
+pub(crate) use animation_held_prop_projection::SkippedAnimationGraphTransition;
 mod animation_playback_controller_ancestor_lookup;
 mod animation_playback_time_advancement;
 mod animation_traversal_transition_request_projection;
@@ -59,6 +61,7 @@ impl Plugin for AnimationPlaybackPlugin {
             .add_message::<AnimationCompleted>()
             .add_message::<openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommand>()
             .add_message::<AnimationTraversalTransitionRequested>()
+            .add_message::<SkippedAnimationGraphTransition>()
             .add_systems(
                 FixedUpdate,
                 (
@@ -69,6 +72,15 @@ impl Plugin for AnimationPlaybackPlugin {
                     .in_set(openzt2_world_state::animation_playback::locomotion_root_motion::AnimationLocomotionMotionSampling)
                     .before(openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommandDelivery)
                     .in_set(FixedGameSet::Act),
+            )
+            .add_systems(
+                FixedUpdate,
+                (
+                    animation_held_prop_projection::create_and_destroy_animation_held_props,
+                    animation_held_prop_projection::release_held_props_of_interrupted_tasks,
+                )
+                    .chain()
+                    .in_set(openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommandDelivery),
             )
             .add_systems(
                 Update,
