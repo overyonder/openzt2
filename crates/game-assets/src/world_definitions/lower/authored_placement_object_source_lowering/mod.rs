@@ -35,6 +35,7 @@ use openzt2_game_data::world_definitions::world_objects::{
     WaterFilterPolicy, WorldObjectAffordanceFlags, WorldObjectDefinition, WorldObjectPropertyFlags,
     WorldObjectRealPhysicsWaterImpactDefinition,
 };
+use openzt2_game_data::world_definitions::fences_and_gates::FenceTraversalBlockingFlags;
 use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
@@ -547,6 +548,7 @@ pub(super) fn bind_authored_placement_object(
         presentation_attachments,
         named_physical_presentations,
         catalogue_preview_prefab: None,
+        movement_blocking: authored_collision_movement_blocking(record),
         interaction_slots,
         transactions,
         prefab_scale: presentation_scale,
@@ -606,3 +608,46 @@ fn authored_placement_binder_is_abstract(record: &RecordView<'_, '_>) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+/// `zt.exe` scores a cell for a walker as the highest `score` among the objects
+/// on it, leaving out `isPassable` ones (`FUN_006f00bf`), and a score of 10000
+/// blocks it (`FUN_006f01b9`). `BFGCollisionData` defaults `isPassable` to
+/// false and `score` to 10000 (`FUN_00700667`); `typeScores` overrides the
+/// score for a kind of walker, as a front gate lets guests through.
+fn authored_collision_movement_blocking(record: &RecordView<'_, '_>) -> FenceTraversalBlockingFlags {
+    let components = authored_type_family_components(record, "BFGCollisionData");
+    if components.is_empty() {
+        return FenceTraversalBlockingFlags::default();
+    }
+    let passable = components
+        .iter()
+        .find_map(|component| component.attribute_named_any(&["isPassable"]))
+        .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "true" | "1"));
+    if passable {
+        return FenceTraversalBlockingFlags::default();
+    }
+    let score = |value: Option<&str>| value.and_then(parse_blue_fang_source_numeric_lexeme::<f64>);
+    let default_score = score(
+        components
+            .iter()
+            .find_map(|component| component.attribute_named_any(&["score"])),
+    )
+    .unwrap_or(10_000.0);
+    let mut flag_bits = 0;
+    for (walker, flag) in [
+        ("guest", FenceTraversalBlockingFlags::GUEST),
+        ("staff", FenceTraversalBlockingFlags::STAFF),
+        ("animal", FenceTraversalBlockingFlags::ANIMAL),
+        ("vehicle", FenceTraversalBlockingFlags::VEHICLE),
+    ] {
+        let walker_score = score(components.iter().find_map(|component| {
+            find_descendant(*component, "typeScores")
+                .and_then(|scores| scores.attribute_named_any(&[walker]))
+        }))
+        .unwrap_or(default_score);
+        if walker_score >= 10_000.0 {
+            flag_bits |= flag.raw_flag_bits();
+        }
+    }
+    FenceTraversalBlockingFlags::from_raw_flag_bits(flag_bits).unwrap_or_default()
+}

@@ -149,6 +149,7 @@ pub(super) fn install_definitions(
         zoopedia_subject: AssetId::default(),
         prefab: AssetId::default(),
         catalogue_preview_prefab: None,
+        movement_blocking: Default::default(),
         presentation_attachments: vec![],
         named_physical_presentations: vec![],
         interaction_slots: vec![],

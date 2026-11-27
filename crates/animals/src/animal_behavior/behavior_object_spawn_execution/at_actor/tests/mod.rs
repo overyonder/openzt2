@@ -104,6 +104,7 @@ fn litter(id: AssetId) -> WorldObjectDefinition {
         zoopedia_subject: id,
         prefab: id,
         catalogue_preview_prefab: None,
+        movement_blocking: Default::default(),
         presentation_attachments: vec![],
         named_physical_presentations: vec![],
         interaction_slots: vec![],

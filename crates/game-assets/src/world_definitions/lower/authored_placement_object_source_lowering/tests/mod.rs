@@ -3,6 +3,7 @@ use crate::source_document::blue_fang_source_document_parsing::parse_blue_fang_s
 use crate::source_document::path::AssetPath;
 use crate::source_document::resolved_source_record_index::SourceIndex;
 use crate::world_definitions::lower::world_definition_lowering_tables::WorldDefinitionLoweringTables;
+use openzt2_game_data::world_definitions::fences_and_gates::FenceTraversalBlockingFlags;
 use std::collections::BTreeMap;
 
 #[test]
@@ -186,5 +187,55 @@ fn a_ruin_or_stump_can_be_put_down_although_it_has_no_placement_data(
         )?;
     }
     assert_eq!(tables.document.placeables.len(), 2);
+    Ok(())
+}
+
+#[test]
+fn an_object_blocks_walkers_unless_its_collision_is_passable_or_scores_low_for_them(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // As the shipped trough, a passable statue, a fence-like score of 0, a
+    // variant inheriting its family's collision, an object with none, and a
+    // front gate that lets guests through.
+    let documents = [
+        ("entities/trough.xml", r#"<BFTypedBinder binderType="Trough"><types><entity><scenery><Trough/></scenery></entity></types><shared><BFGCollisionData isPassable="false" isStatic="true"/><BFPhysObj/></shared></BFTypedBinder>"#),
+        ("entities/trough_water.xml", r#"<BFTypedBinder binderType="Trough_Water"><types><entity><scenery><Trough><Trough_Water/></Trough></scenery></entity></types><shared><BFPhysObj/></shared></BFTypedBinder>"#),
+        ("entities/statue.xml", r#"<BFTypedBinder binderType="Statue"><types><entity><scenery/></entity></types><shared><BFGCollisionData isPassable="true"/><BFPhysObj/></shared></BFTypedBinder>"#),
+        ("entities/low.xml", r#"<BFTypedBinder binderType="Low"><types><entity><scenery/></entity></types><shared><BFGCollisionData score="0"/><BFPhysObj/></shared></BFTypedBinder>"#),
+        ("entities/flower.xml", r#"<BFTypedBinder binderType="Flower"><types><entity><scenery/></entity></types><shared><BFPhysObj/></shared></BFTypedBinder>"#),
+        ("entities/gate.xml", r#"<BFTypedBinder binderType="Gate"><types><entity><scenery/></entity></types><shared><BFGCollisionData><typeScores Guest="0"/></BFGCollisionData><BFPhysObj/></shared></BFTypedBinder>"#),
+    ].map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()))
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
+    let index = SourceIndex::build(&documents)?;
+    let mut tables = WorldDefinitionLoweringTables::default();
+    let keys = ["Trough", "Trough_Water", "Statue", "Low", "Flower", "Gate"];
+    for key in keys {
+        bind_authored_placement_object(
+            &index.find(key).ok_or(key)?,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &mut tables,
+        )?;
+    }
+    let blocks = tables
+        .document
+        .objects
+        .iter()
+        .map(|object| object.movement_blocking)
+        .collect::<Vec<_>>();
+    let all = FenceTraversalBlockingFlags::from_raw_flag_bits(
+        FenceTraversalBlockingFlags::GUEST.raw_flag_bits()
+            | FenceTraversalBlockingFlags::STAFF.raw_flag_bits()
+            | FenceTraversalBlockingFlags::ANIMAL.raw_flag_bits()
+            | FenceTraversalBlockingFlags::VEHICLE.raw_flag_bits(),
+    )
+    .ok_or("flags")?;
+    let none = FenceTraversalBlockingFlags::default();
+    let not_guests = FenceTraversalBlockingFlags::from_raw_flag_bits(
+        all.raw_flag_bits() & !FenceTraversalBlockingFlags::GUEST.raw_flag_bits(),
+    )
+    .ok_or("flags")?;
+    assert_eq!(blocks, [all, all, none, none, none, not_guests]);
     Ok(())
 }

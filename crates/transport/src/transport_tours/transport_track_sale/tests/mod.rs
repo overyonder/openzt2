@@ -79,6 +79,7 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
             zoopedia_subject: AssetId::default(),
             prefab: AssetId::default(),
             catalogue_preview_prefab: None,
+            movement_blocking: Default::default(),
             presentation_attachments: Vec::new(),
             named_physical_presentations: Vec::new(),
             interaction_slots: Vec::new(),

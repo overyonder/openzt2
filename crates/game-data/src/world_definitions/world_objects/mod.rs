@@ -320,6 +320,11 @@ pub struct WorldObjectDefinition {
     /// None uses the ordinary world prefab and its presentation attachments.
     #[serde(default)]
     pub catalogue_preview_prefab: Option<AssetId>,
+    /// The walkers its authored `BFGCollisionData` keeps off its footprint:
+    /// those it is not `isPassable` for, with a `score`, or their `typeScores`
+    /// entry, of at least the 10000 that blocks a cell.
+    #[serde(default)]
+    pub movement_blocking: super::fences_and_gates::FenceTraversalBlockingFlags,
     /// Named child-binder states attached to primary prefab sockets. State
     /// selection is live presentation state; geometry remains in scene assets.
     pub presentation_attachments: Vec<WorldObjectPresentationControllerDefinition>,
