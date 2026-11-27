@@ -233,6 +233,14 @@ pub(super) fn bind_authored_fence(
             .filter(|broken| !broken.is_empty())
             .map(id),
         blocks: authored_fence_traversal_blocking_flags(record)?,
+        collision_width_cm: authored_type_family_components(record, "BFGCollisionData")
+            .iter()
+            .find_map(|component| component.attribute_named_any(&["width"]))
+            .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
+            .filter(|width| width.is_finite() && *width > 0.0)
+            .map_or(0, |width| {
+                (width * 100.0).round().min(f32::from(u16::MAX)) as u16
+            }),
         gate,
         post_prefab: prefab("start_post"),
         segments: FenceSegmentPrefabs {

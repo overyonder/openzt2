@@ -81,6 +81,32 @@ impl FenceNavigationPolicy<'_, '_> {
         })
     }
 
+    /// The fence segments blocking this actor as it moves now, with the
+    /// collision thickness of each, in metres.
+    pub(super) fn blocking_fence_walls(
+        &self,
+        actor: Entity,
+        capabilities: NavFlags,
+    ) -> impl Iterator<Item = (Vec2, Vec2, f32)> + '_ {
+        let actor_types = self.actor_types.actor_types(actor);
+        self.fences.iter().filter_map(move |(edge, gate)| {
+            let (a, b) = (self.nodes.get(edge.a).ok()?, self.nodes.get(edge.b).ok()?);
+            if !self.definition_blocks_actor(edge, gate, capabilities, actor_types, false) {
+                return None;
+            }
+            let width_cm = self
+                .actor_types
+                .definitions()
+                .and_then(|definitions| definitions.find_fence(edge.definition))
+                .map_or(0, |definition| definition.collision_width_cm);
+            Some((
+                self.grid.cell_translation(a.cell).xz(),
+                self.grid.cell_translation(b.cell).xz(),
+                f32::from(width_cm) * 0.01,
+            ))
+        })
+    }
+
     fn definition_blocks_actor(
         &self,
         edge: &FenceEdge,
