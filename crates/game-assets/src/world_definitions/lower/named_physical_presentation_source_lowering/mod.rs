@@ -89,6 +89,7 @@ pub(super) fn lower_named_physical_presentations(
             attach_node: None,
             inherit_attach_rotation: false,
             fade: None,
+            simple_lod_distances_m: simple_lod_distances(component),
         });
     }
     Ok(presentations)
@@ -126,25 +127,32 @@ pub(super) fn lower_parented_named_physical_presentations(
         {
             continue;
         }
-        let Some(binder) = binders.iter().copied().find(|binder| {
+        // A concrete look such as `YoungFemale_01` names the binder again
+        // only to set its textures; its model comes from the family.
+        let named = |binder: &&OrderedSourceDocumentNode| {
             binder
                 .attribute_named_any(&["binderName"])
                 .is_some_and(|name| source_document_names_are_semantically_equal(name, child))
-        }) else {
-            continue;
         };
-        if binder
-            .attribute_named_any(&["required"])
-            .is_some_and(|value| matches!(value.trim(), "0" | "false"))
-        {
+        if binders.iter().copied().find(named).is_some_and(|binder| {
+            binder
+                .attribute_named_any(&["required"])
+                .is_some_and(|value| matches!(value.trim(), "0" | "false"))
+        }) {
             continue;
         }
-        let Some(component) = find_presentation_component(binder).filter(|component| {
-            !source_document_names_are_semantically_equal(
-                component.name.as_str(),
-                "BFActorComponent",
-            )
-        }) else {
+        let Some(component) = binders
+            .iter()
+            .copied()
+            .filter(named)
+            .find_map(|binder| find_presentation_component(binder))
+            .filter(|component| {
+                !source_document_names_are_semantically_equal(
+                    component.name.as_str(),
+                    "BFActorComponent",
+                )
+            })
+        else {
             continue;
         };
         let model = component
@@ -181,6 +189,7 @@ pub(super) fn lower_parented_named_physical_presentations(
                 .attribute_named_any(&["rottype"])
                 .is_some_and(|mode| source_document_names_are_semantically_equal(mode, "use")),
             fade: None,
+            simple_lod_distances_m: simple_lod_distances(component),
         });
     }
     lower_station_construction_markers(&binders, scene_paths, &mut seen, &mut presentations);
@@ -233,6 +242,7 @@ fn lower_station_construction_markers(
             attach_node: None,
             inherit_attach_rotation: false,
             fade: None,
+            simple_lod_distances_m: simple_lod_distances(component),
         });
     }
 }
@@ -340,6 +350,7 @@ pub(super) fn lower_fade_controller_states(
                 attach_node: None,
                 inherit_attach_rotation: false,
                 fade: Some(fade),
+                simple_lod_distances_m: simple_lod_distances(component),
             });
         }
     }
@@ -450,6 +461,118 @@ mod tests {
                 ),
             ],
             "optional alternatives and actors are not parented presentations"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_look_takes_its_head_model_from_its_family() -> Result<(), Box<dyn std::error::Error>> {
+        // As `YoungFemale_01` names `headObj` again only for its textures.
+        let sources = [
+            (
+                "youngfemale.xml",
+                r#"<BFTypedBinder binderType="YoungFemale">
+                <types><entity><scenery><YoungFemale/></scenery></entity></types>
+                <instance><BFGEntity><physObjParenting>
+                    <parentObj parent="mainObj" child="headObj" rottype="use" postype="use" attachnode="Link_Head"/>
+                </physObjParenting></BFGEntity></instance>
+                <binder>
+                    <BFNamedBinder binderName="mainObj"><instance><BFPhysObj><BFSimpleLODComponent modelfile="body.nif"/></BFPhysObj></instance></BFNamedBinder>
+                    <BFNamedBinder binderName="headObj"><instance><BFPhysObj><BFSimpleLODComponent modelfile="head.nif"/></BFPhysObj></instance></BFNamedBinder>
+                </binder>
+            </BFTypedBinder>"#,
+            ),
+            (
+                "youngfemale_01.xml",
+                r#"<BFTypedBinder binderType="YoungFemale_01">
+                <types><entity><scenery><YoungFemale><YoungFemale_01/></YoungFemale></scenery></entity></types>
+                <binder><BFNamedBinder binderName="headObj"><instance><BFPhysObj/></instance><shared><BFSharedRandomTextureInfo/></shared></BFNamedBinder></binder>
+            </BFTypedBinder>"#,
+            ),
+        ]
+        .map(|(path, xml)| parse_blue_fang_source_document(AssetPath::new(path), xml.as_bytes()))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+        let mut scenes = BlueFangActorManifestModelAndSceneResolutionIndex::default();
+        for model in ["body.nif", "head.nif"] {
+            scenes.register_archive_resolved_native_model_scene_asset_path(
+                model,
+                &format!("{model}#scene"),
+            );
+        }
+        let document =
+            lower_resolved_world_definition_source_document_closure_to_canonical_document(
+                &sources,
+                &scenes,
+                "youngfemale_01.xml",
+                [0, 0],
+            )?
+            .ok_or_else(|| std::io::Error::other("guest source produced no document"))?;
+        let object = document
+            .objects
+            .iter()
+            .find(|object| object.id == AssetId::from_key("youngfemale_01"))
+            .ok_or_else(|| std::io::Error::other("the look is absent"))?;
+        let [head] = object.named_physical_presentations.as_slice() else {
+            return Err(std::io::Error::other("expected the head alone").into());
+        };
+        assert_eq!(head.prefab, AssetId::from_virtual_path("head.nif#scene"));
+        assert_eq!(head.attach_node.as_deref(), Some("Link_Head"));
+        assert!(
+            head.simple_lod_distances_m.is_some(),
+            "a BFSimpleLODComponent head switches its own levels"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_simple_lod_model_switches_at_its_authored_distances(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let distances = |component: &str| -> Result<Option<Vec<f32>>, Box<dyn std::error::Error>> {
+            let xml = format!(
+                r#"<BFTypedBinder binderType="stand"><types><entity><building><stand/></building></entity></types>
+                <binder><BFNamedBinder binderName="mainObj"><instance><BFPhysObj>{component}</BFPhysObj></instance></BFNamedBinder></binder>
+            </BFTypedBinder>"#
+            );
+            let source =
+                parse_blue_fang_source_document(AssetPath::new("stand.xml"), xml.as_bytes())
+                    .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+            let mut scenes = BlueFangActorManifestModelAndSceneResolutionIndex::default();
+            scenes.register_archive_resolved_native_model_scene_asset_path(
+                "stand.nif",
+                "stand.nif#scene",
+            );
+            let document =
+                lower_resolved_world_definition_source_document_closure_to_canonical_document(
+                    &[source],
+                    &scenes,
+                    "stand.xml",
+                    [0, 0],
+                )?
+                .ok_or_else(|| std::io::Error::other("stand produced no document"))?;
+            Ok(document.objects[0].simple_lod_distances_m.clone())
+        };
+        // Unauthored, the game's own distances, doubled.
+        assert_eq!(
+            distances(r#"<BFSimpleLODComponent modelfile="stand.nif"/>"#)?,
+            Some(vec![
+                0.0, 30.0, 80.0, 130.0, 180.0, 230.0, 260.0, 290.0, 320.0, 350.0
+            ])
+        );
+        // As the shipped hot dog stands author them: the larger of each
+        // doubled `switch` and its `minSwitch`, and 0 past the authored
+        // entries.
+        assert_eq!(
+            distances(
+                r#"<BFSimpleLODComponent modelfile="stand.nif" switch="7 18 36" minSwitch="0 0 80"/>"#
+            )?,
+            Some(vec![0.0, 36.0, 80.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            distances(r#"<BFSceneGraphComponent modelfile="stand.nif"/>"#)?,
+            None,
+            "a scene graph model keeps its own distances"
         );
         Ok(())
     }
@@ -614,4 +737,69 @@ mod tests {
             .all(|presentation| presentation.attach_node.is_none()));
         Ok(())
     }
+}
+
+/// The distance, in metres, from which each LOD level of a
+/// `BFSimpleLODComponent` model shows: the larger of its `switch` and
+/// `minSwitch` entries. `zt.exe` starts from 0, 15, 40, 65, 90 and 115 m and
+/// then every 15 m (`FUN_007150b1`). An authored `switch` starts at 0, takes the
+/// one before plus 1 for an invalid entry and 0 past its last
+/// (`FUN_007718b4`); `minSwitch` takes the one before for an invalid entry and
+/// 0 past its last (`FUN_0077191f`). Another component gives none.
+///
+/// `world/lodScales.xml` then scales each `switch` entry, not `minSwitch`, by
+/// its `lodPriority` column (`FUN_007451b1`, `FUN_007912d6`). The game starts
+/// on the table's first row, for a full frame rate, and only drops when it
+/// cannot keep up. No shipped object authors `lodPriority`, so every one
+/// takes column `two` (its default), 2.0 in that row.
+pub(super) fn simple_lod_distances(component: &OrderedSourceDocumentNode) -> Option<Vec<f32>> {
+    if !source_document_names_are_semantically_equal(
+        component.name.as_str(),
+        "BFSimpleLODComponent",
+    ) {
+        return None;
+    }
+    const LEVELS: usize = 10;
+    const LOD_SCALE: f32 = 2.0;
+    let authored = |name: &str| {
+        component.attribute_named_any(&[name]).map(|values| {
+            values
+                .split_whitespace()
+                .take(LEVELS)
+                .map(|value| {
+                    parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                        .filter(|value| value.is_finite() && *value >= 0.0)
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    let mut switch = [0.0_f32; LEVELS];
+    match authored("switch") {
+        None => {
+            switch[..6].copy_from_slice(&[0.0, 15.0, 40.0, 65.0, 90.0, 115.0]);
+            for level in 6..LEVELS {
+                switch[level] = switch[level - 1] + 15.0;
+            }
+        }
+        Some(values) => {
+            for (level, value) in values.into_iter().enumerate().skip(1) {
+                switch[level] = value.unwrap_or(switch[level - 1] + 1.0);
+            }
+        }
+    }
+    let mut min_switch = [0.0_f32; LEVELS];
+    for (level, value) in authored("minSwitch").into_iter().flatten().enumerate() {
+        min_switch[level] = value.unwrap_or(if level == 0 {
+            0.0
+        } else {
+            min_switch[level - 1]
+        });
+    }
+    Some(
+        switch
+            .iter()
+            .zip(min_switch)
+            .map(|(switch, min_switch)| (switch * LOD_SCALE).max(min_switch))
+            .collect(),
+    )
 }

@@ -158,6 +158,9 @@ pub(super) fn bind_authored_placement_object(
     if model.is_none() && !record.has_type_token("entity") {
         return Ok(());
     }
+    let simple_lod_distances_m = direct_component
+        .or(inherited_prop_component)
+        .and_then(super::named_physical_presentation_source_lowering::simple_lod_distances);
     let presentation_scale = direct_component
         .or(inherited_prop_component)
         .and_then(|component| component.attribute_named_any(&["scale"]))
@@ -545,6 +548,7 @@ pub(super) fn bind_authored_placement_object(
         zoopedia_subject: authored_zoopedia_subject_from_world_object_record(record)?,
         prefab,
         presentation_attachments,
+        simple_lod_distances_m,
         named_physical_presentations,
         catalogue_preview_prefab: None,
         interaction_slots,

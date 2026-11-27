@@ -67,6 +67,7 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
             prefab: default(),
             catalogue_preview_prefab: None,
             presentation_attachments: Vec::new(),
+            simple_lod_distances_m: None,
             named_physical_presentations: Vec::new(),
             interaction_slots: Vec::new(),
             container_quantity: None,

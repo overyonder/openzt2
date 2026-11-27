@@ -236,6 +236,7 @@ pub(super) fn bind_object(
         prefab: asset(record, &["prefab", "model", "visual"]),
         catalogue_preview_prefab: None,
         presentation_attachments: Vec::new(),
+        simple_lod_distances_m: None,
         named_physical_presentations: Vec::new(),
         interaction_slots: super::interaction_container_source_lowering::lower_authored_world_object_interaction_slots(record)?,
         container_quantity:

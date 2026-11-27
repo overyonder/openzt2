@@ -150,13 +150,28 @@ pub struct StaffPresentationVariant {
     pub name_pool: AssetId,
     pub head: Option<StaffHeadPresentation>,
     pub texture_replacement_sets: Vec<super::world_objects::WorldObjectTextureReplacementSet>,
+    /// What the look wears while swimming, from `ZTWetsuitComponent`'s
+    /// `InWater`.
+    #[serde(default)]
+    pub wetsuit: Option<StaffWetsuitPresentation>,
+}
+
+/// A look's wetsuit: its head and the textures drawn over the look's own.
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct StaffWetsuitPresentation {
+    pub head: Option<StaffHeadPresentation>,
+    pub texture_replacement_sets: Vec<super::world_objects::WorldObjectTextureReplacementSet>,
 }
 
 /// Separate head model the original attaches to a body joint.
-#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct StaffHeadPresentation {
     pub prefab: AssetId,
     pub joint: String,
+    /// The distances its LOD levels switch at; a head is a
+    /// `BFSimpleLODComponent`.
+    #[serde(default)]
+    pub simple_lod_distances_m: Vec<f32>,
 }
 #[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
 pub enum StaffJobEffect {

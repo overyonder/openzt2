@@ -126,7 +126,11 @@ impl Plugin for StaffPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                staff_water_locomotion::project_staff_water_locomotion
+                (
+                    staff_water_locomotion::project_staff_water_locomotion,
+                    staff_water_locomotion::dress_staff_for_water,
+                )
+                    .chain()
                     .in_set(FixedGameSet::Cleanup)
                     .run_if(in_state(GamePhase::InGame)),
             )

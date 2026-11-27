@@ -2,10 +2,15 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use openzt2_game_assets::graphics_settings_types::{GraphicsSettings, ThreeLevelGraphicsDetail};
 use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_range::{
-    PrefabLodRanges, PrefabModelLevelOfDetailVisibilityRange,
+    simple_lod_ranges, PrefabLodRanges, PrefabModelLevelOfDetailVisibilityRange, SimpleLodRange,
+    SimpleLodSwitching,
 };
 
 use crate::model_render::prefab_render_layer_camera_matching::PrefabRenderLayers;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
+use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 #[derive(Default)]
 pub(super) struct LodSelection {
@@ -22,6 +27,7 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
         &GlobalTransform,
         &PrefabModelLevelOfDetailVisibilityRange,
         &mut Visibility,
+        Option<&SimpleLodRange>,
     )>,
     mut selection: Local<LodSelection>,
     mut current_cameras: Local<Vec<(Entity, Vec3, Dir3, RenderLayers)>>,
@@ -76,9 +82,12 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
         let mut previous_depth = None;
         let mut selected = None;
         for member in members.iter() {
-            let Ok((fallback, range, _)) = lods.get(member) else {
+            let Ok((fallback, range, _, simple)) = lods.get(member) else {
                 continue;
             };
+            let (near_m, far_m) = simple.map_or((range.near_m, range.far_m), |simple| {
+                (simple.near_m, simple.far_m)
+            });
             let matches = range.active_without_range || {
                 let layers = inherited_layers.get(member);
                 selection
@@ -98,7 +107,7 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
                                 depth
                             }
                         };
-                        depth >= range.near_m * scale && depth < range.far_m * scale
+                        depth >= near_m * scale && depth < far_m * scale
                     })
             };
             if matches {
@@ -107,13 +116,69 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
             }
         }
         for member in members.iter() {
-            if let Ok((_, range, mut visibility)) = lods.get_mut(member) {
+            if let Ok((_, range, mut visibility, _)) = lods.get_mut(member) {
                 visibility.set_if_neq(if Some(range.ordinal) == selected {
                     Visibility::Inherited
                 } else {
                     Visibility::Hidden
                 });
             }
+        }
+    }
+}
+
+/// Gives the LOD levels of a `BFSimpleLODComponent` model its object's
+/// distances once, when they spawn. The nearest presentation above a level
+/// decides: a `SimpleLodSwitching` part, such as a head, carries its own; an
+/// object's main model takes its definition's; another part keeps its model's.
+#[allow(clippy::type_complexity)]
+pub(super) fn apply_simple_lod_switching(
+    mut commands: Commands,
+    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    active_world_definitions: Res<WorldDefinitions>,
+    groups: Query<(Entity, &PrefabLodRanges), Added<PrefabLodRanges>>,
+    parents: Query<&ChildOf>,
+    owners: Query<(
+        Option<&SimpleLodSwitching>,
+        Option<&DefinitionId>,
+        Has<PrefabPresentation>,
+    )>,
+    ranges: Query<&PrefabModelLevelOfDetailVisibilityRange>,
+) {
+    let definitions = active_world_definitions.get(&world_definition_assets);
+    for (group, members) in &groups {
+        let Some(distances) = std::iter::once(group)
+            .chain(parents.iter_ancestors(group))
+            .find_map(|entity| {
+                let (switching, definition, presents) = owners.get(entity).ok()?;
+                if let Some(switching) = switching {
+                    return Some(Some(switching.0.clone()));
+                }
+                if let Some(definition) = definition {
+                    return Some(
+                        definitions
+                            .and_then(|definitions| definitions.find_object(definition.0))
+                            .and_then(|object| object.simple_lod_distances_m.clone()),
+                    );
+                }
+                presents.then_some(None)
+            })
+            .flatten()
+        else {
+            continue;
+        };
+        let far = members
+            .iter()
+            .map(|member| {
+                ranges
+                    .get(member)
+                    .map_or(f32::INFINITY, |range| range.far_m)
+            })
+            .collect::<Vec<_>>();
+        for (member, (near_m, far_m)) in members.iter().zip(simple_lod_ranges(&far, &distances)) {
+            commands
+                .entity(member)
+                .insert(SimpleLodRange { near_m, far_m });
         }
     }
 }
