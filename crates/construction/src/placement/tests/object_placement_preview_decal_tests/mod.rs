@@ -66,6 +66,7 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
             zoopedia_subject: default(),
             prefab: default(),
             catalogue_preview_prefab: None,
+            texture_replacement_sets: Vec::new(),
             presentation_attachments: Vec::new(),
             named_physical_presentations: Vec::new(),
             interaction_slots: Vec::new(),

@@ -547,6 +547,11 @@ pub(super) fn bind_authored_placement_object(
         presentation_attachments,
         named_physical_presentations,
         catalogue_preview_prefab: None,
+        texture_replacement_sets: authored_type_family_elements_named(record, "replacementSet")
+            .into_iter()
+            .map(super::authored_staff_and_animal_catalogue_lowering::lower_authored_texture_replacement_set)
+            .filter(|set| !set.groups.is_empty())
+            .collect(),
         interaction_slots,
         transactions,
         prefab_scale: presentation_scale,

@@ -155,6 +155,7 @@ pub(super) fn bind_authored_path(
         presentation_attachments: Vec::new(),
         named_physical_presentations: Vec::new(),
         catalogue_preview_prefab: None,
+        texture_replacement_sets: Vec::new(),
         interaction_slots: Vec::new(),
         container_quantity: None,
         transactions: super::authored_transaction_lowering::lower_object_transactions(record)?,

@@ -112,6 +112,10 @@ pub struct WorldObjectTextureReplacement {
     /// Lowercase source material name, matched against prefab renderables.
     pub material: String,
     pub image: AssetId,
+    /// `layer="decal0"`: drawn over the material's base texture through its
+    /// alpha, as a T-shirt's print, rather than replacing it.
+    #[serde(default)]
+    pub decal: bool,
 }
 
 #[allow(
@@ -320,6 +324,10 @@ pub struct WorldObjectDefinition {
     /// None uses the ordinary world prefab and its presentation attachments.
     #[serde(default)]
     pub catalogue_preview_prefab: Option<AssetId>,
+    /// Its authored `BFSharedRandomTextureInfo` replacement sets, such as a
+    /// guest look's clothes, skin and hair.
+    #[serde(default)]
+    pub texture_replacement_sets: Vec<WorldObjectTextureReplacementSet>,
     /// Named child-binder states attached to primary prefab sockets. State
     /// selection is live presentation state; geometry remains in scene assets.
     pub presentation_attachments: Vec<WorldObjectPresentationControllerDefinition>,

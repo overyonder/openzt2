@@ -47,7 +47,10 @@ use prefab_fixed_function_world_lighting_projection::{
 use prefab_model_billboard_orientation::orient_prefab_model_billboards_toward_active_camera_on_matching_render_layers;
 use prefab_model_level_of_detail_projection::project_prefab_model_level_of_detail_visibility;
 use prefab_model_tint_projection::project_prefab_model_tints_onto_standard_materials_and_effect_pass_vertex_colors;
-use prefab_texture_replacement_projection::project_prefab_texture_replacements_onto_effect_pass_materials;
+use prefab_texture_replacement_projection::{
+    bind_prefab_decal_textures_to_model_materials,
+    project_prefab_texture_replacements_onto_effect_pass_materials,
+};
 
 pub struct ModelRenderPlugin;
 
@@ -138,6 +141,8 @@ impl Plugin for ModelRenderPlugin {
         app.add_systems(
             PostUpdate,
             (
+                bind_prefab_decal_textures_to_model_materials
+                    .before(invalidate_authored_model_material_pass_projection),
                 invalidate_authored_model_material_pass_projection.before(project_authored_model_material_passes),
                 project_prefab_model_level_of_detail_visibility
                     .in_set(ModelRenderPresentationSet::LevelOfDetail),
