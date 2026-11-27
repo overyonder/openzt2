@@ -9,6 +9,10 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_zoo_state::locomotion::locomotion_types::{LocomotionMode, SwimLayer};
 use openzt2_zoo_state::staff::staff_employment_types::{Staff, StaffRole, StaffSubmergedDepth};
 use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
+use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
+use openzt2_zoo_state::staff::staff_presentation_variant_selection::{
+    dress_staff, staff_presentation_variant, StaffDress,
+};
 
 /// Enters swimming in water deeper than the authored entry depth and leaves
 /// it where water is shallower than the authored exit depth, then keeps a
@@ -73,5 +77,46 @@ pub(crate) fn project_staff_water_locomotion(
         };
         commands.entity(employee).insert(layer);
         transform.translation.y = surface - held;
+    }
+}
+
+/// Puts a keeper in its wetsuit when it starts swimming and back in its own
+/// look when it leaves the water, as `ZTWetsuitComponent` swaps them.
+pub(crate) fn dress_staff_for_water(
+    mut commands: Commands,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    staff: Query<
+        (
+            Entity,
+            &StaffRole,
+            &PersistentId,
+            &LocomotionMode,
+            &StaffDress,
+        ),
+        (With<Staff>, Changed<LocomotionMode>),
+    >,
+) {
+    let Some(catalogue) = active_definitions.get(&definitions) else {
+        return;
+    };
+    for (employee, role, id, mode, dress) in &staff {
+        let wet = mode == &LocomotionMode::Swim;
+        if dress.wet == wet {
+            continue;
+        }
+        let Some((variant, _)) = catalogue
+            .find_staff(role.0)
+            .and_then(|role| staff_presentation_variant(role, id.0, catalogue))
+        else {
+            continue;
+        };
+        if variant.wetsuit.is_none() {
+            continue;
+        }
+        if let Some(head) = dress.head {
+            commands.entity(head).try_despawn();
+        }
+        dress_staff(&mut commands, employee, variant, id.0, catalogue, wet);
     }
 }

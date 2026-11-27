@@ -12,6 +12,7 @@ use openzt2_world_state::animation_graph::model_animation_asset_attachment::sele
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::ModelAnimationAttachmentResolved;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
+use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 use super::guest_simulation_types::{Guest, GuestArchetype};
@@ -26,8 +27,8 @@ pub(super) struct GuestBodyAnimationSetPending {
 
 /// Native guest body scenes do not carry their actor manifest's clips. Once a
 /// guest's own body model resolves without animation, request the manifest its
-/// definition names. Models of held items stop at their own definition and are
-/// left alone.
+/// definition names. Models of held items stop at their own definition, and a
+/// binder such as the head presents its own model, so both are left alone.
 pub(super) fn request_authored_animation_sets_for_resolved_guest_models(
     mut commands: Commands,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -42,6 +43,7 @@ pub(super) fn request_authored_animation_sets_for_resolved_guest_models(
     >,
     parents: Query<&ChildOf>,
     owners: Query<(Option<&GuestArchetype>, Has<DefinitionId>)>,
+    presentations: Query<(), With<PrefabPresentation>>,
 ) {
     let Some(definitions) = world_definitions.get(&definition_assets) else {
         return;
@@ -54,6 +56,13 @@ pub(super) fn request_authored_animation_sets_for_resolved_guest_models(
         let Some((guest, Some(archetype))) = owner else {
             continue;
         };
+        if parents
+            .iter_ancestors(model)
+            .find(|ancestor| presentations.contains(*ancestor))
+            != Some(guest)
+        {
+            continue;
+        }
         debug!(?model, ?guest, guest_definition = ?archetype.0, has_controller, has_graph,
             "guest-owned model resolved its animation attachment");
         if has_controller {

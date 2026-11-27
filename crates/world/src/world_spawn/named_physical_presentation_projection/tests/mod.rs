@@ -10,7 +10,10 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use super::{hydrate_required_named_physical_presentations, NamedPhysicalPresentationsHydrated};
+use super::{
+    attach_named_presentations_to_model_nodes, hydrate_required_named_physical_presentations,
+    NamedPhysicalPresentationsHydrated, PendingNamedPresentationNodeAttachment,
+};
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
@@ -31,6 +34,7 @@ fn presentation(
         attach_node: None,
         inherit_attach_rotation: false,
         fade: None,
+        simple_lod: false,
     }
 }
 
@@ -214,4 +218,41 @@ fn feeder_shows_the_fade_state_matching_its_food_level() {
         visibility(&mut application),
         [Visibility::Hidden, Visibility::Hidden]
     );
+}
+
+#[test]
+fn a_node_binder_hangs_on_the_shown_node_not_a_hidden_one() {
+    let mut application = App::new();
+    application.add_systems(Update, attach_named_presentations_to_model_nodes);
+    let world = application.world_mut();
+    let owner = world.spawn(Visibility::Inherited).id();
+    // An animated person's static model, hidden, with its own node.
+    let static_model = world.spawn((Visibility::Hidden, ChildOf(owner))).id();
+    let hidden_node = world
+        .spawn((Name::new("Link_Head"), ChildOf(static_model)))
+        .id();
+    // Its skeleton, shown.
+    let skeleton = world.spawn((Visibility::Inherited, ChildOf(owner))).id();
+    let joint = world
+        .spawn((Name::new("Link_Head"), ChildOf(skeleton)))
+        .id();
+    let holder = world
+        .spawn((
+            Visibility::Hidden,
+            ChildOf(owner),
+            PendingNamedPresentationNodeAttachment {
+                owner,
+                node: "Link_Head".into(),
+            },
+        ))
+        .id();
+
+    application.update();
+
+    let parent = application
+        .world()
+        .get::<ChildOf>(holder)
+        .map(ChildOf::parent);
+    assert_ne!(parent, Some(hidden_node));
+    assert_eq!(parent, Some(joint));
 }

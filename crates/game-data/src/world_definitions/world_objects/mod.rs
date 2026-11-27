@@ -232,6 +232,10 @@ pub struct WorldObjectNamedPhysicalPresentationDefinition {
     /// The `BFAIFadeController` state that shows this binder.
     #[serde(default)]
     pub fade: Option<WorldObjectFadeRange>,
+    /// Its model is a `BFSimpleLODComponent`, whose LOD levels switch at the
+    /// game's own distances.
+    #[serde(default)]
+    pub simple_lod: bool,
 }
 
 /// One `BFAIFadeController` state: its binder shows while the controller's
