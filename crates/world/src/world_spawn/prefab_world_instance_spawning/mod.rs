@@ -49,7 +49,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 pub fn spawn_loaded_scene_prefab_as_world_instance(
     commands: &mut Commands,
     prefab: &ScenePrefabAsset,
-    prefab_handle: Handle<ScenePrefabAsset>,
+    prefab_handle: &Handle<ScenePrefabAsset>,
     world_root: Entity,
     definition: AssetId,
     persistent_id: PersistentId,
@@ -82,7 +82,7 @@ pub fn hydrate_loaded_scene_prefab_into_world_instance_root(
     commands: &mut Commands,
     root: Entity,
     prefab: &ScenePrefabAsset,
-    prefab_handle: Handle<ScenePrefabAsset>,
+    prefab_handle: &Handle<ScenePrefabAsset>,
     world_root: Entity,
     definition: AssetId,
     persistent_id: PersistentId,

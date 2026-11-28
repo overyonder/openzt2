@@ -165,7 +165,7 @@ pub(super) fn spawn_paid_transport_vehicle_prefab_instances(
         let vehicle_entity = spawn_loaded_scene_prefab_as_world_instance(
             &mut commands,
             prefab,
-            prefab_handle,
+            &prefab_handle,
             world_member.root,
             object_definition,
             persistent_id,

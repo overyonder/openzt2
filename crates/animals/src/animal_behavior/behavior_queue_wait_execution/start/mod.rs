@@ -133,7 +133,7 @@ pub(super) fn start_or_repeat_authored_queue_wait(
         };
         let Some((document, declaration)) = declarations.find_behavior_set_location(
             action.waiting_behavior_set,
-            behavior_subject_type_identifiers(
+            &behavior_subject_type_identifiers(
                 species,
                 staff,
                 guest,

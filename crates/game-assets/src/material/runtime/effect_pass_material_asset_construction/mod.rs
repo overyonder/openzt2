@@ -75,7 +75,7 @@ fn translated_shader_asset(
     registers: &[GpuSemanticRegisters],
     instance_index: Option<InstanceIndexInput>,
     forward_instance_index: bool,
-    path: String,
+    path: &str,
 ) -> io::Result<Shader> {
     if registers.is_empty() && !forward_instance_index {
         return Ok(Shader::from_spirv(
@@ -255,7 +255,7 @@ fn create_effect_pass_material_asset(
                 &vertex_gpu_registers,
                 Some(InstanceIndexInput::VertexBuiltin),
                 forward_instance_index,
-                format!("{}#{label}", context.path()),
+                &format!("{}#{label}", context.path()),
             )?;
             context.add_labeled_asset(label, asset)
         }
@@ -280,7 +280,7 @@ fn create_effect_pass_material_asset(
                     FORWARDED_INSTANCE_INDEX_LOCATION,
                 )),
                 false,
-                format!("{}#{label}", context.path()),
+                &format!("{}#{label}", context.path()),
             )?;
             context.add_labeled_asset(label, asset)
         }

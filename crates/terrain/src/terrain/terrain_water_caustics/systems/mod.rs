@@ -222,7 +222,7 @@ pub(in crate::terrain) fn project_changed_terrain_caustic_ground_passes(
                 &mut commands,
                 chunk_entity,
                 owner,
-                meshes.add(mesh),
+                &meshes.add(mesh),
                 &passes,
                 &render_views,
                 &mut materials,

@@ -206,9 +206,9 @@ pub(super) fn refresh_world_definition_asset_set_after_archive_revision(
     definitions.completed_loads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     definitions.loading_task = Some(
         request_world_definition_handles_without_per_asset_frame_waits(
-            server.clone(),
+            &server,
             paths,
-            std::sync::Arc::clone(&definitions.completed_loads),
+            &definitions.completed_loads,
         ),
     );
     definitions.revision = Some(revision);

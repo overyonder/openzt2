@@ -419,7 +419,7 @@ fn lower_interaction_cursors(
     input: &AuthoredUiDocument,
 ) -> io::Result<UiGameplayInteractionCursorDefinition> {
     let cursor = |value: &str, output: &mut BuildOutput| {
-        cursor_texture_dependency(Some(value.to_owned()), output, input)
+        cursor_texture_dependency(Some(value), output, input)
     };
     Ok(UiGameplayInteractionCursorDefinition {
         overhead: cursor(&policy.overhead, output)?,

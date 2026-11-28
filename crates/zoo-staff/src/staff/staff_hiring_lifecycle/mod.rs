@@ -188,7 +188,7 @@ pub(crate) fn spawn_paid_staff_hires_from_ready_prefabs(
         let staff = spawn_loaded_scene_prefab_as_world_instance(
             &mut commands,
             prefab,
-            prefab_handle.0.clone(),
+            &prefab_handle.0,
             member.root,
             AssetId(role.object.0),
             id,

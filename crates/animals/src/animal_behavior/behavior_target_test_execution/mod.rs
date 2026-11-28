@@ -124,7 +124,7 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
         };
         let Some((document, declaration)) = view.find_behavior_set_location(
             program,
-            super::behavior_subject_type_resolution::behavior_subject_type_identifiers(
+            &super::behavior_subject_type_resolution::behavior_subject_type_identifiers(
                 species,
                 staff,
                 guest,

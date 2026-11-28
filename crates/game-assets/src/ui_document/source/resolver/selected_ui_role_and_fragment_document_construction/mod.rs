@@ -43,9 +43,9 @@ pub(super) fn construct_selected_ui_role_and_fragment_document_lowering_inputs(
     all_named_templates: &BTreeMap<String, SourceUiNode>,
     reusable_row_template_names: &BTreeSet<String>,
     authored_image_selections: &[AuthoredUiImageSelection],
-    interaction_cursors: Option<AuthoredUiInteractionCursors>,
-    placement_preview: Option<AuthoredUiPlacementPreview>,
-    resolved_dependencies: UiResolvedDependencies,
+    interaction_cursors: Option<&AuthoredUiInteractionCursors>,
+    placement_preview: Option<&AuthoredUiPlacementPreview>,
+    resolved_dependencies: &UiResolvedDependencies,
     resolution_profile: &SelectedUiSourceResolutionProfile,
 ) -> Result<ResolvedUiRoleAndFragmentDocuments, UiSourceDocumentGap> {
     let mut claimed_source_document_roles = BTreeMap::new();
@@ -177,10 +177,10 @@ pub(super) fn construct_selected_ui_role_and_fragment_document_lowering_inputs(
             templates: selected_templates,
             image_selections: selected_image_selections,
             interaction_cursors: (*role == UiDocumentRole::InGameHud)
-                .then(|| interaction_cursors.clone())
+                .then(|| interaction_cursors.cloned())
                 .flatten(),
             placement_preview: (*role == UiDocumentRole::InGameHud)
-                .then(|| placement_preview.clone())
+                .then(|| placement_preview.cloned())
                 .flatten(),
             role_targets: role_targets.clone(),
             resolved_dependencies: resolved_dependencies.clone(),
@@ -191,7 +191,7 @@ pub(super) fn construct_selected_ui_role_and_fragment_document_lowering_inputs(
         &source_documents,
         all_named_templates,
         reusable_row_template_names,
-        &resolved_dependencies,
+        resolved_dependencies,
     )?;
     let mut fragment_documents = source_documents
         .into_iter()
@@ -201,12 +201,12 @@ pub(super) fn construct_selected_ui_role_and_fragment_document_lowering_inputs(
         })
         .map(|(source_path, source_document)| {
             construct_path_addressed_fragment_document(
-                source_path,
+                &source_path,
                 source_document,
                 all_named_templates,
                 reusable_row_template_names,
                 authored_image_selections,
-                &resolved_dependencies,
+                resolved_dependencies,
             )
         })
         .collect::<Result<Vec<_>, UiSourceDocumentGap>>()?;
@@ -218,7 +218,7 @@ pub(super) fn construct_selected_ui_role_and_fragment_document_lowering_inputs(
                     template_name,
                     all_named_templates,
                     reusable_row_template_names,
-                    &resolved_dependencies,
+                    resolved_dependencies,
                 )
             })
             .collect::<Result<Vec<_>, UiSourceDocumentGap>>()?,
@@ -340,7 +340,7 @@ fn construct_reusable_row_fragment_document(
 }
 
 fn construct_path_addressed_fragment_document(
-    source_path: String,
+    source_path: &str,
     source_document: SourceUiDocument,
     all_named_templates: &BTreeMap<String, SourceUiNode>,
     reusable_row_template_names: &BTreeSet<String>,
@@ -361,7 +361,7 @@ fn construct_path_addressed_fragment_document(
         authored_image_selections,
     );
     Ok(AuthoredUiDocument {
-        virtual_path: source_path.clone(),
+        virtual_path: source_path.to_owned(),
         id: AssetId::from_virtual_path(&format!("ui/fragment/{source_path}")),
         role: UiDocumentRole::Fragment,
         source: source_document,

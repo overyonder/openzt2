@@ -200,7 +200,7 @@ pub(crate) fn loading_app() -> (App, Entity) {
         .add(SpeciesAsset::from_test_document(species.clone()));
     app.world_mut()
         .resource_mut::<SpeciesAssets>()
-        .index_test_document(handle, &species);
+        .index_test_document(&handle, &species);
     let definitions = WorldDefinitionDocument {
         simulation_timing: Some(SimulationTimingDefinition {
             fixed_hz: 30,

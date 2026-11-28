@@ -233,7 +233,7 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
             Value::Table(reference) => {
                 for fact in entity_facts(queries, pending) {
                     if matches_reference(&fact, &reference)? {
-                        return create_entity_component(lua, scope, queries, pending, fact)
+                        return create_entity_component(lua, scope, queries, pending, &fact)
                             .map(Value::Table);
                     }
                 }
@@ -291,7 +291,7 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
                 let reference = lua.create_table()?;
                 reference.set(
                     "value",
-                    create_entity_component(lua, scope, queries, pending, fact)?,
+                    create_entity_component(lua, scope, queries, pending, &fact)?,
                 )?;
                 table.set(index + 1, reference)?;
             }
@@ -354,7 +354,7 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
                 .find(|v| Some(v.entity) == queries.selected_entity)
             {
                 Some(fact) => Ok(Value::Table(create_entity_component(
-                    lua, scope, queries, pending, fact,
+                    lua, scope, queries, pending, &fact,
                 )?)),
                 None => Ok(Value::Nil),
             }
@@ -368,9 +368,11 @@ fn create_entity_component<'scope, 'env: 'scope>(
     scope: &'scope Scope<'scope, 'env>,
     queries: ScenarioLuaQueryFacts<'env>,
     pending: &'env PendingEntityOperations,
-    fact: EntityFacts,
+    fact: &EntityFacts,
 ) -> mlua::Result<Table> {
     let entity = fact.entity;
+    let definition = fact.definition;
+    let (pregnant, adult) = (fact.pregnant, fact.adult);
     let species_id = fact.species;
     let variant_id = fact.variant;
     let component = lua.create_table()?;
@@ -388,7 +390,7 @@ fn create_entity_component<'scope, 'env: 'scope>(
         scope.create_function(move |lua, entity: Table| {
             let key = queries
                 .world_definitions
-                .and_then(|definitions| definitions.object_record_key(fact.definition));
+                .and_then(|definitions| definitions.object_record_key(definition));
             Ok(match key {
                 Some(key) => Value::String(lua.create_string(key)?),
                 None => Value::Table(entity),
@@ -399,10 +401,9 @@ fn create_entity_component<'scope, 'env: 'scope>(
         "BFG_GET_ATTR_BOOLEAN",
         scope.create_function(move |_, (_, attribute): (Table, String)| {
             match attribute.as_str() {
-                "b_Pregnant" => Ok(fact.pregnant),
-                "b_Adult" => Ok(fact.adult),
-                "b_ExtinctAnimal" => Ok(fact
-                    .species
+                "b_Pregnant" => Ok(pregnant),
+                "b_Adult" => Ok(adult),
+                "b_ExtinctAnimal" => Ok(species_id
                     .and_then(|species_id| queries.species?.find(species_id))
                     .is_some_and(|species| {
                         species.flags.contains(SpeciesFlags::EXTINCT)

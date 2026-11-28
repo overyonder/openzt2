@@ -302,7 +302,7 @@ pub(super) fn bind_shoreline_material_textures(
             all_bound = false;
             continue;
         };
-        all_bound &= material.replace_texture_asset_for_effect_semantic(semantic, texture.clone());
+        all_bound &= material.replace_texture_asset_for_effect_semantic(semantic, texture);
     }
     all_bound
 }

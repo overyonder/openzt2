@@ -60,7 +60,7 @@ pub(in crate::model_source) fn lower_blue_fang_render_parts_for_lod(
         .into_iter()
         // Retain empty mesh slots in the scene hierarchy without emitting geometry.
         .filter(|part| !(part.vertices().is_empty() && part.indices().is_empty()))
-        .map(|part| adapt_bfb_part(document, part, &mut resolve_material))
+        .map(|part| adapt_bfb_part(document, &part, &mut resolve_material))
         .collect()
 }
 
@@ -116,7 +116,7 @@ fn select_blue_fang_render_parts_for_lod(
 
 fn adapt_bfb_part(
     document: &BlueFangBfbDocument,
-    part: SelectedBlueFangBfbRenderPart<'_>,
+    part: &SelectedBlueFangBfbRenderPart<'_>,
     resolve_material: &mut impl FnMut(NativeMaterialReference<'_>) -> Option<AssetId>,
 ) -> Result<ModelSource, NativeGeometryLoweringError> {
     // Both values occur in shipped BFB files. The renderer consumed

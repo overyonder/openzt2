@@ -34,11 +34,11 @@ pub(super) fn texture_dependency(
 }
 
 pub(super) fn cursor_texture_dependency(
-    value: Option<String>,
+    value: Option<&str>,
     output: &mut BuildOutput,
     input: &AuthoredUiDocument,
 ) -> io::Result<AssetId> {
-    let id = match texture_dependency(value.clone(), output, input) {
+    let id = match texture_dependency(value.map(str::to_owned), output, input) {
         Ok(id) => id,
         Err(error) => {
             bevy::log::warn!(

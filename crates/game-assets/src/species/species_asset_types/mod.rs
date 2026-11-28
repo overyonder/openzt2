@@ -32,7 +32,7 @@ impl SpeciesAsset {
 impl SpeciesAssets {
     pub fn index_test_document(
         &mut self,
-        handle: Handle<SpeciesAsset>,
+        handle: &Handle<SpeciesAsset>,
         document: &SpeciesDocument,
     ) {
         self.handles = vec![handle.clone()];

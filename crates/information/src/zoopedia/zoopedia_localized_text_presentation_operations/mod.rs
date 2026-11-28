@@ -19,7 +19,7 @@ pub(super) fn project_localized_text_background_to_authored_ui_node(
         ),
         Without<UiTextBinding>,
     >,
-    input: LocalizedZoopediaTextBackgroundProjectionInput<'_>,
+    input: &LocalizedZoopediaTextBackgroundProjectionInput<'_>,
 ) {
     let existing = backgrounds
         .iter_mut()
@@ -84,7 +84,7 @@ fn add_pixel_offset_to_authored_ui_value(authored_value: Val, pixel_offset: f32)
 }
 
 pub(super) fn apply_localized_text_presentation_to_authored_ui_node(
-    input: LocalizedZoopediaTextPresentationProjectionInput<'_>,
+    input: &mut LocalizedZoopediaTextPresentationProjectionInput<'_>,
 ) {
     let Some(presentation) = input
         .localization

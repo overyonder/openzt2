@@ -31,7 +31,7 @@ pub(super) fn project_localized_zoopedia_body_to_authored_text_node(
         Without<UiTextBinding>,
     >,
     projected_rich_content_roots: &Query<(Entity, &ZoopediaLocalizedRichContentRoot)>,
-    input: LocalizedZoopediaBodyTextNodeProjectionInput<'_>,
+    mut input: LocalizedZoopediaBodyTextNodeProjectionInput<'_>,
 ) {
     let localized_rich_content = input
         .localization
@@ -47,7 +47,7 @@ pub(super) fn project_localized_zoopedia_body_to_authored_text_node(
             asset_server,
             projected_backgrounds,
             projected_rich_content_roots,
-            input,
+            &mut input,
         );
     } else {
         project_localized_zoopedia_plain_body_to_authored_text_node(
@@ -73,10 +73,10 @@ fn project_localized_zoopedia_rich_body_to_authored_text_node(
         Without<UiTextBinding>,
     >,
     projected_rich_content_roots: &Query<(Entity, &ZoopediaLocalizedRichContentRoot)>,
-    input: LocalizedZoopediaBodyTextNodeProjectionInput<'_>,
+    input: &mut LocalizedZoopediaBodyTextNodeProjectionInput<'_>,
 ) {
     apply_localized_text_presentation_to_authored_ui_node(
-        LocalizedZoopediaTextPresentationProjectionInput {
+        &mut LocalizedZoopediaTextPresentationProjectionInput {
             localization: input.localization,
             localized_content_key: input.localized_body_key,
             authored_text_font: &mut *input.authored_text_font,
@@ -90,7 +90,7 @@ fn project_localized_zoopedia_rich_body_to_authored_text_node(
         commands,
         asset_server,
         projected_rich_content_roots,
-        LocalizedZoopediaRichContentTreeProjectionInput {
+        &LocalizedZoopediaRichContentTreeProjectionInput {
             localization: input.localization,
             localized_content_key: input.localized_body_key,
             zoopedia_page_entity: input.zoopedia_page_entity,
@@ -124,7 +124,7 @@ fn project_localized_zoopedia_plain_body_to_authored_text_node(
     input: LocalizedZoopediaBodyTextNodeProjectionInput<'_>,
 ) {
     apply_localized_text_presentation_to_authored_ui_node(
-        LocalizedZoopediaTextPresentationProjectionInput {
+        &mut LocalizedZoopediaTextPresentationProjectionInput {
             localization: input.localization,
             localized_content_key: input.localized_body_key,
             authored_text_font: &mut *input.authored_text_font,
@@ -152,7 +152,7 @@ fn project_localized_zoopedia_plain_body_to_authored_text_node(
         commands,
         asset_server,
         projected_backgrounds,
-        LocalizedZoopediaTextBackgroundProjectionInput {
+        &LocalizedZoopediaTextBackgroundProjectionInput {
             localization: input.localization,
             localized_content_key: input.localized_body_key,
             authored_text_entity: input.authored_text_entity,

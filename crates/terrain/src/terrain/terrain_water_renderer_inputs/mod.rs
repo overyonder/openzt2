@@ -755,9 +755,9 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
         material.replace_texture_asset_for_effect_semantic(
             "EnvReflect",
             if fallback {
-                targets.fallback_reflection.clone()
+                &targets.fallback_reflection
             } else {
-                targets.reflection.clone()
+                &targets.reflection
             },
         );
         geometric_wave_state

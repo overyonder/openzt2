@@ -282,7 +282,7 @@ pub(super) fn lower_presentation_command(
             trigger,
             action: UiPresentationAction::SetTargetNodeCursor {
                 target_node: target_node(event, role, current),
-                cursor_asset: cursor_texture_dependency(event.string.clone(), output, input)?,
+                cursor_asset: cursor_texture_dependency(event.string.as_deref(), output, input)?,
             },
         })),
         "UI_SET_TEXT" => Ok(UiActionRecord::Presentation(UiPresentationActionRecord {

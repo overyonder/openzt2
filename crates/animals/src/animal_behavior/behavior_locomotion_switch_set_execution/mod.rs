@@ -107,7 +107,7 @@ fn enter_selected_behavior_set(
     };
     let Some((document, declaration)) = view.find_behavior_set_location(
         program,
-        super::behavior_subject_type_resolution::behavior_subject_type_identifiers(
+        &super::behavior_subject_type_resolution::behavior_subject_type_identifiers(
             subject.0,
             subject.1,
             subject.2,

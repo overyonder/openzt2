@@ -95,7 +95,7 @@ pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
                 animal_types.borrow_for(actor_entity),
             );
         let Some((behavior_document_handle, declaration_index)) = behavior_declaration_index
-            .find_behavior_set_location(pending_behavior_set.program, subject_type_identifiers)
+            .find_behavior_set_location(pending_behavior_set.program, &subject_type_identifiers)
         else {
             error!(actor = ?actor_entity, program = ?pending_behavior_set.program,
                 "requested behavior set has no matching declaration in the settled archive index");

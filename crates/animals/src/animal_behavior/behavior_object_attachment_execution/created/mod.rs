@@ -166,7 +166,7 @@ pub(super) fn hydrate_detach_created_objects(
                 &mut commands,
                 pending_entity,
                 prefab,
-                prefab_handle.clone(),
+                prefab_handle,
                 world.root,
                 object.id,
                 *id,

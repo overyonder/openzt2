@@ -163,7 +163,7 @@ fn execute_food_prop_attachments(
                 };
                 let Some(location) = view.find_behavior_set_location(
                     set,
-                    behavior_subject_type_identifiers(
+                    &behavior_subject_type_identifiers(
                         species,
                         staff,
                         guest,
@@ -321,7 +321,7 @@ fn execute_food_prop_attachments(
             let item = spawn_loaded_scene_prefab_as_world_instance(
                 &mut commands,
                 prefab,
-                handle,
+                &handle,
                 world.root,
                 object.id,
                 id,

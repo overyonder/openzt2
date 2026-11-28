@@ -112,7 +112,7 @@ pub(super) fn deliver_behavior_object_spawns(
                 spawn_loaded_scene_prefab_as_world_instance(
                     &mut commands,
                     prefab,
-                    handle.clone(),
+                    handle,
                     world.root,
                     object.id,
                     id,

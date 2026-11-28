@@ -193,7 +193,7 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
                 animal_types.borrow_for(actor),
             );
         let Some((document, declaration)) = behavior_declarations
-            .find_behavior_set_location(requested_behavior_set, subject_type_identifiers)
+            .find_behavior_set_location(requested_behavior_set, &subject_type_identifiers)
         else {
             debug!(?actor, set = ?requested_behavior_set, "behavior set has no declaration for this subject");
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);

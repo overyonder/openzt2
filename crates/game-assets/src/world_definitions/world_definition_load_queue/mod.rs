@@ -16,9 +16,9 @@ use bevy::{
 use super::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 
 pub(super) fn request_world_definition_handles_without_per_asset_frame_waits(
-    server: AssetServer,
+    server: &AssetServer,
     paths: Vec<PathBuf>,
-    completed_loads: Arc<AtomicUsize>,
+    completed_loads: &Arc<AtomicUsize>,
 ) -> Task<Vec<Handle<WorldDefinitionAsset>>> {
     // At most four sources are inflated and translated concurrently.
     const MAXIMUM_ACTIVE_DEFINITION_LOADS: usize = 4;
@@ -28,7 +28,7 @@ pub(super) fn request_world_definition_handles_without_per_asset_frame_waits(
         let paths = Arc::clone(&paths);
         let next_path_index = Arc::clone(&next_path_index);
         let server = server.clone();
-        let completed_loads = Arc::clone(&completed_loads);
+        let completed_loads = Arc::clone(completed_loads);
         IoTaskPool::get().spawn(async move {
             let mut handles = Vec::new();
             loop {
@@ -135,9 +135,9 @@ mod tests {
         app.update();
         let server = app.world().resource::<AssetServer>().clone();
         let mut task = request_world_definition_handles_without_per_asset_frame_waits(
-            server.clone(),
+            &server,
             paths.clone(),
-            Arc::new(AtomicUsize::new(0)),
+            &Arc::new(AtomicUsize::new(0)),
         );
         let deadline = Instant::now() + Duration::from_secs(5);
         let handles = loop {

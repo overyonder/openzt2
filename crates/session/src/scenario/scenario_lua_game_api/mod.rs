@@ -461,10 +461,10 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
 }
 
 pub(super) fn convert_lua_rule_result_to_objective_status(
-    value: Value,
+    value: &Value,
 ) -> openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatus {
     use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatus;
-    match value {
+    match *value {
         Value::Integer(value) if value < 0 => ScenarioObjectiveStatus::Failed,
         Value::Number(value) if value < 0.0 => ScenarioObjectiveStatus::Failed,
         Value::Nil | Value::Boolean(false) | Value::Integer(0) => ScenarioObjectiveStatus::Active,
@@ -478,7 +478,7 @@ fn convert_lua_command_arguments_to_money(
 ) -> mlua::Result<openzt2_zoo_state::economy::money_types::Money> {
     values
         .into_iter()
-        .filter_map(convert_integral_lua_number_to_i64)
+        .filter_map(|value| convert_integral_lua_number_to_i64(&value))
         .next_back()
         .and_then(|dollars| dollars.checked_mul(100))
         .map(openzt2_zoo_state::economy::money_types::Money)
@@ -488,7 +488,7 @@ fn convert_lua_command_arguments_to_money(
 fn convert_lua_command_arguments_to_i32(values: MultiValue) -> mlua::Result<i32> {
     values
         .into_iter()
-        .filter_map(convert_integral_lua_number_to_i64)
+        .filter_map(|value| convert_integral_lua_number_to_i64(&value))
         .filter_map(|value| i32::try_from(value).ok())
         .next_back()
         .ok_or_else(|| mlua::Error::runtime("command requires a 32-bit integer"))

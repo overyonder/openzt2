@@ -10,7 +10,7 @@ pub(super) fn replace_authored_text_with_localized_zoopedia_rich_content_tree(
     commands: &mut Commands,
     asset_server: &AssetServer,
     projected_roots: &Query<(Entity, &ZoopediaLocalizedRichContentRoot)>,
-    input: LocalizedZoopediaRichContentTreeProjectionInput<'_>,
+    input: &LocalizedZoopediaRichContentTreeProjectionInput<'_>,
 ) {
     retire_localized_zoopedia_rich_content_tree(
         commands,
@@ -110,7 +110,7 @@ pub(super) fn replace_authored_text_with_localized_zoopedia_rich_content_tree(
         };
         let projected_record_entity = spawn_localized_zoopedia_rich_content_record_entity(
             commands,
-            LocalizedZoopediaRichContentRecordProjectionInput {
+            &LocalizedZoopediaRichContentRecordProjectionInput {
                 asset_server,
                 source_record,
                 source_records: localized_content_records,

@@ -85,7 +85,7 @@ impl<'a> BehaviorDeclarationIndexView<'a> {
     pub fn find_behavior_set_location(
         self,
         behavior_set_identifier: AssetId,
-        subject_type_identifiers: impl Iterator<Item = AssetId> + Clone,
+        subject_type_identifiers: &(impl Iterator<Item = AssetId> + Clone),
     ) -> Option<(Handle<BehaviorDocumentAsset>, usize)> {
         let declaration_locations = self
             .behavior_sets_by_identifier

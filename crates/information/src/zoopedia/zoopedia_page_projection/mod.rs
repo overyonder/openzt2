@@ -67,7 +67,7 @@ pub(crate) fn project_localized_zoopedia_page_to_authored_information_document(
             &mut commands,
             &asset_server,
             &mut projection_queries,
-            LocalizedZoopediaPageTextProjectionInput {
+            &LocalizedZoopediaPageTextProjectionInput {
                 localization,
                 zoopedia_subject: zoopedia_page.subject,
                 zoopedia_page_entity,

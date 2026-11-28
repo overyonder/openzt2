@@ -12,7 +12,7 @@ pub(super) fn project_resolved_zoopedia_page_text_to_authored_ui_nodes(
     commands: &mut Commands,
     asset_server: &AssetServer,
     projection_queries: &mut ZoopediaPageTextNodeProjectionQueries<'_, '_>,
-    input: LocalizedZoopediaPageTextProjectionInput<'_>,
+    input: &LocalizedZoopediaPageTextProjectionInput<'_>,
 ) {
     let mut projected_title_target_count = 0_u32;
     let mut projected_body_target_count = 0_u32;

@@ -107,7 +107,7 @@ pub(super) fn start_synchronized_behavior_sets(
                 });
             declarations.find_behavior_set_location(
                 set,
-                behavior_subject_type_identifiers(
+                &behavior_subject_type_identifiers(
                     species,
                     staff,
                     guest,

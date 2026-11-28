@@ -287,7 +287,7 @@ pub(super) fn hydrate_bounded_world_prefab_record_batch(
         let entity = spawn_loaded_scene_prefab_as_world_instance(
             &mut commands,
             prefab,
-            prefab_handle,
+            &prefab_handle,
             root,
             definition_id,
             PersistentId(record.persistent_id),

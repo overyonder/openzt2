@@ -458,7 +458,7 @@ pub(super) fn lower_node(
         flags.0 &= !(UiNodeFlags::VISIBLE.0 | UiNodeFlags::ENABLED.0);
     }
 
-    let cursor = cursor_texture_dependency(effective.cursor.clone(), output, input)?;
+    let cursor = cursor_texture_dependency(effective.cursor.as_deref(), output, input)?;
     let kind = node_kind(
         &effective.kind,
         &effective.widget,

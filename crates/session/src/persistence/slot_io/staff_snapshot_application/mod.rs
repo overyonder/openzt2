@@ -101,7 +101,7 @@ pub(super) fn apply_staff_snapshot_records(
             prefabs
                 .get(handle)
                 .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?,
-            handle.clone(),
+            handle,
             world_root,
             record.definition,
             PersistentId(record.persistent_identifier),

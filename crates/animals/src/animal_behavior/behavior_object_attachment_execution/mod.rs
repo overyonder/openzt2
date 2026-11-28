@@ -427,7 +427,7 @@ fn start_or_finish_object_attachment(
             spawn_loaded_scene_prefab_as_world_instance(
                 &mut commands,
                 prefab,
-                prefab_handle,
+                &prefab_handle,
                 world.root,
                 object.id,
                 id,

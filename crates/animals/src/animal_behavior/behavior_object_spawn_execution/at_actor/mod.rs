@@ -102,7 +102,7 @@ pub(super) fn spawn_behavior_objects_at_actor(
             spawn_loaded_scene_prefab_as_world_instance(
                 &mut commands,
                 prefab,
-                handle,
+                &handle,
                 world.root,
                 object.id,
                 id,

@@ -43,7 +43,7 @@ pub(super) fn create_world_prefab_visual_when_immersive_mode_prefab_is_ready(
         let prefab_root_entity = spawn_loaded_scene_prefab_as_world_instance(
             &mut commands,
             scene_prefab_asset,
-            interaction_prefab.handle.clone(),
+            &interaction_prefab.handle,
             world_root_entity,
             interaction_prefab.definition,
             PersistentId(u64::MAX - controller_entity.to_bits()),
