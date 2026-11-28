@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterRegionFade;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_terrain_water_region_fades(
     time: Res<Time>,
     phase: Res<State<GamePhase>>,

@@ -104,6 +104,7 @@ pub(super) fn recompute_guest_ratings(
     );
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn recompute_variety_rating(
     mut adopted: MessageReader<AnimalAdopted>,
     mut born: MessageReader<AnimalBorn>,
@@ -138,6 +139,7 @@ pub(super) fn recompute_variety_rating(
     update_zoo_rating_field_and_publish_change(&mut rating.variety_permille, value, &mut changed);
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn recompute_scenery_rating(
     mut placed: MessageReader<ObjectPlacementCommitted>,
     mut removed: RemovedComponents<PlacedObjectDefinitionReference>,
@@ -163,6 +165,7 @@ pub(super) fn recompute_scenery_rating(
     update_zoo_rating_field_and_publish_change(&mut rating.scenery_permille, value, &mut changed);
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn recompute_finance_rating(
     cash: Res<ZooCash>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -181,6 +184,7 @@ pub(super) fn recompute_finance_rating(
     update_zoo_rating_field_and_publish_change(&mut rating.finance_permille, value, &mut changed);
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn recompute_cleanliness_rating(
     cleanliness: Res<ZooCleanlinessPermille>,
     mut rating: ResMut<ZooRating>,
@@ -203,6 +207,7 @@ pub(super) fn recompute_cleanliness_rating(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn recompute_overall_rating(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

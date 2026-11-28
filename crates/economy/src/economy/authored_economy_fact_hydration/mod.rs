@@ -14,6 +14,7 @@ use super::{
     money_types::Money,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_authored_monthly_upkeep_for_new_world_objects(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -49,6 +50,7 @@ pub(super) fn hydrate_authored_monthly_upkeep_for_new_world_objects(
 
 /// Reads one definition's source-compiled price directly from the loaded
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_authored_service_facility_facts_for_new_world_objects(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

@@ -2,6 +2,7 @@ use bevy::{picking::Pickable, prelude::*};
 
 use super::immersive_mode_policy_types::{InteractionCursor, InteractionCursorVisual};
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn move_immersive_mode_cursor_visual_to_current_pointer_position(
     pointer_input: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
     mut cursor_visual_nodes: Query<&mut Node, With<InteractionCursorVisual>>,

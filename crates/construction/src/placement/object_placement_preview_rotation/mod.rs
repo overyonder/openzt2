@@ -10,6 +10,7 @@ use openzt2_interface_state::input::input_types::GameAction;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
 
 /// Camera rotation yields to placement while a preview is active.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn rotate_active_object_placement_preview_by_authored_increment(
     mut actions: MessageReader<ActionRequest>,
     tool: Res<ConstructionTool>,

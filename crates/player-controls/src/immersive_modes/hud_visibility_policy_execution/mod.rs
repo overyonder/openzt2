@@ -16,6 +16,7 @@ pub(super) struct ModeHiddenHudChild {
 const ALL_GAME_MODE_HUD_LAYOUTS: [&str; 3] = ["Camera Set", "Message bar layout", "pause layout"];
 
 /// Hides the HUD during immersive mode and restores its previous visibility on exit.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hide_ingame_hud_while_requested_immersive_mode_is_active_and_restore_visibility(
     controllers_requesting_hidden_hud: Query<(), With<HideHudWhileActive>>,
     active_modes: Query<&ActiveImmersiveMode>,

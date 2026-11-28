@@ -30,6 +30,7 @@ use openzt2_zoo_state::terrain::terrain_collision_rebuilding_types::TerrainColli
 #[derive(Component)]
 pub(super) struct AdditionalAuthoredTerrainEffectPass;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn validate_index_and_project_loaded_terrain_chunks(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -213,6 +214,7 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_changed_effect_quality_to_projected_terrain_chunks(
     mut commands: Commands,
     graphics_settings: Res<GraphicsSettings>,

@@ -10,6 +10,7 @@ use super::immersive_mode_policy_types::AllowedInteractionActions;
 use super::immersive_mode_state_types::ActiveImmersiveMode;
 use crate::immersive_modes::immersive_control_execution_types::ShowEditControl;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn cancel_active_show_edit_mode(
     mut action_requests: MessageReader<ActionRequest>,
     modal_input: Res<

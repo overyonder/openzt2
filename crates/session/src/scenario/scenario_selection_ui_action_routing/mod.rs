@@ -17,6 +17,7 @@ use super::scenario_ui_types::{
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_scenario_selection_and_start_ui_actions(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,

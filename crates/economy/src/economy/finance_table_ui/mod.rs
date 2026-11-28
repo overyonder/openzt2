@@ -37,6 +37,7 @@ use openzt2_zoo_state::economy::facility_economy_types::ServiceFacility;
 /// directly to their canonical world entities. The report component in the
 /// original executable created these rows imperatively; their Bevy equivalent
 /// remains an ordinary typed live collection.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_authored_finance_report_list_row_counts_and_bind_world_subjects(
     mut commands: Commands,
     history: Res<MonthlyFinanceHistory>,
@@ -125,6 +126,7 @@ pub(super) fn request_authored_finance_report_list_row_counts_and_bind_world_sub
 /// Projects category labels, month headings, and per-month category values
 /// into the nested native balance-sheet lists created from shipped fragments.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_monthly_finance_values_into_native_balance_sheet_lists(
     history: Res<MonthlyFinanceHistory>,
     documents: Res<Assets<UiDocumentAsset>>,
@@ -243,6 +245,7 @@ fn find_ui_list_rows_in_ancestors<'a>(
     output
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_authored_finance_table_row_counts(
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<&UiDocumentRoot>,
@@ -277,6 +280,7 @@ pub(super) fn request_authored_finance_table_row_counts(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_monthly_finance_values_into_authored_table_rows(
     history: Res<MonthlyFinanceHistory>,
     documents: Res<Assets<UiDocumentAsset>>,

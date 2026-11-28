@@ -1,5 +1,6 @@
 use super::*;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn deliver_behavior_object_spawns(
     mut commands: Commands,
     documents: Res<Assets<BehaviorDocumentAsset>>,

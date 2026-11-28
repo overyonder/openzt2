@@ -10,6 +10,7 @@ use openzt2_zoo_state::terrain::terrain_brush_types::DefinedTerrainStroke;
 use openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushFalloff;
 use openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind;
 use openzt2_zoo_state::terrain::terrain_brush_types::TerrainStroke;
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn resolve_authored_terrain_brush_definitions_into_concrete_strokes(
     mut authored: MessageReader<DefinedTerrainStroke>,
     definitions: Res<Assets<WorldDefinitionAsset>>,

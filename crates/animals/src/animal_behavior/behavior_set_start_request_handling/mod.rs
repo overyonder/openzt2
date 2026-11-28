@@ -41,6 +41,7 @@ pub(super) fn accept_animal_behavior_set_start_requests(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
     loaded_behavior_documents: Res<LoadedBehaviorDocumentCollection>,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,

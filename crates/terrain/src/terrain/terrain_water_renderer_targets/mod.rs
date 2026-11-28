@@ -24,6 +24,7 @@ use openzt2_zoo_state::terrain::terrain_water_renderer_types::WATER_RENDER_TARGE
 #[derive(Component)]
 struct AuthoredTerrainWaterBumpCombinationQuad;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_authored_terrain_water_renderer_targets(
     mut commands: Commands,
     terrain_assets: Res<Assets<TerrainAsset>>,

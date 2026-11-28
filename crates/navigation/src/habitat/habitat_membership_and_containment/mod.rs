@@ -10,6 +10,7 @@ use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_habitat_membership_after_locatable_entities_move(
     mut commands: Commands,
     habitat_index: Res<HabitatIndex>,
@@ -75,6 +76,7 @@ pub(super) fn update_habitat_membership_after_locatable_entities_move(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_containment_after_habitat_regions_change(
     mut commands: Commands,
     mut habitat_changes: MessageReader<HabitatChanged>,

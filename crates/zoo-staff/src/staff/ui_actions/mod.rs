@@ -16,6 +16,7 @@ use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivat
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_staff_assignment_selection_and_firing_ui_actions(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,
@@ -66,6 +67,7 @@ pub(super) fn route_staff_assignment_selection_and_firing_ui_actions(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_staff_assignment_ui_actions(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,

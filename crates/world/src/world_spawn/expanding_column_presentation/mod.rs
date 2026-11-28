@@ -91,6 +91,7 @@ pub(super) struct PendingExpandingColumnPieceAttachment {
     warned: bool,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn align_expanding_column_piece_attachments(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,

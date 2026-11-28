@@ -27,6 +27,7 @@ pub(super) struct FameStar {
     half: bool,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn create_fame_star_scenes(
     mut commands: Commands,
     server: Res<AssetServer>,
@@ -99,6 +100,7 @@ pub(super) fn create_fame_star_scenes(
 #[derive(Component)]
 pub(super) struct FameStarTarget;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_fame_stars(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,
@@ -144,6 +146,7 @@ pub(super) fn hydrate_fame_stars(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn present_fame_stars(
     mut commands: Commands,
     fame: Res<Fame>,
@@ -181,6 +184,7 @@ pub(super) fn present_fame_stars(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn frame_fame_star_models(
     meshes: Res<Assets<Mesh>>,
     mesh_nodes: Query<(&Mesh3d, &GlobalTransform)>,

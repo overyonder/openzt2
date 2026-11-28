@@ -290,6 +290,7 @@ pub(super) struct AlbumControlAvailability {
 }
 
 /// Enables photo controls when the selected album supports their action.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn set_photo_album_control_interaction_availability_from_album_state(
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<Ref<UiDocumentRoot>>,
@@ -441,6 +442,7 @@ pub(super) fn set_photo_album_control_interaction_availability_from_album_state(
 }
 
 /// Photo slots share the image handle stored on each photo.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn present_active_photo_album_and_camera_roll_image_slots(
     mut commands: Commands,
     documents: Res<Assets<UiDocumentAsset>>,
@@ -621,6 +623,7 @@ fn is_ui_node_in_authored_subtree(
 }
 
 /// Updates the active album's photo count.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn present_active_photo_album_photo_count(
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<&UiDocumentRoot>,
@@ -684,6 +687,7 @@ pub(super) fn present_photo_album_and_photo_mode_camera_roll_text(
 }
 
 /// Uses the most prominent subject's localized name as the default caption.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn present_default_photo_captions_from_canonical_subjects(
     active_albums: Query<(Entity, Ref<PhotoAlbumPage>), (With<PhotoAlbum>, With<ActivePhotoAlbum>)>,
     albums: Query<(

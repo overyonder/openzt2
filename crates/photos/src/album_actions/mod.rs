@@ -105,6 +105,7 @@ pub(super) fn select_photo_storage_entity_from_authored_row_activation(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_photo_ui_actions(
     mut activations: MessageReader<UiNodeActivated>,
     documents: Res<Assets<UiDocumentAsset>>,

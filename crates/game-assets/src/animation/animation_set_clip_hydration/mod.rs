@@ -6,6 +6,7 @@ use super::animation_set_asset_types::{
     AnimationClipRecord, AnimationClipSourceAsset, AnimationSetAsset,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_animation_sets_after_requested_clip_assets_load(
     asset_server: Res<AssetServer>,
     animation_clip_source_assets: Res<Assets<AnimationClipSourceAsset>>,

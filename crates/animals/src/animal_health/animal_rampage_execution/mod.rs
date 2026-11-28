@@ -57,6 +57,7 @@ pub(crate) fn rampage_chance_percent(points: &NeedPoints, rampaging_now: usize) 
 }
 
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn evaluate_animal_rampage_start_and_end_conditions(
     mut commands: Commands,
     time: Res<Time<Fixed>>,

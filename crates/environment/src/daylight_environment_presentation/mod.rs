@@ -112,6 +112,7 @@ pub(super) fn center_camera_relative_environment_visuals_on_active_zoo_camera(
 
 // Query filters keep the mutable light and sky accesses disjoint.
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
     mut commands: Commands,
     clock: Res<ZooClock>,

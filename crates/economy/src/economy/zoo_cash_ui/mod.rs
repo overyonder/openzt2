@@ -31,6 +31,7 @@ pub(super) struct UiCashGrantPendingTransaction;
 
 /// Projects the authoritative zoo account balance into authored cash fields.
 /// The String owned by Bevy's Text component is retained across updates.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_zoo_cash_balance_into_authored_ui_text(
     cash: Res<ZooCash>,
     unlimited: Option<Res<UnlimitedZooCash>>,
@@ -138,6 +139,7 @@ fn apply_localized_cash_text_presentation(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_cash_grant_transactions_from_authored_ui_actions(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,

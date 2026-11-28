@@ -15,6 +15,7 @@ use openzt2_interface_state::information::overview::overview_types::OverviewMapC
 
 const OVERVIEW_MAP_IMAGE_EXTENT: u32 = 512;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn create_missing_authored_overview_map_canvas_entities(
     overview_map_surfaces: Query<
         (Entity, &UiNodeId, &UiDocumentOwner),

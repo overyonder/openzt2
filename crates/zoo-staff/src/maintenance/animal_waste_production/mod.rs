@@ -12,6 +12,7 @@ use super::maintenance_types::{
     AnimalWasteProductionScheduleResolutionMarker,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_animal_waste_production_schedule(
     mut commands: Commands,
     zoo_clock: Res<ZooClock>,
@@ -46,6 +47,7 @@ pub(super) fn initialize_animal_waste_production_schedule(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn produce_due_animal_habitat_waste(
     mut commands: Commands,
     zoo_clock: Res<ZooClock>,

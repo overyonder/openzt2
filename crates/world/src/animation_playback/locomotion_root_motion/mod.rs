@@ -5,6 +5,7 @@ use openzt2_world_state::animation_playback::animation_joint_target_types::Anima
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::animation_playback::locomotion_root_motion::ConsumedLocomotionRootMotion;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn remove_consumed_root_trajectory(
     assets: Res<Assets<AnimationSetAsset>>,
     clips: Res<Assets<AnimationClip>>,

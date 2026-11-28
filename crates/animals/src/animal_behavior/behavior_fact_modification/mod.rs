@@ -66,6 +66,7 @@ pub(super) struct BehaviorFactModificationMessageWriters<'w> {
     guest_satisfaction: MessageWriter<'w, AdjustGuestSatisfaction>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_supported_current_behavior_fact_modifications(
     assets: Res<Assets<BehaviorDocumentAsset>>,
     clock: Res<ZooClock>,

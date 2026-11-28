@@ -28,6 +28,7 @@ pub(in crate::persistence) struct OriginalSavedGameLoadPreparation {
     document: Option<Handle<WorldScenarioDocumentAsset>>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::persistence) fn begin_original_saved_game_loading(
     mut commands: Commands,
     mut requests: MessageReader<LoadOriginalSavedGame>,
@@ -140,6 +141,7 @@ pub(in crate::persistence) struct OriginalSavedGamePreparationAssets<'w> {
     script_index: Res<'w, openzt2_game_assets::lua_script::lua_script_archive_path_index::LuaScriptArchivePathIndex>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::persistence) fn complete_original_saved_game_preparation(
     mut commands: Commands,
     mut preparations: Query<(Entity, &mut OriginalSavedGameLoadPreparation)>,

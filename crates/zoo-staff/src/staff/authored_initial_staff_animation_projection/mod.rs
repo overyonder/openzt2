@@ -16,6 +16,7 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use super::staff_employment_types::{Staff, StaffRole};
 use super::staff_presentation_variant_selection::{StaffAttachedHead, StaffModelAnimationSet};
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn request_authored_initial_staff_animation_for_newly_resolved_prefab_models(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

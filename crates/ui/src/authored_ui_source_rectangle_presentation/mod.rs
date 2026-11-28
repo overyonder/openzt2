@@ -7,6 +7,7 @@ use super::authored_ui_visual_types::UiSourceRect;
 /// Resolves authored sampling bounds when an image or its source rectangle
 /// changes. Native sprite binding clips oversized source regions to the loaded
 /// texture before UV normalization; destination widget dimensions stay intact.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn resolve_authored_image_source_rectangles_after_image_changes(
     images: Res<Assets<Image>>,
     mut image_events: MessageReader<AssetEvent<Image>>,

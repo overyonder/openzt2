@@ -24,6 +24,7 @@ use openzt2_zoo_state::{
     animal_welfare::types::AnimalWelfare,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_starting_animals(
     mut commands: Commands,
     species_assets: Res<Assets<SpeciesAsset>>,

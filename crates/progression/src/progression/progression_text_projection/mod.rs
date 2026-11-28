@@ -11,6 +11,7 @@ use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use super::{fame_types::Fame, rating_types::ZooRating, research_types::ResearchProject};
 
 /// Projects canonical progression facts through authored locale formats.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_progression_facts_into_authored_ui_text(
     active_localization: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,

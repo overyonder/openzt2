@@ -16,6 +16,7 @@ use super::{
     fossil_recovery_types::{FossilDiscoveryRandomStream, FossilRecoverySite},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_extinct_animal_world_state_from_loaded_definitions(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

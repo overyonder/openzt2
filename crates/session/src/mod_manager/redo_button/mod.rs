@@ -75,6 +75,7 @@ fn toggle(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn attach(
     mut commands: Commands,
     assets: Res<AssetServer>,
@@ -127,6 +128,7 @@ fn attach(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn update(
     mut commands: Commands,
     enabled: Res<RedoButtonEnabled>,

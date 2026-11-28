@@ -83,6 +83,7 @@ pub(super) fn visit_catalogue_page<'a>(
 }
 
 /// Updates the catalogue page’s reusable rows.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_catalogue_page(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

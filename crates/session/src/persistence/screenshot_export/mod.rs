@@ -37,6 +37,7 @@ pub(super) struct FullFrameScreenshotBmpWriteTask {
     task: Task<io::Result<()>>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_full_frame_screenshot_bmp_exports(
     mut captured: MessageReader<ScreenshotCaptured>,
     directories: Option<Res<PersistenceFilesystemPaths>>,

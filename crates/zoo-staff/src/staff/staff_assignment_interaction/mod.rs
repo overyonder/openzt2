@@ -18,6 +18,7 @@ use super::{
 
 /// Assigns the selected worker to the habitat clicked in the world.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn assign_selected_staff_to_habitat_under_world_pointer(
     pointer_input: Res<PrimaryPointerInputState>,
     pointer_capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
@@ -71,6 +72,7 @@ pub(crate) fn assign_selected_staff_to_habitat_under_world_pointer(
 }
 
 /// Cancel leaves the staff-assignment tool without mutating any staff relationship.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn leave_staff_assignment_tools_after_cancel_action(
     mut commands: Commands,
     mut action_requests: MessageReader<ActionRequest>,

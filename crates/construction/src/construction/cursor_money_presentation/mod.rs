@@ -27,6 +27,7 @@ use openzt2_zoo_state::construction::construction_interaction_types::Constructio
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity;
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_cursor_money_text_position_and_animation(
     windows: Query<&Window, With<PrimaryWindow>>,
     containers: Query<(&ComputedNode, &UiGlobalTransform), With<CursorMoneyContainer>>,

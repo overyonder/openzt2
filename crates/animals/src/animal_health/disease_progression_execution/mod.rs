@@ -9,6 +9,7 @@ use super::{
     types::{Dead, Disease, Vitality},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_active_animal_diseases_and_apply_vitality_loss(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,

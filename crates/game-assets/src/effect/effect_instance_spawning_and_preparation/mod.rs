@@ -97,6 +97,7 @@ fn spawn_pending_effect_instance(
     pending_effect_entity.id()
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn prepare_pending_effect_instances_from_loaded_authored_assets(
     mut commands: Commands,
     effect_assets: Res<Assets<ParticleEffectDocumentAsset>>,

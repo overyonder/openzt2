@@ -8,6 +8,7 @@ use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorFeedbackDispatched;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn dispatch_current_authored_behavior_feedback_and_advance(
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     simulation_clock: Res<ZooClock>,

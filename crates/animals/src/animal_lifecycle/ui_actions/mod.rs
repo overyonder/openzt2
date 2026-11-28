@@ -16,6 +16,7 @@ use super::{
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiAnimalActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn consume_animal_ui_actions(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,

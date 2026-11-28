@@ -18,6 +18,7 @@ use super::{
     scenario_lua_types::ScenarioLuaVirtualMachineContexts,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn create_challenge_offers_requested_by_scenario_scripts(
     mut commands: Commands,
     mut requests: MessageReader<CreateScenarioChallengeOfferFromLuaSourcePathRequest>,
@@ -102,6 +103,7 @@ pub(super) fn create_challenge_offers_requested_by_scenario_scripts(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn validate_and_apply_requested_challenge_responses(
     mut requests: MessageReader<RespondToScenarioChallengeRequest>,
     clock: Res<ZooClock>,

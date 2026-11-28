@@ -38,6 +38,7 @@ impl UiPhysicalListRowHeight {
 #[derive(Component)]
 pub(super) struct UiPhysicalAspect;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn scale_authored_ui_canvas_to_primary_window(
     windows: Query<&Window, With<PrimaryWindow>>,
     settings: Res<DisplaySettings>,

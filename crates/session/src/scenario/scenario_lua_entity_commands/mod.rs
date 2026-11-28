@@ -269,6 +269,7 @@ pub(super) fn register(app: &mut App) {
     );
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn apply_entity_commands(
     mut commands: Commands,
     mut operations: MessageReader<ScenarioEntityCommand>,

@@ -31,6 +31,7 @@ use super::{
 /// (`SpawnF` and `SpawnM`, one to three times), brings one child of its
 /// young variant beside the mother.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn spawn_children_for_authored_births(
     mut commands: Commands,
     clock: Res<ZooClock>,

@@ -18,6 +18,7 @@ use super::{
     },
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn place_requested_fossil_pieces_into_assembly_slots(
     mut requests: MessageReader<PlaceFossilPieceInAssemblyRequest>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -116,6 +117,7 @@ pub(super) fn place_requested_fossil_pieces_into_assembly_slots(
 }
 
 /// The first piece placed on a table determines its fossil set.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_fossil_assembly_from_first_piece_placement_request(
     mut requests: MessageReader<PlaceFossilPieceInAssemblyRequest>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -152,6 +154,7 @@ pub(super) fn initialize_fossil_assembly_from_first_piece_placement_request(
 }
 
 /// Requests the completed fossil set's catalogue unlock. A zero ID grants none.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_authored_catalogue_unlocks_for_completed_fossil_sets(
     mut completed: MessageReader<CompletedFossilSetAssembly>,
     definitions: Res<Assets<WorldDefinitionAsset>>,

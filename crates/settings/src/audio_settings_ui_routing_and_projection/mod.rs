@@ -13,6 +13,7 @@ use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivat
 /// Applies the four source-authored audio sliders to the one accepted settings
 /// resource. The loaded action table identifies the consumer; runtime never
 /// switches on source widget names or generic setting strings.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_authored_audio_volume_actions_to_replacement_requests(
     mut activations: MessageReader<UiNodeActivated>,
     documents: Res<Assets<UiDocumentAsset>>,
@@ -71,6 +72,7 @@ pub(super) fn route_authored_audio_volume_actions_to_replacement_requests(
 
 /// Publishes the accepted values when an options document appears, matching
 /// the source mode's cached-volume publication without retaining a widget map.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_accepted_audio_volume_settings_into_authored_controls(
     settings: Res<AudioSettings>,
     documents: Res<Assets<UiDocumentAsset>>,

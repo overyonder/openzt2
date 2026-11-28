@@ -40,6 +40,7 @@ fn select_crowd_band(count: i32, current: Option<u8>, policy: &AudioCrowdPolicy)
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_current_crowd_into_audio_playback(
     mut commands: Commands,
     assets: Res<Assets<AudioAsset>>,

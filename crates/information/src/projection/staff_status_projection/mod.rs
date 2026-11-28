@@ -91,6 +91,7 @@ pub(crate) fn project_maintenance_worker_duties_to_information_panel_controls(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_live_staff_status_to_visible_information_panels(
     calendar: Res<ZooCalendar>,
     panels: Query<(Entity, Ref<InfoPanel>, &InheritedVisibility)>,

@@ -23,6 +23,7 @@ use openzt2_interface_state::persistence::save_slot_types::LoadWorldSnapshotFrom
 use openzt2_interface_state::persistence::save_slot_types::SaveSlotCatalogue;
 use openzt2_interface_state::persistence::save_slot_types::SaveSlotCatalogueReady;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_save_slot_catalogue_list_row_count_updates(
     mut save_slot_catalogue_ready_messages: MessageReader<SaveSlotCatalogueReady>,
     save_slot_catalogue: Res<SaveSlotCatalogue>,
@@ -53,6 +54,7 @@ pub(super) fn request_save_slot_catalogue_list_row_count_updates(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_save_slot_catalogue_records_onto_saved_game_list_rows(
     mut commands: Commands,
     save_slot_catalogue: Res<SaveSlotCatalogue>,
@@ -248,6 +250,7 @@ pub(super) struct OriginalSaveDeleteControlState {
     previous_enabled: bool,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_original_save_delete_control_state(
     mut commands: Commands,
     rows: Query<(&UiListRow, &UiSelected, &SavedGameSource)>,

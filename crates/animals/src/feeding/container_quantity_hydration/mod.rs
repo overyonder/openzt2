@@ -18,6 +18,7 @@ pub(crate) struct ContainerQuantityResolved {
     pub(crate) definitions_revision: u64,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_food_and_drink_container_quantities_for_new_world_objects(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

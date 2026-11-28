@@ -10,6 +10,7 @@ use crate::camera::camera_execution_types::CameraTuning;
 
 /// Applies the original dedicated overhead-camera distance option to the
 /// authored low/medium/high limits without changing the current focus.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn apply_overhead_camera_zoom_graphics_setting(
     graphics: Res<GraphicsSettings>,
     mut cameras: Query<(&mut CameraTuning, &mut OverheadRig, &CameraMode), With<ZooCamera>>,

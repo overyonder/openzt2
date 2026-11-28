@@ -84,6 +84,7 @@ pub(super) fn calculate_direct_locomotion_steering(
 }
 
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn integrate_non_physics_direct_locomotion(
     animation_samples: LocomotionAnimationSamples,
     time: Res<Time<Fixed>>,

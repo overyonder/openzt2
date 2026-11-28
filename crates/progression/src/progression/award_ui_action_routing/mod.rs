@@ -13,6 +13,7 @@ use super::award_and_progression_fact_types::{
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiScenarioActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_authored_mark_awards_seen_ui_actions_to_earned_progression_awards(
     mut commands: Commands,
     mut activated_ui_nodes: MessageReader<UiNodeActivated>,

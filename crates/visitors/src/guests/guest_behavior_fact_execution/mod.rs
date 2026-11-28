@@ -24,6 +24,7 @@ use openzt2_zoo_state::guests::guest_survey_types::GuestSurveyExperience;
 
 use super::{guest_simulation_calculations::apply_q16, guest_simulation_types::*};
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_authored_guest_behavior_fact_modifications(
     assets: Res<Assets<BehaviorDocumentAsset>>,
     clock: Res<ZooClock>,

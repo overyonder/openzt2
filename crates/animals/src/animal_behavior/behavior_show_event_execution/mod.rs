@@ -13,6 +13,7 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure
 use openzt2_zoo_state::shows::show_event_types::AuthoredAnimalShowEvent;
 
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn register_current_authored_animal_show_events(
     mut commands: Commands,
     documents: Res<Assets<BehaviorDocumentAsset>>,

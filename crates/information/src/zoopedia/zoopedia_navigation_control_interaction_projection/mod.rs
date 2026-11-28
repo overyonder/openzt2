@@ -12,6 +12,7 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use crate::zoopedia::zoopedia_navigation_types::ZoopediaHistory;
 
 /// Enables Back and Forward when there is a page to visit.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_zoopedia_history_availability_to_authored_navigation_controls(
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     document_roots: Query<&UiDocumentRoot>,

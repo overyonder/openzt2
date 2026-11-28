@@ -22,6 +22,7 @@ use crate::immersive_modes::immersive_control_execution_types::FirstPersonContro
 use crate::immersive_modes::immersive_control_execution_types::FirstPersonViewAngles;
 use crate::immersive_modes::immersive_control_execution_types::GuestViewControl;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_guest_view_look_and_navigation_controls(
     mut action_requests: MessageReader<ActionRequest>,
     modal_input: Res<
@@ -77,6 +78,7 @@ pub(super) fn apply_guest_view_look_and_navigation_controls(
     );
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_first_person_look_and_navigation_controls(
     mut action_requests: MessageReader<ActionRequest>,
     modal_input: Res<
@@ -132,6 +134,7 @@ pub(super) fn apply_first_person_look_and_navigation_controls(
     );
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_subject_relative_first_person_camera_transform(
     active_modes: Query<&ActiveImmersiveMode>,
     view_angles: Query<&FirstPersonViewAngles>,

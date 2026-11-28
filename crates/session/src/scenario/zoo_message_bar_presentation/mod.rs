@@ -7,6 +7,7 @@ use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types:
 
 /// Fills the message bar's single-message list with the newest unexpired zoo
 /// message and its opened queue with every message, newest first.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn present_zoo_messages_in_authored_message_bar(
     messages: Res<ZooMessages>,
     time: Res<Time<Real>>,

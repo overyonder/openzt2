@@ -52,6 +52,7 @@ pub(super) struct AnimalSubjectTaskIndex {
         bevy::platform::collections::HashMap<AssetId, Vec<(Handle<BehaviorDocumentAsset>, usize)>>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn select_idle_animal_tasks(
     (documents, assets, mut subject_tasks): (
         Res<LoadedBehaviorDocumentCollection>,

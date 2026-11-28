@@ -15,6 +15,7 @@ use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use super::donation_payment_types::DonationCategoryTotals;
 
 /// Displays donation totals by category in Zoo Status.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_zoo_donation_category_totals_into_authored_summary(
     active_localization: Option<Res<LocalizationPrecedenceIndex>>,
     localizations: Res<Assets<LocalizationAsset>>,

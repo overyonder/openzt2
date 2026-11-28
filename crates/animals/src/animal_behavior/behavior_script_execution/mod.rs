@@ -60,6 +60,7 @@ pub(super) fn invalidate_changed_behavior_script_contexts(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn execute_authored_behavior_script_actions(
     mut commands: Commands,
     mut contexts: NonSendMut<BehaviorScriptContexts>,

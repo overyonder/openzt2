@@ -61,6 +61,7 @@ pub(super) fn install_material_runtime_render_world_proof(app: &mut App) {
         .add_systems(Render, observe_material_runtime_proof_pass_in_render_world);
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn begin_loading_material_runtime_proof_asset(
     server: Res<AssetServer>,
     mut proof: ResMut<MaterialRuntimeProofState>,
@@ -69,6 +70,7 @@ fn begin_loading_material_runtime_proof_asset(
     info!(asset = %proof.material_asset_path, "FX runtime proof requested live material");
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn spawn_material_runtime_proof_scene_and_exit_after_gpu_preparation(
     mut commands: Commands,
     mut proof: ResMut<MaterialRuntimeProofState>,
@@ -139,6 +141,7 @@ fn spawn_material_runtime_proof_scene_and_exit_after_gpu_preparation(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn observe_material_runtime_proof_pass_in_render_world(
     signal: Res<MaterialRuntimeProofSignal>,
     materials: Res<ErasedRenderAssets<PreparedMaterial>>,

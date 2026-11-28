@@ -8,6 +8,7 @@ use super::{
     types::{Age, Animal, AnimalLifeStage, AuthoredAnimalLifeStageStartTicks},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_animal_life_stages_from_elapsed_simulation_time(
     zoo_clock: Res<ZooClock>,
     mut animals: Query<

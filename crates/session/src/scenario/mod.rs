@@ -212,6 +212,7 @@ fn remove_selected_scenario_document_resource_when_leaving_game(
     commands.remove_resource::<SelectedScenarioDocument>();
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn scenario_or_challenge_gameplay_is_active(
     selected: Option<Res<SelectedScenarioDocument>>,
     worlds: Query<

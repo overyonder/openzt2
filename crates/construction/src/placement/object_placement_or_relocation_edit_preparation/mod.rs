@@ -43,6 +43,7 @@ use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPla
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementMutation;
 
 /// Validates and records one requested placement or relocation transaction.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn prepare_object_placement_or_relocation_edit(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,

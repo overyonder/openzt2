@@ -42,6 +42,7 @@ type PlacedObjects<'w, 's> = Query<
 >;
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn ruin_destroyed_placed_objects(
     mut commands: Commands,
     mut requests: MessageReader<DestroyPlacedObject>,
@@ -371,6 +372,7 @@ fn throw_fragments(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn fly_rubble_fragments(
     mut commands: Commands,
     time: Res<Time>,

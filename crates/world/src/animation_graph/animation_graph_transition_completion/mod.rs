@@ -10,6 +10,7 @@ use openzt2_world_state::animation_graph::animation_graph_playback_state_types::
 use openzt2_world_state::animation_graph::animation_graph_transition_operations::enter_animation_graph_node_playback;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn complete_animation_graph_transitions_after_animation_clip_completion(
     animation_set_assets: Res<Assets<AnimationSetAsset>>,
     mut completed_animations: MessageReader<AnimationCompleted>,

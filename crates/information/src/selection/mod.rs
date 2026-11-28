@@ -51,6 +51,7 @@ pub(super) fn clear_removed_selection(
 /// Keeps the original bottom-right entity-information document attached to
 /// the in-game HUD lifecycle. Selection owns only the subject; UI document still owns
 /// the complete authored panel and Zoopedia link.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn reconcile_selected_entity_information(
     mut commands: Commands,
     selected: Res<SelectedEntity>,
@@ -102,6 +103,7 @@ pub(super) fn reconcile_selected_entity_information(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn bind_info_panel_subject(
     selected: Res<SelectedEntity>,
     view_classes: Query<&InformationViewClass>,

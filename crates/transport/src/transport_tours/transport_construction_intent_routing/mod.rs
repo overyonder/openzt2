@@ -13,6 +13,7 @@ use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStati
 /// Routes an ordinary committed station into the canonical circuit graph.
 /// The source placement transaction remains the object owner; this system
 /// emits only the transport mutation established by the authored station kind.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn attach_committed_transport_stations_to_compatible_or_new_circuits(
     mut committed_objects: MessageReader<ObjectPlacementCommitted>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

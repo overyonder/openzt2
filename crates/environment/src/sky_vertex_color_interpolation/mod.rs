@@ -35,6 +35,7 @@ pub(super) struct InterpolatedSkyMesh {
     sampled_fraction: f32,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn retain_sky_vertex_color_keyframe_models(
     mut commands: Commands,
     server: Res<AssetServer>,
@@ -112,6 +113,7 @@ pub(super) fn retain_sky_vertex_color_keyframe_models(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn interpolate_sky_model_vertex_colors(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

@@ -25,6 +25,7 @@ use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrevie
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewVisualState;
 use openzt2_zoo_state::terrain::terrain_fitted_surface_mesh_construction::construct_rectangular_surface_mesh_fitted_to_canonical_terrain_samples;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_object_placement_preview_materials_from_ui_document(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -197,6 +198,7 @@ fn footprint_rectangle(
 
 /// The original game draws a building being placed without its alpha-blended meshes,
 /// such as a station's glass and the track under it.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hide_alpha_blended_meshes_of_object_placement_previews(
     materials: Res<
         Assets<openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial>,
@@ -229,6 +231,7 @@ pub(super) fn hide_alpha_blended_meshes_of_object_placement_previews(
 }
 
 /// Slides each entrance arrow back and forth along the way it points.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn pulse_object_placement_entrance_arrows(
     time: Res<Time>,
     mut arrows: Query<(
@@ -243,6 +246,7 @@ pub(super) fn pulse_object_placement_entrance_arrows(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,

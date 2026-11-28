@@ -48,6 +48,7 @@ pub(super) fn cleanup_unreferenced_retired_water_region_entities(
 }
 
 /// Projects each authored DAT water-region row into one focused ECS entity.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_natural_water_regions(
     mut commands: Commands,
     terrain_assets: Res<Assets<TerrainAsset>>,
@@ -154,6 +155,7 @@ struct LiveWaterCell {
 /// The rebuild walks every cell of the map, so it waits until a held terrain
 /// brush, which changes water dab after dab, is released.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn rebuild_edited_water_regions(
     mut commands: Commands,
     mut changes: MessageReader<TerrainWaterChanged>,

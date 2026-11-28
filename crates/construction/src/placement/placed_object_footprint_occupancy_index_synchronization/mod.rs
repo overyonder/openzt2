@@ -24,6 +24,7 @@ use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootpri
 /// Reconstructs the sole occupancy accelerator after world spawning and persistence have hydrated
 /// authoritative placement components. Loading may reserve and sort; settled
 /// frames never run this system.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn rebuild_placed_object_footprint_occupancy_index(
     mut index: ResMut<PlacedObjectFootprintOccupancyIndex>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -112,6 +113,7 @@ pub(super) fn rebuild_placed_object_footprint_occupancy_index(
 /// entity stores only its definition, grid origin and authored orientation.
 /// Docking points are ECS facts: the first remains on the placed entity for
 /// the persistence contract and additional points are derived child entities.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_placed_object_placement_components(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -175,6 +177,7 @@ pub(super) fn hydrate_placed_object_placement_components(
 /// Applies Avian's completed transform writeback to placement's sole occupancy
 /// accelerator. `PlacedObjectFootprintOccupancy` is the prior authoritative grid fact, so
 /// changed objects remove only their old cells and insert their new cells.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn synchronize_physics_moved_object_footprints_with_occupancy_index(
     mut index: ResMut<PlacedObjectFootprintOccupancyIndex>,
     definitions: Res<Assets<WorldDefinitionAsset>>,

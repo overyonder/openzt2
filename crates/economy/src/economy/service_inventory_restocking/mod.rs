@@ -6,6 +6,7 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooDayAdvanced
 
 use super::facility_economy_types::{Inventory, ServiceFacility};
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn restock_service_facility_inventories_after_zoo_days_advance(
     mut advanced_days: MessageReader<ZooDayAdvanced>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

@@ -9,6 +9,7 @@ use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
 use openzt2_interface_state::ui::pointer_capture_types::UiWheelCapture;
 
 /// Picking resolves one wheel receiver independently of click hover.
+#[expect(clippy::needless_pass_by_value)]
 pub fn scroll_captured_authored_list_or_window_from_mouse_wheel(
     mut wheel: MessageReader<MouseWheel>,
     capture: Res<UiPointerCapture>,

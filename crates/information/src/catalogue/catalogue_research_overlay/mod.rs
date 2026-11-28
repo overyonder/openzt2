@@ -40,6 +40,7 @@ pub(crate) struct CatalogueResearchOverlay {
     projected_row: Option<Option<AssetId>>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn attach_authored_catalogue_research_overlays(
     mut commands: Commands,
     rows: Query<Entity, (With<CatalogueRowEntry>, Without<RowResearchOverlays>)>,
@@ -134,6 +135,7 @@ pub(crate) fn attach_authored_catalogue_research_overlays(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_catalogue_research_overlays(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

@@ -13,6 +13,7 @@ use super::environment_state_types::Earthquake;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiScenarioActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_authored_earthquake_ui_actions_to_world_environment_state(
     mut commands: Commands,
     mut activated_ui_nodes: MessageReader<UiNodeActivated>,

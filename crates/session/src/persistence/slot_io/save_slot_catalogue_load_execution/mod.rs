@@ -32,6 +32,7 @@ use super::{
     world_snapshot_section_encoding::decode_and_validate_world_snapshot_section,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in super::super) fn begin_loading_save_slot_catalogue_for_active_profile(
     mut commands: Commands,
     mut catalogue_load_requests: MessageReader<LoadSaveSlotCatalogue>,

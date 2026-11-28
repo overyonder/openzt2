@@ -19,6 +19,7 @@ pub(super) struct TankWaterNavigationCells {
     terrain_values: HashMap<u32, (bool, u16)>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_tank_water_onto_navigation_cells(
     graph: Option<ResMut<ActiveTerrainDerivedNavigationGraph>>,
     grid: Res<TopologyGrid>,

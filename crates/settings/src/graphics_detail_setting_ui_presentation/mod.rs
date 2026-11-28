@@ -183,6 +183,7 @@ pub(super) fn set_authored_graphics_detail_setting_list_row_count(
 /// Fills each authored `optionsslider.xml` row with its setting label, slider
 /// range and the draft's current level. The slider keeps the setting as its
 /// component so slider changes can be routed back into the draft.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_drafted_graphics_detail_settings_into_authored_rows(
     mut commands: Commands,
     draft: Res<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>,

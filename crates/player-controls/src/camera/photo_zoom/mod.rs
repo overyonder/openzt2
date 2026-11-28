@@ -25,6 +25,7 @@ pub(super) struct PhotoCameraZoom {
     displayed_percent: i64,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_photo_camera_zoom(
     mut commands: Commands,
     time: Res<Time<Real>>,

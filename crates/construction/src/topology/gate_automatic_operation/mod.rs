@@ -29,6 +29,7 @@ pub(super) fn advance_gate_automatic_close_countdowns(
 
 /// Polls eligible authored actor types, opening at the inner radius and closing
 /// only after those actors have left the outer radius.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
     time: Res<Time<Fixed>>,
     spatial_grid: Res<SpatialGrid>,

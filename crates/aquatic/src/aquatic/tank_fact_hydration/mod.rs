@@ -20,6 +20,7 @@ pub(super) fn hydrate_tank_capacity_and_population_facts(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_legacy_tank_water_limits(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

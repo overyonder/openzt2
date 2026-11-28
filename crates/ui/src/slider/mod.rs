@@ -200,6 +200,7 @@ pub(super) fn apply_slider_bounds(
 
 /// Adjusts the focused slider through the same stepped, clamped value path as
 /// pointer interaction.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn adjust_focused_sliders(
     mut actions: MessageReader<ActionRequest>,
     scopes: Query<(Entity, &UiFocusScope)>,
@@ -255,6 +256,7 @@ pub(super) fn adjust_focused_sliders(
 /// Samples Bevy Picking's active mouse pointer. Pressing the authored
 /// thumb-centre interval or the visible thumb captures the slider entity so
 /// dragging continues after the pointer leaves either node.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn adjust_sliders_from_pointer(
     mut commands: Commands,
     primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,

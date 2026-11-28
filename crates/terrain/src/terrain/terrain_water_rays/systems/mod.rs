@@ -28,6 +28,7 @@ pub(in crate::terrain) struct TerrainWaterRayPass {
 
 /// Each source row owns its effect through Bevy's linked child lifetime.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::terrain) fn maintain_terrain_water_ray_effects(
     mut commands: Commands,
     graphics: Res<GraphicsSettings>,
@@ -169,6 +170,7 @@ pub(in crate::terrain) fn maintain_terrain_water_ray_effects(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::terrain) fn advance_terrain_water_ray_materials(
     time: Res<Time>,
     view: Option<Res<TerrainWaterViewState>>,

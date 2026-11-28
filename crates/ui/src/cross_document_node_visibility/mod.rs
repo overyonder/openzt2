@@ -79,6 +79,7 @@ pub(super) fn cancel_pending_cross_document_visibility(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_pending_cross_document_node_visibility(
     mut commands: Commands,
     documents: Res<Assets<UiDocumentAsset>>,

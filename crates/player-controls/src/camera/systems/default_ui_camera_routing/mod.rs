@@ -9,6 +9,7 @@ use super::super::camera_runtime_state_types::ZooCamera;
 /// Use the zoo camera as Bevy's single world-and-UI camera during gameplay.
 /// Shell screens retain their dedicated 2D camera before a world exists, so
 /// two cameras never compete to composite the live game target.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn route_default_ui_camera(
     phase: Res<State<GamePhase>>,
     mut commands: Commands,

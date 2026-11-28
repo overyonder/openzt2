@@ -101,6 +101,7 @@ fn report_membership_status(
 }
 
 /// An absent index denotes unresolved ownership, not a dry terrain.
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::terrain) fn project_terrain_water_membership(
     mut commands: Commands,
     assets: Res<Assets<TerrainAsset>>,

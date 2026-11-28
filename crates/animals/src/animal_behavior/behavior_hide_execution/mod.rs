@@ -65,6 +65,7 @@ fn show_actors_whose_hiding_ended(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn hide_actors_for_current_hide_actions(
     mut commands: Commands,
     clock: Res<ZooClock>,

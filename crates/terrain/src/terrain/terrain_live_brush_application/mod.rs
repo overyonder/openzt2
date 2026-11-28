@@ -23,6 +23,7 @@ use openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigati
 /// Applies each held pointer dab to the terrain immediately while
 /// retaining the ordered before/after deltas as one draft undo transaction.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
     mut commands: Commands,
     mut strokes: MessageReader<TerrainStroke>,
@@ -232,6 +233,7 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
 /// A cancelled held stroke never enters history, so restore its ordered
 /// before-images before the generic construction owner despawns the preview.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn roll_back_cancelled_live_terrain_brush_edit(
     mut commands: Commands,
     mut cancellations: MessageReader<CancelConstruction>,

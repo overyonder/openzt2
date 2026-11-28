@@ -71,6 +71,7 @@ pub(super) fn install(app: &mut App) {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn exercise(
     mut batch: ResMut<AnimalBatch>,
     inputs: Inputs,

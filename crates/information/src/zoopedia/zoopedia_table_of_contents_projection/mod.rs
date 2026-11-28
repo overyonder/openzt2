@@ -26,6 +26,7 @@ use super::{
     zoopedia_table_of_contents_types::{ZoopediaTableOfContentsRow, ZoopediaTableOfContentsState},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_zoopedia_table_of_contents_for_hydrated_pages(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -84,6 +85,7 @@ pub(crate) fn apply_authored_zoopedia_table_of_contents_expansion_changes(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn request_zoopedia_table_of_contents_row_counts(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -111,6 +113,7 @@ pub(crate) fn request_zoopedia_table_of_contents_row_counts(
 
 /// Hydrates the authored TOC row fragment with stable references into the
 /// loaded Zoopedia hierarchy.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_zoopedia_table_of_contents_rows(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

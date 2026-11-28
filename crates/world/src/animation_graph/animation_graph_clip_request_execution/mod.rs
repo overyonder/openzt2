@@ -22,6 +22,7 @@ pub(crate) struct DeferredAnimationClipPlaybackRequest {
 }
 
 #[allow(clippy::too_many_lines)]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn execute_explicit_animation_clip_playback_requests(
     asset_server: Res<AssetServer>,
     mut animation_set_assets: ResMut<Assets<AnimationSetAsset>>,

@@ -87,6 +87,7 @@ pub(super) fn enter_main_menu_after_splash_completion_or_ui_document_asset_load_
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn reflect_game_phase_in_shared_menu_backdrop_visibility(
     phase: Res<State<GamePhase>>,
     mut backdrops: Query<&mut Visibility, With<MainMenuBackdrop>>,

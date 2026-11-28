@@ -15,6 +15,7 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge_world_transform;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
     mut commands: Commands,
     topology_index: Res<TopologyIndex>,

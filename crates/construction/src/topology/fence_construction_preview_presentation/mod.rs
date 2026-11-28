@@ -41,6 +41,7 @@ pub(super) struct FenceConstructionPreviewPresentationSegment {
     segment_index: usize,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn synchronize_fence_preview_visibility_with_pointer_capture(
     capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
     cursors: Query<
@@ -59,6 +60,7 @@ pub(super) fn synchronize_fence_preview_visibility_with_pointer_capture(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn reconcile_fence_construction_preview_presentation_segments(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -188,6 +190,7 @@ pub(super) fn reconcile_fence_construction_preview_presentation_segments(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_fence_construction_preview_validity_onto_prefab_model_tints(
     mut commands: Commands,
     documents: Res<Assets<UiDocumentAsset>>,

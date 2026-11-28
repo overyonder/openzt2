@@ -110,6 +110,7 @@ fn edit_after_is_reachable(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn prepare_tank_geometry_construction_edits(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,
@@ -204,6 +205,7 @@ pub(super) fn prepare_tank_geometry_construction_edits(
 
 /// Applies the requested image and the affected segments' individual wall tops.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_tank_geometry_construction_edits(
     mut commands: Commands,
     mut requests: MessageReader<CommitTankGeometryEdit>,

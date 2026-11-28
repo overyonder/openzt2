@@ -25,6 +25,7 @@ use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types:
 #[derive(Resource, Default)]
 pub(crate) struct InformationRowStructure;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn invalidate_row_structure(
     event: On<Insert<(ChildOf, UiTextBinding, UiImageBinding, UiListRow)>>,
     nodes: Query<(), With<Node>>,
@@ -35,6 +36,7 @@ pub(crate) fn invalidate_row_structure(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_world_subject_identity_to_information_list_rows(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

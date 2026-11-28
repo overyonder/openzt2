@@ -8,6 +8,7 @@ use super::audio_player_spawning::{
 };
 use openzt2_interface_state::settings::audio_settings_types::AudioSettings;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn start_deferred_audio_playback_after_delays_finish(
     mut commands: Commands,
     time: Res<Time>,

@@ -38,6 +38,7 @@ pub(super) struct TimedBehaviorAnimationClip {
     returning: bool,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn start_current_behavior_animation_clip_actions(
     mut commands: Commands,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
@@ -166,6 +167,7 @@ pub(super) fn start_current_behavior_animation_clip_actions(
 
 /// A refused clip cannot produce a completion event. Propagate that refusal to
 /// the task's authored failure branch instead of retaining an eternal wait.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn fail_behavior_animation_actions_after_playback_rejection(
     mut commands: Commands,
     mut rejected_animations: MessageReader<AnimationClipPlaybackRequestRejected>,
@@ -206,6 +208,7 @@ pub(super) fn fail_behavior_animation_actions_after_playback_rejection(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn finish_behavior_animation_clip_actions_after_playback_completion(
     mut commands: Commands,
     mut completed_animations: MessageReader<AnimationCompleted>,
@@ -260,6 +263,7 @@ pub(super) fn finish_behavior_animation_clip_actions_after_playback_completion(
 }
 
 /// Ends a clip action once its authored play time has elapsed.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn finish_behavior_animation_clip_actions_after_play_time(
     mut commands: Commands,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,

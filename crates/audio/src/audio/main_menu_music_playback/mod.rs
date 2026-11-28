@@ -8,6 +8,7 @@ use openzt2_game_assets::{
 
 use super::audio_playback_message_types::{PlayAudioCue, StopAudioCue};
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn play_main_menu_music_when_audio_is_ready(
     phase: Res<State<GamePhase>>,
     assets: Res<Assets<AudioAsset>>,

@@ -42,6 +42,7 @@ pub(super) struct AuthoredPointerCaptureState<'w, 's> {
 /// layout, clipping, camera targeting, render order, and pointer pipeline, but
 /// applies the source `normal` alpha test before an authored node can block
 /// the node below it.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn alpha_ui_picking(
     pointers: Query<(&PointerId, &PointerLocation)>,
     cameras: Query<(Entity, &Camera, &RenderTarget)>,

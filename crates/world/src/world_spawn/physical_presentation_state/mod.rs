@@ -5,6 +5,7 @@ pub(super) mod child_lifecycle;
 use bevy::prelude::*;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_physical_presentation_requests(
     mut commands: Commands,
     mut requests: MessageReader<PhysicalPresentationRequest>,

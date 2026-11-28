@@ -16,6 +16,7 @@ use super::{
     zoo_cash_types::ZooCash,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn record_completed_transactions_and_guest_counts_in_monthly_finance_history(
     calendar: Res<ZooCalendar>,
     zoo_cash: Res<ZooCash>,

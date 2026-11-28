@@ -75,6 +75,7 @@ pub(super) fn stop_effect_instances_attached_to_requested_entities(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn bind_loaded_material_textures_to_pending_effect_instances(
     mut commands: Commands,
     pending_material_bindings: Query<(
@@ -119,6 +120,7 @@ pub(super) fn bind_loaded_material_textures_to_pending_effect_instances(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn bind_loaded_named_meshes_to_pending_effect_instances(
     mut commands: Commands,
     pending_mesh_bindings: Query<(Entity, &PendingEffectMeshBinding)>,
@@ -146,6 +148,7 @@ pub(super) fn bind_loaded_named_meshes_to_pending_effect_instances(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_controlled_effect_emission_from_authored_timing(
     presentation_time: Res<Time<Real>>,
     zoo_simulation_time: Res<Time<Virtual>>,
@@ -263,6 +266,7 @@ pub(super) fn update_controlled_effect_emission_from_authored_timing(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn select_effect_simulation_delta_time_from_authored_clock(
     presentation_time: Res<Time<Real>>,
     zoo_simulation_time: Res<Time<Virtual>>,
@@ -279,6 +283,7 @@ pub(super) fn select_effect_simulation_delta_time_from_authored_clock(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn retire_effect_instances_after_calculated_finite_lifetime(
     mut commands: Commands,
     presentation_time: Res<Time<Real>>,

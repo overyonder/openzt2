@@ -27,6 +27,7 @@ use super::super::information_view_types::InformationViewClass;
 use openzt2_interface_state::information::overview::overview_types::OverviewCameraMarker;
 use openzt2_interface_state::information::overview::overview_types::OverviewMarker;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn create_missing_authored_overview_map_marker_entities(
     overview_map_surfaces: Query<(Entity, &UiNodeId, &UiDocumentOwner, Ref<UiTablePolicy>)>,
     ui_document_roots: Query<&UiDocumentRoot>,

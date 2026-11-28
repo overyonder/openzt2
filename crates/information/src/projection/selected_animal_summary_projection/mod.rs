@@ -30,6 +30,7 @@ use openzt2_interface_state::information::entity_selection_types::InfoPanel;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
 use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_selected_entity_information_section_visibility(
     information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
     subjects: Query<(&Inspectable, Has<WorldEntityIsCrated>, Has<Animal>)>,
@@ -80,6 +81,7 @@ pub(crate) fn project_selected_entity_information_section_visibility(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_selected_animal_identity_health_and_action_summary(
     selected_entity: Res<SelectedEntity>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

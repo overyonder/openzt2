@@ -12,6 +12,7 @@ use super::authored_model_material_pass_projection::AdditionalAuthoredModelMater
 #[derive(Component)]
 pub(super) struct ModelPrimitiveWindingProjected;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_mirrored_model_primitive_winding(
     mut commands: Commands,
     mut changes: super::model_projection_changes::ModelProjectionChanges,

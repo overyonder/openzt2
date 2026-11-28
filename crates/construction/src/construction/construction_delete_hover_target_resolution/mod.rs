@@ -27,6 +27,7 @@ const TRACK_DELETE_PICK_RADIUS_M: f32 = 1.5;
 /// takes the fence segment under the pointer, which the delete tool removes
 /// as in the original.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_delete_hover_target(
     mut commands: Commands,
     tool: Res<ConstructionTool>,

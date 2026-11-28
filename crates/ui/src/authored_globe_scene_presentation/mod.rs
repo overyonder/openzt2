@@ -150,6 +150,7 @@ pub(crate) fn hydrate_globe_models(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_globe_prefabs(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,

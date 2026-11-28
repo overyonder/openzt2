@@ -51,6 +51,7 @@ pub(super) struct QueueWaitActors<'w, 's> {
     >,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn start_or_repeat_authored_queue_wait(
     mut commands: Commands,
     clock: Res<ZooClock>,

@@ -36,6 +36,7 @@ pub(super) struct ChallengePhotoJpegCopyWriteTask {
     jpeg_file_write_task: Task<io::Result<u64>>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_challenge_photo_writes(
     mut persistence_requests: MessageReader<PersistChallengePhotoJpegCopy>,
     directories: Option<Res<PersistenceFilesystemPaths>>,
@@ -179,6 +180,7 @@ pub(super) struct GeneratedPhotoImageAndChallengeCopiesDeleteTask {
 #[derive(Component)]
 pub(super) struct GeneratedPhotoImageAndChallengeCopiesDeletionPending;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_generated_image_deletes(
     mut deletion_requests: MessageReader<DeleteGeneratedPhotoImageAndChallengeCopies>,
     directories: Option<Res<PersistenceFilesystemPaths>>,

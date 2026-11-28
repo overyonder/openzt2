@@ -72,6 +72,7 @@ pub(super) fn reserve_detach_created_objects(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_detach_created_objects(
     mut commands: Commands,
     assets: AttachmentAssets,

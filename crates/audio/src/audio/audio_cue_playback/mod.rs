@@ -20,6 +20,7 @@ pub(super) struct PositionedAudioCueEmitter {
     admission_group: Option<openzt2_game_data::AssetId>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn forward_positioned_audio_cue_playback_requests(
     view_state: Option<
         Res<openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterViewState>,
@@ -227,6 +228,7 @@ mod positioned_audio_admission_tests {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn execute_audio_cue_playback_requests(
     mut commands: Commands,
     mut requests: MessageReader<PlayAudioCue>,

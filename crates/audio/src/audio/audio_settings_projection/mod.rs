@@ -9,6 +9,7 @@ use super::audio_player_spawning::{
     calculate_mixed_audio_gain, AudioCueSelection, AudioSourceGain,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_changed_audio_settings_into_live_audio_sinks(
     settings: Res<AudioSettings>,
     mut sinks: Query<(&AudioCueSelection, &AudioSourceGain, &mut AudioSink)>,

@@ -25,6 +25,7 @@ use super::super_staff_avatar_start_position_search::SuperStaffAvatarStartSurfac
 use crate::immersive_modes::immersive_control_execution_types::FirstPersonControl;
 use crate::immersive_modes::immersive_control_execution_types::PendingImmersiveEntry;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn enter_pending_super_staff_mode(
     pending_entries: Query<(Entity, &PendingImmersiveEntry)>,
     (definitions, active_definitions): (Res<Assets<WorldDefinitionAsset>>, Res<WorldDefinitions>),

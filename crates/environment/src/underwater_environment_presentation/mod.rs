@@ -39,6 +39,7 @@ pub(crate) fn update_water_particle_wave_fog(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn sample_water_environment_map(
     clock: Res<ZooClock>,
     assets: Res<Assets<WorldDefinitionAsset>>,
@@ -100,6 +101,7 @@ pub(crate) struct UnderwaterFogOverride {
     end: f32,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn apply_camera_underwater_fog(
     mut commands: Commands,
     clock: Res<ZooClock>,
@@ -198,6 +200,7 @@ use openzt2_zoo_state::{
     },
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn update_water_ray_environment_light_samples(
     mut commands: Commands,
     clock: Res<ZooClock>,
@@ -273,6 +276,7 @@ pub(crate) fn update_water_ray_environment_light_samples(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn update_region_water_light_samples(
     mut commands: Commands,
     clock: Res<ZooClock>,

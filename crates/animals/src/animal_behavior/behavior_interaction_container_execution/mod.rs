@@ -21,6 +21,7 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use super::behavior_random_stream_state::BehaviorRandomStream;
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_sets(
     mut commands: Commands,
     behavior_documents: Res<LoadedBehaviorDocumentCollection>,

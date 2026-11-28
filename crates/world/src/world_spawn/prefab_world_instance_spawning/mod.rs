@@ -305,6 +305,7 @@ fn attach_prefab_row_renderables(
 /// Starts rebuilding the renderables of world instances whose prefab
 /// reloaded, such as a model replaced from an editor. Gameplay components,
 /// colliders and the instance's entities stay as they are.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_rebuilding_world_instance_renderables_after_prefab_reload(
     mut commands: Commands,
     mut replaced: MessageReader<PrefabModelReplaced>,
@@ -349,6 +350,7 @@ pub(super) fn begin_rebuilding_world_instance_renderables_after_prefab_reload(
 
 /// Once the renderer has released the old renderables, removes them and
 /// attaches the reloaded prefab's renderables to the same row entities.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn finish_rebuilding_world_instance_renderables(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,

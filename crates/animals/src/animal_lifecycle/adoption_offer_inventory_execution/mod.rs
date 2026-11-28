@@ -26,6 +26,7 @@ use super::{
     animal_adoption_contracts::{AnimalAdopted, DeclineCurrentAnimalAdoptionOffers},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_animal_adoption_offer_inventory_from_loaded_authored_content(
     mut commands: Commands,
     zoo_seed: Option<Res<ZooSeed>>,
@@ -90,6 +91,7 @@ pub(super) fn initialize_animal_adoption_offer_inventory_from_loaded_authored_co
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_and_repopulate_animal_adoption_offer_inventory(
     fixed_time: Res<Time<Fixed>>,
     fame: Res<Fame>,

@@ -22,6 +22,7 @@ use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
     documents: Res<LoadedBehaviorDocumentCollection>,
     assets: Res<Assets<BehaviorDocumentAsset>>,

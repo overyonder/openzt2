@@ -48,6 +48,7 @@ pub(crate) fn retain_selected_animal_for_care_catalogue(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_care_animal_name_and_icon(
     mut commands: Commands,
     selected: Res<SelectedCareAnimal>,

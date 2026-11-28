@@ -56,6 +56,7 @@ pub(crate) struct UiAnimationCompleted {
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct UiAnimationOrigin(pub Vec2);
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_ui_animations(
     time: Res<Time<Real>>,
     mut nodes: Query<(

@@ -12,6 +12,7 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure
 
 /// A head look never waits, so the behavior continues at once. Turning the
 /// head is presentation only and isn't drawn yet.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn continue_after_authored_head_look_steps(
     documents: Res<Assets<BehaviorDocumentAsset>>,
     clock: Res<ZooClock>,

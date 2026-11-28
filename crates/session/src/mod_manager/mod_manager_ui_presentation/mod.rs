@@ -17,6 +17,7 @@ use super::mod_manager_types::{
     ModManagerOverlayRoot, ModManagerReloadInputBlocker,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn spawn_mod_manager_overlay_from_asset_archives(
     mut commands: Commands,
     asset_archives: Res<AssetArchives>,
@@ -185,6 +186,7 @@ pub(super) fn spawn_mod_manager_overlay_from_asset_archives(
         ));
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_mod_manager_visibility_controls(
     phase: Res<State<GamePhase>>,
     reload_state: Res<AssetArchiveReloadState>,
@@ -212,6 +214,7 @@ pub(super) fn apply_mod_manager_visibility_controls(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn toggle_selected_asset_archive_enabled_state(
     asset_archives: Res<AssetArchives>,
     asset_server: Res<AssetServer>,
@@ -276,6 +279,7 @@ pub(super) fn toggle_selected_asset_archive_enabled_state(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn finish_asset_archive_reload_and_request_main_menu_document_rebuild(
     asset_server: Res<AssetServer>,
     mut reload_state: ResMut<AssetArchiveReloadState>,
@@ -316,6 +320,7 @@ fn asset_load_is_not_finished(
     )
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn synchronize_mod_manager_visibility_and_reload_input_blocking(
     phase: Res<State<GamePhase>>,
     reload_state: Res<AssetArchiveReloadState>,
@@ -399,6 +404,7 @@ pub(super) fn synchronize_mod_manager_visibility_and_reload_input_blocking(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn present_asset_archive_checkbox_interaction_state(
     reload_state: Res<AssetArchiveReloadState>,
     mut archive_checkboxes: Query<
@@ -419,6 +425,7 @@ pub(super) fn present_asset_archive_checkbox_interaction_state(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn synchronize_mod_manager_archive_checkbox_labels(
     asset_archives: Res<AssetArchives>,
     archive_checkboxes: Query<(&AssetArchiveEnabledStateCheckbox, &Children)>,

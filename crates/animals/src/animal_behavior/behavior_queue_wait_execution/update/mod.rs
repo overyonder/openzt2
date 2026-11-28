@@ -18,6 +18,7 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_zoo_state::locomotion::locomotion_types::Docking;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_queue_wait_deadlines_and_service_readiness(
     mut commands: Commands,
     clock: Res<ZooClock>,

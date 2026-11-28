@@ -57,6 +57,7 @@ pub(super) struct UiCancellationReceivers<'w, 's> {
     >,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn dismiss_one_active_ui_activity_from_cancel_requests(
     mut requests: MessageReader<ActionRequest>,
     ui: UiCancellationReceivers,

@@ -24,6 +24,7 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 /// to independent readers. Choosing a locked entry ends the placement begun by
 /// an earlier choice, since the selection has moved on to research.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_construction_purchase_choices(
     mut purchases: MessageReader<PurchaseChoice>,
     definitions: Res<Assets<WorldDefinitionAsset>>,

@@ -18,6 +18,7 @@ use openzt2_zoo_state::{
     },
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_guest_survey(
     roots: Query<(), With<WorldLoadCompleted>>,
     survey: Option<Res<GuestSurvey>>,
@@ -40,6 +41,7 @@ pub(super) fn initialize_guest_survey(
     });
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_guest_survey_day(
     calendar: Res<ZooCalendar>,
     survey: Option<ResMut<GuestSurvey>>,
@@ -61,6 +63,7 @@ pub(super) fn route_guest_survey_triggers(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn adjust_guest_survey_data(
     mut requests: MessageReader<AdjustGuestSurveyData>,
     definitions: Res<Assets<WorldDefinitionAsset>>,

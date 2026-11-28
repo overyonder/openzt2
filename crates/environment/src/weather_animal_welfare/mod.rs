@@ -12,6 +12,7 @@ use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 
 use super::weather_types::Weather;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_current_weather_welfare_adjustment_to_zoo_animals(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

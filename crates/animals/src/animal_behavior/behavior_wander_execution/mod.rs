@@ -80,6 +80,7 @@ fn finish_wander_navigation_requests(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn execute_current_wander_actions(
     mut commands: Commands,
     clock: Res<ZooClock>,
@@ -404,6 +405,7 @@ fn draw_wander_until_tick(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 fn execute_current_evasion_actions(
     mut commands: Commands,
     clock: Res<ZooClock>,

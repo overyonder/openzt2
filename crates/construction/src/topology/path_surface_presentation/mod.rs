@@ -28,6 +28,7 @@ pub(super) struct PathTerrainFitted;
 pub(super) struct ElevatedPathSurfacePresentation;
 
 /// Sets ground-path transforms to the terrain height without changing their cells.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn fit_ground_path_tiles_to_authored_terrain(
     mut commands: Commands,
     active_definitions: Res<WorldDefinitions>,
@@ -64,6 +65,7 @@ pub(super) fn fit_ground_path_tiles_to_authored_terrain(
 }
 
 /// Marks ground paths intersecting an edit for height resampling this frame.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn invalidate_ground_path_terrain_fitting_after_terrain_changes(
     mut commands: Commands,
     mut changed: MessageReader<TerrainChanged>,
@@ -106,6 +108,7 @@ pub(super) fn invalidate_ground_path_terrain_fitting_after_terrain_changes(
 }
 
 /// Builds elevated path meshes. Ground paths are drawn into terrain chunk images.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_elevated_path_surface_mesh_and_material_presentations(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,

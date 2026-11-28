@@ -20,6 +20,7 @@ use super::{
 };
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiShowActions;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_into_authored_controls(
     documents: Res<Assets<UiDocumentAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

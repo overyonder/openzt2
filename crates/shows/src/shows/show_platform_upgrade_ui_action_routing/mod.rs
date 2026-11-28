@@ -30,6 +30,7 @@ use openzt2_interface_state::ui::authored_ui_action_projection_components::UiSho
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_authored_show_platform_upgrade_actions_into_selection_edits_and_deletion(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,

@@ -23,6 +23,7 @@ use super::{
     photo_challenge_types::PhotoChallengeSetProgress,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn score_pending_photos_against_incomplete_lua_challenges(
     assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,
@@ -126,6 +127,7 @@ pub(super) fn score_pending_photos_against_incomplete_lua_challenges(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_photo_challenge_set_progress_from_completed_challenges(
     mut completed: MessageReader<PhotoChallengeCompleted>,
     assets: Res<Assets<WorldScenarioDocumentAsset>>,

@@ -34,6 +34,7 @@ use super::{
     persistence_slot_filesystem_task_types::PersistenceSlotFilesystemTask,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
     mut commands: Commands,
     mut save_requests: MessageReader<SaveWorldSnapshotToSlot>,

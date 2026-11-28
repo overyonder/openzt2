@@ -25,6 +25,7 @@ use openzt2_zoo_state::transport_tours::transport_rider_types::TransportRider;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn disembark_transport_riders_and_request_service_fare_transactions(
     mut vehicle_arrivals: MessageReader<Arrived>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

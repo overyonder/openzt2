@@ -44,6 +44,7 @@ use super::guest_definition_queries::find_guest_definition;
 use super::guest_definition_queries::find_reaction;
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn apply_guest_reactions(
     mut emitted: MessageReader<super::view_event_execution::BehaviorViewEventEmitted>,
     mut commands: Commands,
@@ -227,6 +228,7 @@ pub(crate) fn apply_guest_reactions(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn advance_guest_lifecycle(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -406,6 +408,7 @@ pub(crate) fn despawn_departed_guests(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn age_guest_memories(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

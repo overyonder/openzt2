@@ -122,6 +122,7 @@ struct BlenderButton {
     pause: Entity,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn attach_blender_button(
     mut commands: Commands,
     assets: Res<AssetServer>,
@@ -174,6 +175,7 @@ fn attach_blender_button(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn present_blender_button(
     mut commands: Commands,
     settings: Res<ModderToolsSettings>,
@@ -218,6 +220,7 @@ fn present_blender_button(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn toggle_blender_link(
     mut link: ResMut<BlenderLink>,
     archives: Res<AssetArchives>,
@@ -246,6 +249,7 @@ fn toggle_blender_link(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn stop_blender_link_without_modder_tools(
     settings: Res<ModderToolsSettings>,
     mut link: ResMut<BlenderLink>,
@@ -257,6 +261,7 @@ fn stop_blender_link_without_modder_tools(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn stop_blender_link(
     mut link: ResMut<BlenderLink>,
     archives: Res<AssetArchives>,
@@ -333,6 +338,7 @@ struct LinkWorld<'w, 's> {
     paths: Option<Res<'w, PersistenceFilesystemPaths>>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn answer_blender_link_requests(
     mut link: ResMut<BlenderLink>,
     world: LinkWorld,

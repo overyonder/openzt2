@@ -16,6 +16,7 @@ use crate::input::input_execution_types::DeviceControlAxes;
 
 const GAMEPAD_RADIAL_DEAD_ZONE: f32 = 0.20;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn translate_connected_gamepad_state_to_game_actions_and_control_axes(
     connected_gamepads: Query<(Entity, &Gamepad)>,
     action_bindings: Res<GameActionInputBindings>,

@@ -8,6 +8,7 @@ use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentat
 use openzt2_world_state::world_spawn::prefab_object_presentation_attachment_projection::PrefabObjectPresentationAttachmentProjection;
 use openzt2_world_state::world_spawn::prefab_object_presentation_attachment_projection::PrefabObjectPresentationAttachmentProjectionHydrated;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_default_authored_world_object_presentation_attachments(
     mut commands: Commands,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,

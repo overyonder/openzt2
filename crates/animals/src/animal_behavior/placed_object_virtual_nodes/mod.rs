@@ -26,6 +26,7 @@ pub(super) fn register_placed_object_virtual_nodes(application: &mut App) {
     );
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn spawn_placed_object_virtual_nodes(
     mut commands: Commands,
     world_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -58,6 +59,7 @@ fn spawn_placed_object_virtual_nodes(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn spawn_animal_virtual_nodes(
     mut commands: Commands,
     species_assets: Res<Assets<SpeciesAsset>>,

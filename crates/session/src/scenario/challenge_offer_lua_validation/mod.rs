@@ -41,6 +41,7 @@ const INSTANT_CHALLENGE_SCRIPT_DIRECTORY: &str = "scenario/scripts/challenge/ins
 /// one instant challenge, and later ones pick one other challenge, as
 /// `BFS_PICKCHALLENGE` does, and run its `validate`. Nothing is picked while an
 /// offer or accepted challenge exists.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
     mut commands: Commands,
     asset_server: Res<AssetServer>,

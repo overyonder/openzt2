@@ -20,6 +20,7 @@ pub(super) fn request_initial_profile_index_from_persistence_startup(
 }
 
 /// Selects the saved profile, or creates the localized first-run profile.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn select_persisted_profile_or_create_localized_first_profile(
     mut profile_index_ready_messages: MessageReader<ProfileIndexReady>,
     mut profile_created_messages: MessageReader<ProfileCreated>,

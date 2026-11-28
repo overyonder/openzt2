@@ -15,6 +15,7 @@ use super::settings_action_types::SettingsActionTargets;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiInformationActions;
 
 /// Displays the options draft in radio buttons and checkboxes.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_settings_to_authored_controls(
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     document_roots: Query<&UiDocumentRoot>,

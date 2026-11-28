@@ -134,6 +134,7 @@ pub(super) struct UiPresentationActionApplicationQueries<'w, 's> {
 
 /// Applies authored presentation actions to their projected Bevy-tree,
 /// document-lifecycle, audio, or global-presentation owners.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn apply_authored_ui_presentation_actions_to_projected_bevy_tree(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,

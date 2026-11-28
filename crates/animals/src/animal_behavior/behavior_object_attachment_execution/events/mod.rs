@@ -7,6 +7,7 @@ use openzt2_world_state::animation_playback::animation_event_message_types::Anim
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn receive_object_animation_commands(
     mut commands: Commands,
     definitions: Res<WorldDefinitions>,

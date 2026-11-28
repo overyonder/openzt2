@@ -13,6 +13,7 @@ use super::{
         ScenarioObjectiveStatusFilter,
     },
 };
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_scenario_goal_and_challenge_ui_actions(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,

@@ -29,6 +29,7 @@ use super::{
     maintenance_types::{AnimalHabitatWaste, AppliedHabitatWasteCleanup},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_authored_staff_habitat_waste_termination(
     mut commands: Commands,
     documents: Res<Assets<BehaviorDocumentAsset>>,

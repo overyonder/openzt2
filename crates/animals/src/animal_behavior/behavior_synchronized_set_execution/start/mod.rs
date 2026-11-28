@@ -48,6 +48,7 @@ pub(super) struct SynchronizedBehaviorActors<'w, 's> {
     >,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn start_synchronized_behavior_sets(
     mut commands: Commands,
     clock: Res<ZooClock>,

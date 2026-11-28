@@ -14,6 +14,7 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator
 use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
 
+#[expect(clippy::needless_pass_by_value)]
 pub fn reserve_all_imported_world_persistent_ids(
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
     allocator: Option<ResMut<PersistentIdAllocator>>,

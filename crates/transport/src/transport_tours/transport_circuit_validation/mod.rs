@@ -234,6 +234,7 @@ fn transport_circuit_is_valid_for_opening(
     false
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn close_changed_transport_circuits_and_apply_open_requests(
     mut open_circuit_requests: MessageReader<OpenCircuitRequest>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

@@ -31,6 +31,7 @@ use super::{
     },
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_requested_weather_transitions(
     mut commands: Commands,
     mut requests: MessageReader<SetWeather>,
@@ -159,6 +160,7 @@ pub(super) fn apply_requested_weather_transitions(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_automatic_and_requested_weather_transitions(
     mut commands: Commands,
     clock: Res<ZooClock>,

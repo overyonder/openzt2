@@ -102,6 +102,7 @@ fn discard_cancelled_food_prop_attachments(
 #[derive(Component)]
 struct FoodPropInstructionOwner(Entity);
 
+#[expect(clippy::needless_pass_by_value)]
 fn execute_food_prop_attachments(
     mut commands: Commands,
     assets: AttachmentAssets,

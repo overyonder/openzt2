@@ -21,6 +21,7 @@ use super::{
 /// the task finishes: `ZTBehChangeWaterDirtiness Clean="true"` leaves the
 /// water without dirt. A task that changes dirtiness any other way has no
 /// supported effect, so its job is withdrawn rather than completed.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn apply_completed_tank_maintenance_work(
     documents: Res<Assets<BehaviorDocumentAsset>>,
     jobs: Query<(Entity, &StaffJob, &JobClaim, &StaffJobBehaviorTask), With<JobProgress>>,

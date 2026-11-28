@@ -24,6 +24,7 @@ pub(super) fn register_face_target_execution(application: &mut App) {
 /// Turns the subject to its target's position when it starts, plus the
 /// authored offset, unless its heading is already within the authored error.
 /// Headings change at once, as docking aligns them.
+#[expect(clippy::needless_pass_by_value)]
 fn face_current_behavior_targets(
     clock: Res<ZooClock>,
     documents: Res<Assets<BehaviorDocumentAsset>>,

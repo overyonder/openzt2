@@ -19,6 +19,7 @@ use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicl
 use super::{visit_information_row, InformationRows};
 
 /// Updates information-list values from the referenced entities.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_live_world_subject_values_to_information_list_rows(
     information_entity_sources: InformationRows,
     children: Query<&Children>,

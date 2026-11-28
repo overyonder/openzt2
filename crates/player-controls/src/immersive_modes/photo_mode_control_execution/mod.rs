@@ -14,6 +14,7 @@ use super::immersive_mode_policy_types::AllowedInteractionActions;
 use super::immersive_mode_state_types::ActiveImmersiveMode;
 
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn capture_or_cancel_active_photo_mode(
     mut action_requests: MessageReader<ActionRequest>,
     modal_input: Res<

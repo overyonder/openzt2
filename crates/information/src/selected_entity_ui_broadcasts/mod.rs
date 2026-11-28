@@ -30,6 +30,7 @@ pub(super) struct PendingSelectedEntityUiBroadcasts {
     warned_missing_target: bool,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn dispatch_selected_entity_ui_broadcasts(
     selected: Res<SelectedEntity>,
     inspectables: Query<&Inspectable>,

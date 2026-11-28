@@ -7,6 +7,7 @@ use super::immersive_mode_policy_types::{PauseSimulationWhileActive, RestoreSimu
 
 /// Applies authored immersive-mode pause policy through the simulation clock's
 /// ordinary typed request boundary.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn pause_simulation_while_requested_immersive_mode_is_active_and_restore_previous_state(
     newly_pausing_controllers: Query<Entity, Added<PauseSimulationWhileActive>>,
     previous_simulation_pause_states: Query<&RestoreSimulationPause>,

@@ -42,6 +42,7 @@ fn select_weighted_soundscape_cue(
     })
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_changed_audio_soundscapes_into_playback_and_schedules(
     mut commands: Commands,
     audio_assets: Res<Assets<AudioAsset>>,
@@ -126,6 +127,7 @@ pub(super) fn project_changed_audio_soundscapes_into_playback_and_schedules(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_audio_soundscape_cue_schedules(
     time: Res<Time>,
     audio_assets: Res<Assets<AudioAsset>>,

@@ -20,6 +20,7 @@ mod tests;
 #[derive(Component)]
 pub(super) struct AuthoredAnimalRemovalTick(u64);
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn execute_animal_termination_actions(
     mut commands: Commands,
     clock: Res<ZooClock>,
@@ -90,6 +91,7 @@ pub(super) fn execute_animal_termination_actions(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hide_animals_after_authored_removal_period(
     mut commands: Commands,
     clock: Res<ZooClock>,

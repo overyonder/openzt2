@@ -32,6 +32,7 @@ use super::{
     world_snapshot_section_encoding::decode_and_validate_world_snapshot_section,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_loading_and_application(
     mut commands: Commands,
     mut pending_snapshot_application: Query<(Entity, &mut PendingSnapshotApplication)>,

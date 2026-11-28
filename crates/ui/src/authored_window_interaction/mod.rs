@@ -20,6 +20,7 @@ impl UiAuthoredWindowInteractionPolicy {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn drag_authored_windows_from_accumulated_pointer_motion(
     motion: Res<AccumulatedMouseMotion>,
     mut windows: Query<(

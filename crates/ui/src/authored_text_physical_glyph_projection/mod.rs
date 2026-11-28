@@ -14,6 +14,7 @@ use super::{
 
 /// Preserve system-font aspect when the authored canvas stretches. Bevy owns
 /// shaping, glyph atlases and drawing; node regions and images stay unchanged.
+#[expect(clippy::needless_pass_by_value)]
 pub fn preserve_authored_font_aspect_in_extracted_text_draws(
     windows: Extract<Query<&Window, With<PrimaryWindow>>>,
     hierarchy: Extract<Query<(Option<&UiLogicalCanvas>, Option<&ChildOf>)>>,

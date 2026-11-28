@@ -43,6 +43,7 @@ use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivat
 
 /// Queue the receiver before the same activation's presentation actions hide
 /// its opener. The queue owns the transfer until projection takes it over.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_authored_save_dialog_opening_requests(
     mut activations: MessageReader<UiNodeActivated>,
     documents: Res<Assets<UiDocumentAsset>>,
@@ -79,6 +80,7 @@ pub(super) fn route_authored_save_dialog_opening_requests(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
     mut activated_ui_nodes: MessageReader<UiNodeActivated>,
     ui_document_assets: Res<Assets<UiDocumentAsset>>,

@@ -30,6 +30,7 @@ pub(super) struct RouteQueue {
 }
 
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn plan_routes_for_changed_navigation_destinations(
     mut commands: Commands,
     active_navigation_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,

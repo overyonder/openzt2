@@ -11,6 +11,7 @@ use openzt2_zoo_state::guests::guest_simulation_types::{Guest, GuestArchetype, G
 
 use openzt2_zoo_state::guests::guest_simulation_types::ActiveGuestAnimalViewingMeter;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_guest_species_view_counts(
     species_assets: Res<Assets<SpeciesAsset>>,
     active_species: Res<SpeciesAssets>,
@@ -35,6 +36,7 @@ pub(super) fn initialize_guest_species_view_counts(
     clippy::type_complexity,
     reason = "view scoring updates each guest's species counters and task-owned meter together"
 )]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_accepted_view_events_to_view_meters(
     mut reactions: MessageReader<GuestReactionApplied>,
     definitions: Res<Assets<WorldDefinitionAsset>>,

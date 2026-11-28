@@ -15,6 +15,7 @@ use super::authored_ui_visual_types::UiSourceRect;
 pub struct UiMultiIconPolicy;
 
 /// Displays the document image selected by `UiValue`.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn present_multi_icons(
     mut commands: Commands,
     documents: Res<Assets<UiDocumentAsset>>,

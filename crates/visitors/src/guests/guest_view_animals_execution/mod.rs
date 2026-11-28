@@ -21,6 +21,7 @@ use super::guest_simulation_types::{Guest, GuestArchetype, GuestPhase, GuestRng,
 
 /// Starts, holds and ends the native observation for the running view action.
 /// The observation's area is the task's target, the path viewed from.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn watch_animals_for_current_view_actions(
     clock: Res<ZooClock>,
     time: Res<Time<Fixed>>,

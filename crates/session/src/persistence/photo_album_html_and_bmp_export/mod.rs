@@ -36,6 +36,7 @@ pub(super) struct PhotoAlbumHtmlAndBmpWriteTask {
     task: Task<io::Result<()>>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_photo_album_html_and_bmp_exports(
     mut requests: MessageReader<ExportPhotoAlbum>,
     directories: Option<Res<PersistenceFilesystemPaths>>,

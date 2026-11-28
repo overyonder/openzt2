@@ -16,6 +16,7 @@ use openzt2_zoo_state::terrain::terrain_fitted_surface_mesh_construction::constr
 
 /// Fits the active terrain tool's cursor mesh to the terrain surface.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_terrain_brush_cursor_onto_terrain_surfaces(
     mut commands: Commands,
     asset_server: Res<AssetServer>,

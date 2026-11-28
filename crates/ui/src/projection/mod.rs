@@ -66,6 +66,7 @@ pub(super) fn cancel_pending_ui_role_projection(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn resolve_ui_roles(
     mut commands: Commands,
     mut requests: MessageReader<ShowUiRole>,
@@ -146,6 +147,7 @@ pub(super) fn resolve_ui_roles(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_ui_documents(
     mut commands: Commands,
     mut requests: MessageReader<ShowUiDocument>,
@@ -255,6 +257,7 @@ pub(super) fn project_ui_documents(
 }
 
 /// Adds or removes list rows to match the requested count, waiting for their assets.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn reconcile_ui_list_rows(
     mut commands: Commands,
     mut requests: MessageReader<SetUiListRowCount>,

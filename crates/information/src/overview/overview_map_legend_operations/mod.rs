@@ -56,6 +56,7 @@ fn entity_is_descendant_of_ancestor(
     false
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn request_authored_overview_map_legend_row_entities(
     overview_legend_lists: Query<(
         Entity,
@@ -112,6 +113,7 @@ pub(crate) fn request_authored_overview_map_legend_row_entities(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn bind_authored_overview_map_layer_data_to_legend_rows(
     legend_rows: Query<(Entity, Ref<UiListRow>, Option<&OverviewLegendRow>)>,
     legend_list_owners: Query<&UiDocumentOwner>,
@@ -203,6 +205,7 @@ pub(crate) fn bind_authored_overview_map_layer_data_to_legend_rows(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn toggle_overview_map_layers_from_pressed_legend_rows(
     mut pressed_legend_rows: Query<
         (

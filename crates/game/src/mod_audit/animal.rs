@@ -53,6 +53,7 @@ pub(super) fn install(app: &mut App) {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 fn exercise_animal(
     mut probe: ResMut<AnimalProbe>,
     worlds: Query<Entity, With<WorldRoot>>,

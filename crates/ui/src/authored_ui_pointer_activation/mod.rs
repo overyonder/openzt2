@@ -26,6 +26,7 @@ impl Default for UiPreviousPointerPressTimeSeconds {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn activate_authored_ui_nodes_from_pointer_interaction_changes(
     time: Res<Time<Real>>,
     context: super::active_authored_ui_context::ActiveAuthoredUiContext,

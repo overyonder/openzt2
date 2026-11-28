@@ -49,6 +49,7 @@ pub(crate) fn authored_multi_icon_key_for_conservation_status(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
     species_assets: Res<Assets<SpeciesAsset>>,
     active_species: Res<SpeciesAssets>,

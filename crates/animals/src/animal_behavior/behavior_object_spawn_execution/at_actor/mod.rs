@@ -6,6 +6,7 @@ use openzt2_zoo_state::guests::guest_simulation_types::GuestRng;
 
 /// Spawns the object of a node- and clip-less `BFBehSpawn` beside its actor,
 /// such as the `TrashGround` a guest drops, once its model has loaded.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn spawn_behavior_objects_at_actor(
     mut commands: Commands,
     documents: Res<Assets<BehaviorDocumentAsset>>,

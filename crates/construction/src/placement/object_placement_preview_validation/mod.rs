@@ -33,6 +33,7 @@ use openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectReloc
 // Asset reloads and terrain edits must invalidate previews even if the pointer
 // and the projected boolean permission facts did not change.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_changed_object_placement_preview_evaluations(
     mut containment: MessageReader<ContainmentChanged>,
     mut terrain_changes: MessageReader<TerrainChanged>,
@@ -75,6 +76,7 @@ pub(super) fn request_changed_object_placement_preview_evaluations(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn evaluate_requested_object_placement_previews(
     mut requests: MessageReader<EvaluateObjectPlacementPreviewRequest>,
     placement: Res<PlacedObjectFootprintOccupancyIndex>,

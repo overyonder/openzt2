@@ -25,6 +25,7 @@ use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivat
 /// Applies the focused application transition requested by gameplay or a
 /// combined confirmation action. The current shell document is rebuilt only
 /// when already in `MainMenu`; all other phases use Bevy state teardown.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn return_to_main_menu(
     mut commands: Commands,
     mut requests: MessageReader<ReturnToMainMenu>,
@@ -122,6 +123,7 @@ pub(super) fn select_requested_compatible_world(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_loading_selected_world(
     mut requests: MessageReader<StartSelectedWorld>,
     phase: Res<State<GamePhase>>,
@@ -194,6 +196,7 @@ fn supports_mode(flags: WorldMapSupportedGameModeFlags, mode: WorldSessionMode) 
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn navigate_to_previous_shell_screen(
     mut commands: Commands,
     mut requests: MessageReader<NavigateShellBack>,
@@ -280,6 +283,7 @@ pub(super) fn replace_current_shell_screen(
 }
 
 /// Keep the authored next/retry target across the ordinary world teardown.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn continue_campaign_after_world_exit(
     mut requests: MessageReader<super::shell_navigation_request_types::ContinueCampaign>,
     phase: Res<State<GamePhase>>,

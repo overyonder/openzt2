@@ -42,6 +42,7 @@ pub(super) struct AuthoredShowEditorActionRoutingInputs<'w, 's> {
     scheduled_show_rows: Query<'w, 's, (), With<ScheduledShowRow>>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_authored_show_editor_actions_into_selection_and_immersive_mode_state(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,

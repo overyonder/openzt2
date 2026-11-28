@@ -22,6 +22,7 @@ use openzt2_zoo_state::terrain::terrain_water_shoreline_presentation_types::Terr
 use openzt2_zoo_state::terrain::terrain_water_underwater_particle_types::TerrainWaterRegionLight;
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn submit_prepared_terrain_shoreline_mesh_groups(
     mut commands: Commands,
     terrain_assets: Res<Assets<TerrainAsset>>,
@@ -81,6 +82,7 @@ pub(super) fn submit_prepared_terrain_shoreline_mesh_groups(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_terrain_shoreline_material_animation(
     mut commands: Commands,
     terrain_assets: Res<Assets<TerrainAsset>>,
@@ -177,6 +179,7 @@ pub(super) fn spawn_authored_terrain_shoreline_mesh_group(
     Ok(entity)
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_terrain_shoreline_material_animation(
     time: Res<Time>,
     terrain_assets: Res<Assets<TerrainAsset>>,
@@ -199,6 +202,7 @@ pub(super) fn advance_terrain_shoreline_material_animation(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_terrain_shoreline_material_animation_bindings(
     terrain_assets: Res<Assets<TerrainAsset>>,
     regions: TerrainWaterRegionQuery,
@@ -255,6 +259,7 @@ pub(super) fn update_terrain_shoreline_material_animation_bindings(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn despawn_terrain_shoreline_surfaces_without_material_owners(
     mut commands: Commands,
     owners: TerrainWaterRegionQuery,

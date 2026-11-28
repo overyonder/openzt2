@@ -9,6 +9,7 @@ use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjective;
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveAuthoredVisibility;
 use openzt2_zoo_state::scenario::scenario_objective_types::ShowScenarioRuleRequest;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn show_requested_scenario_rules(
     mut requests: MessageReader<ShowScenarioRuleRequest>,
     scenarios: Res<WorldScenarios>,

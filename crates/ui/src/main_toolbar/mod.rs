@@ -69,6 +69,7 @@ pub(super) fn reflect_accepted_camera_mode_in_main_toolbar(
 /// The authored document remains the sole owner of the controls, their order,
 /// layout, help text, visuals, and domain actions. Matching the typed action
 /// records avoids retaining source widget names or numeric control identities.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_main_toolbar(
     documents: Res<Assets<UiDocumentAsset>>,
     mut completed_loads: MessageReader<WorldSnapshotLoadedFromSlot>,

@@ -17,6 +17,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use super::photo_challenge_types::PhotoChallengeSetProgress;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_photo_challenges_and_sets_from_active_scenario_catalogue(
     scenarios: Res<WorldScenarios>,
     assets: Res<Assets<WorldScenarioDocumentAsset>>,

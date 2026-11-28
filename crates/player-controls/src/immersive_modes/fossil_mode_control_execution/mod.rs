@@ -13,6 +13,7 @@ use super::immersive_mode_state_types::EquippedInteractionTool;
 use crate::immersive_modes::immersive_control_execution_types::FossilAssemblyControl;
 use crate::immersive_modes::immersive_control_execution_types::FossilSearchControl;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn discover_fossil_or_cancel_active_fossil_search_mode(
     mut action_requests: MessageReader<ActionRequest>,
     modal_input: Res<
@@ -61,6 +62,7 @@ pub(super) fn discover_fossil_or_cancel_active_fossil_search_mode(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn cancel_active_fossil_assembly_mode(
     mut action_requests: MessageReader<ActionRequest>,
     modal_input: Res<

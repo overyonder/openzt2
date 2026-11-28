@@ -26,6 +26,7 @@ pub(super) struct TransportDefinitionResolved;
 /// Projects resolved catalogue facts onto the ordinary entities that own them.
 /// Topology is deliberately not copied: construction supplies `CircuitMember`
 /// and `TrackSegment` entity relations when a route is joined.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_transport_entities_from_authored_world_definitions(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,

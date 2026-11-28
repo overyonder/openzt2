@@ -18,6 +18,7 @@ use super::show_platform_upgrade_types::{
 };
 use super::show_stage_types::ShowStage;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_show_platform_upgrade_edits(
     mut commands: Commands,
     mut requests: MessageReader<CommitShowPlatformUpgradeEdit>,
@@ -112,6 +113,7 @@ pub(super) fn queue_show_platform_upgrade_restores(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn restore_show_platform_upgrades(
     mut commands: Commands,
     pending: Query<(Entity, &PendingShowPlatformUpgradeRestore)>,

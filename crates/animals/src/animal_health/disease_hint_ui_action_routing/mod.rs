@@ -12,6 +12,7 @@ use super::types::Disease;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiScenarioActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_authored_increment_disease_hint_ui_actions_to_selected_animal_disease(
     mut activated_ui_nodes: MessageReader<UiNodeActivated>,
     ui_document_assets: Res<Assets<UiDocumentAsset>>,

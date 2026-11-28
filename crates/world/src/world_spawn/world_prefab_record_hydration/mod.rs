@@ -40,6 +40,7 @@ use openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::zoo_e
 
 const WORLD_PREFAB_RECORD_HYDRATION_BATCH_SIZE: usize = 128;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_bounded_world_prefab_record_batch(
     mut commands: Commands,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,

@@ -82,6 +82,7 @@ pub(super) fn resume_completed_staff_tank_gate_journeys(
 /// actual gate. Gate candidates are tested by the same route planner as any
 /// other destination before the approach is installed.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_staff_tank_gate_journeys(
     mut commands: Commands,
     graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
@@ -347,6 +348,7 @@ pub(super) fn receive_staff_tank_gate_events(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn execute_staff_tank_gate_journeys(
     mut commands: Commands,
     definitions: Res<WorldDefinitions>,

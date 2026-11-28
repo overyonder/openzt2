@@ -35,6 +35,7 @@ pub(crate) fn apply_guest_satisfaction_adjustments(
 }
 
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn decay_guest_needs(
     time: Res<Time<Fixed>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,

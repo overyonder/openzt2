@@ -9,6 +9,7 @@ use openzt2_world_state::animation_playback::animation_playback_controller_types
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackState;
 use openzt2_world_state::animation_playback::locomotion_root_motion::ConsumedLocomotionRootMotion;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_simulation_clock_animation_playback_controllers(
     fixed_time: Res<Time<Fixed>>,
     animation_set_assets: Res<Assets<AnimationSetAsset>>,
@@ -57,6 +58,7 @@ pub(super) fn advance_simulation_clock_animation_playback_controllers(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_real_time_clock_animation_playback_controllers(
     real_time: Res<Time<Real>>,
     animation_set_assets: Res<Assets<AnimationSetAsset>>,

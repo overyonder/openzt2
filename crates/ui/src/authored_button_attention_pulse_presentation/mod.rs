@@ -27,6 +27,7 @@ impl UiAuthoredButtonAttentionPulse {
 }
 
 /// Alternates target visibility at the authored button-pulser cadence.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_authored_button_attention_pulse_presentations(
     time: Res<Time>,
     mut pulses: Query<(&UiDocumentOwner, &mut UiAuthoredButtonAttentionPulse)>,

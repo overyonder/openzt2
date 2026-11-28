@@ -10,6 +10,7 @@ use openzt2_world_state::simulation_time::{
     zoo_calendar_calculation::calculate_zoo_calendar_for_absolute_day,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn record_completed_month_fame_history(
     mut days: MessageReader<ZooDayAdvanced>,
     definitions: Res<WorldDefinitions>,

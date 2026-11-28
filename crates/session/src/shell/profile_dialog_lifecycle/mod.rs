@@ -10,6 +10,7 @@ use openzt2_ui::authored_modal_presentation::UiAuthoredModalPresentation;
 /// inside the dialog's shell. Remove the whole document once that layout is
 /// hidden, as the in-game options do, so the main menu is left at rest and the
 /// next opening starts from the authored state.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn close_profile_dialog_documents_once_their_dialog_hides(
     mut commands: Commands,
     roots: Query<(Entity, &UiDocumentRoot)>,

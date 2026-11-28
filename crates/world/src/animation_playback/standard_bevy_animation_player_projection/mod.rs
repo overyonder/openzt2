@@ -13,6 +13,7 @@ use crate::animation_playback::standard_bevy_animation_player_projection_types::
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_animation_playback_controller_state_to_standard_bevy_animation_players(
     mut commands: Commands,
     animation_set_assets: Res<Assets<AnimationSetAsset>>,

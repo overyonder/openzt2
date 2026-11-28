@@ -32,6 +32,7 @@ pub(super) fn register_trigger_execution(app: &mut App) {
     );
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn deliver_current_subject_triggers(
     clock: Res<ZooClock>,
     documents: Res<Assets<BehaviorDocumentAsset>>,

@@ -18,6 +18,7 @@ use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge_cell_bounds;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_requested_gate_state(
     mut requests: MessageReader<SetGateState>,
     definitions: GateActorTypeQueries,
@@ -55,6 +56,7 @@ pub(super) fn apply_requested_gate_state(
 /// Native gate models do not embed their actor manifest's clips. Once a gate
 /// model resolves without animation, attach the manifest named by its fence
 /// definition, starting from the clip for the gate's current state.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn attach_authored_animation_sets_to_resolved_gate_models(
     mut commands: Commands,
     definitions: GateActorTypeQueries,
@@ -113,6 +115,7 @@ pub(super) fn attach_authored_animation_sets_to_resolved_gate_models(
 
 /// Initial and restored state are projected when the model becomes ready;
 /// subsequent state changes address that same gate-animation presentation.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_gate_state_to_ready_animation_presentations(
     definitions: GateActorTypeQueries,
     gates: Query<(Ref<Gate>, &FenceEdge)>,

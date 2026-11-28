@@ -8,6 +8,7 @@ use super::{
     maintenance_types::{IncrementalZooCleanlinessTotals, ZooCleanlinessPermille},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_changed_maintenance_totals_into_zoo_cleanliness(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,

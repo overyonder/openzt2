@@ -5,6 +5,7 @@ use super::authored_ui_node_projection_components::UiDocumentOwner;
 use super::authored_ui_selection_state::UiSelected;
 
 /// Scrolls the nearest ancestor to reveal the focused or selected node after layout.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn scroll_nearest_ancestor_to_reveal_focused_or_selected_node(
     scopes: Query<Ref<UiFocusScope>, Changed<UiFocusScope>>,
     context: super::active_authored_ui_context::ActiveAuthoredUiContext,

@@ -19,6 +19,7 @@ use crate::immersive_modes::immersive_control_execution_types::FossilAssemblyCon
 use crate::immersive_modes::immersive_control_execution_types::FossilSearchControl;
 use crate::immersive_modes::immersive_control_execution_types::PendingImmersiveEntry;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn enter_fossil_search_for_pending_unexhausted_recovery_site(
     pending_entries: Query<(Entity, &PendingImmersiveEntry)>,
     fossil_recovery_sites: Query<&FossilRecoverySite>,
@@ -82,6 +83,7 @@ pub(super) fn enter_fossil_search_for_pending_unexhausted_recovery_site(
     );
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn enter_fossil_assembly_for_pending_fossil_set_assembly(
     pending_entries: Query<(Entity, &PendingImmersiveEntry)>,
     fossil_set_assemblies: Query<&FossilSetAssembly>,

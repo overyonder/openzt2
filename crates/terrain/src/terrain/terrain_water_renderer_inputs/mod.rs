@@ -30,6 +30,7 @@ use openzt2_zoo_state::terrain::terrain_water_view_state::{
     TerrainWaterRegionFade, TerrainWaterRegionVisibility, TerrainWaterViewState,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_authored_terrain_water_region_material_state(
     mut commands: Commands,
     mut random: ResMut<NativeVisualRandomStream>,
@@ -63,6 +64,7 @@ pub(super) fn initialize_authored_terrain_water_region_material_state(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_authored_terrain_water_surface_effect_state(
     time: Res<Time>,
     mut random: ResMut<NativeVisualRandomStream>,
@@ -170,6 +172,7 @@ pub(super) fn advance_authored_terrain_water_surface_effect_state(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_authored_terrain_water_surface_visibility(
     mut commands: Commands,
     phase: Res<State<openzt2_game_assets::application_lifecycle::GamePhase>>,
@@ -290,6 +293,7 @@ pub(super) fn update_authored_terrain_water_surface_visibility(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_authored_terrain_water_renderer_inputs(
     view: Option<Res<TerrainWaterViewState>>,
     environment_map: Option<Res<WaterEnvironmentMapSample>>,

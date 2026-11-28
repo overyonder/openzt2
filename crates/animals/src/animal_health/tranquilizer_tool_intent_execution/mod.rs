@@ -44,6 +44,7 @@ fn select_tranquilizer_fire_outcome(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_tranquilizer_target_distance_charge_and_reticle_state(
     mut commands: Commands,
     mut aim_requests: MessageReader<AimTranquilizer>,
@@ -114,6 +115,7 @@ pub(super) fn project_tranquilizer_target_distance_charge_and_reticle_state(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn resolve_tranquilizer_fire_requests_to_shot_or_misfire_outcomes(
     mut commands: Commands,
     mut fire_requests: MessageReader<FireTranquilizer>,

@@ -14,6 +14,7 @@ use super::{
 /// Refreshes the options-screen capability facts from Bevy's winit-owned
 /// monitor entities. Duplicate refresh-rate/bit-depth modes intentionally
 /// collapse to one selectable width/height pair, matching the source UI.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn validate_selected_screen_resolution_and_request_display_settings_replacement(
     mut requests: MessageReader<SelectScreenResolutionRequest>,
     current: Res<DisplaySettings>,
@@ -48,6 +49,7 @@ pub(super) fn validate_and_accept_requested_display_settings(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_accepted_display_settings_to_primary_window(
     settings: Res<DisplaySettings>,
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,

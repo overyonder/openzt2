@@ -8,6 +8,7 @@ use super::{
     audio_playback_message_types::PlayAudioCue,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn play_changed_allowed_ambient_audio_emitters(
     audio_assets: Res<Assets<AudioAsset>>,
     audio_asset_index: Res<AudioAssets>,

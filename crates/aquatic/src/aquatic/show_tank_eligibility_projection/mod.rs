@@ -5,6 +5,7 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 
 use super::aquatic_simulation_types::{ShowTankEligible, Tank, TankGeometry};
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_changed_tank_depth_into_show_eligibility(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

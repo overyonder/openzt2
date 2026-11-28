@@ -33,6 +33,7 @@ pub(super) fn identify_authored_cursor_money_container(
 /// Keeps one non-animated price at the live pointer while placement is active.
 /// A successful transaction reuses that exact fragment as the frozen spend
 /// animation, then the continuing preview receives a fresh fragment.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn reconcile_cursor_money_fragments(
     mut commands: Commands,
     asset_server: Res<AssetServer>,

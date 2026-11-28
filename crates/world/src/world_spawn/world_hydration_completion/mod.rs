@@ -15,6 +15,7 @@ use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::{
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 
 /// Wait for the loading document before cached hydration can occupy the frame.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn loading_screen_is_ready(
     asset_server: Res<AssetServer>,
     screens: Query<(), With<LoadingScreen>>,
@@ -26,6 +27,7 @@ pub(super) fn loading_screen_is_ready(
     })
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub fn complete_or_fail_finished_world_hydration(
     mut commands: Commands,
     pending: Query<(Entity, &WorldHydration, Option<&WorldLoadOperationOwner>)>,

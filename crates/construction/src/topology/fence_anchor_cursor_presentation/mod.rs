@@ -39,6 +39,7 @@ pub(super) struct FenceAnchorCursor {
 /// Places the authored anchor post and fence grid on the grid point under the
 /// pointer while a fence is selected; the mode's own pointer is `blank.cur`.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn present_fence_anchor_cursor(
     mut commands: Commands,
     asset_server: Res<AssetServer>,

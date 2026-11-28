@@ -16,6 +16,7 @@ use openzt2_world_state::model_render::ModelExpanded;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 use openzt2_zoo_state::animal_lifecycle::types::SelectedAnimalPresentationModel;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
     mut commands: Commands,
     asset_server: Res<AssetServer>,

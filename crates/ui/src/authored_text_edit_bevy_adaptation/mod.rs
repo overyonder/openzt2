@@ -163,6 +163,7 @@ pub(super) fn synchronize_document_focus_into_bevy_text_input_focus(
 
 /// Clicking another control or the zoo relinquishes text capture. Keep the
 /// authored scope and Bevy's input owner in agreement, including across documents.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn release_text_focus_after_pointer_press_elsewhere(
     primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
     capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
@@ -227,6 +228,7 @@ pub(super) fn discard_pending_edits_and_focus_from_disabled_text_edits(
 /// Bevy emits this observer after applying queued edits. Cursor and selection
 /// motions also produce an action, matching the navigation path's
 /// value dispatch; canonical consumers can update idempotently.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn dispatch_authored_change_activation_after_bevy_text_edit(
     change: On<bevy::text::TextEditChange>,
     edits: Query<&UiInteractionEnabled, With<UiTextEditPolicy>>,

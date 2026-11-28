@@ -27,6 +27,7 @@ use super::{
     staff_lifecycle_messages::{CancelStaffJobRequest, StaffJobCompleted},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs(
     mut commands: Commands,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,

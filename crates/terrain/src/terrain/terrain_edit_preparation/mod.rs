@@ -20,6 +20,7 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEdit;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEditPreparationRejected;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEditPrepared;
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,

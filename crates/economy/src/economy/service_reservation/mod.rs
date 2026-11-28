@@ -9,6 +9,7 @@ use super::{
     service_types::{PendingServiceRequest, ServiceProgress, ServiceReservation},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn reserve_requested_facility_capacity_and_inventory_for_customers(
     service_requests: Query<(Entity, &PendingServiceRequest)>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

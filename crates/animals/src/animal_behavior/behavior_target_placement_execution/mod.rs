@@ -32,6 +32,7 @@ use types::{
     BehaviorTargetPlacementSiteMarker, BehaviorTargetPlacementStage, PendingBehaviorTargetPlacement,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn prepare_and_finish_behavior_target_placements(
     mut commands: Commands,
     documents: Res<Assets<BehaviorDocumentAsset>>,

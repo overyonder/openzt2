@@ -7,6 +7,7 @@ use crate::asset_source::AssetArchives;
 
 use super::species_asset_types::{SpeciesAsset, SpeciesAssets, VariantHandle};
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn refresh_species_asset_set_after_archive_revision(
     archives: Res<AssetArchives>,
     server: Res<AssetServer>,
@@ -40,6 +41,7 @@ pub(super) fn refresh_species_asset_set_after_archive_revision(
     index.dirty = true;
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn index_loaded_species_assets_by_species_and_variant_identifier(
     server: Res<AssetServer>,
     assets: Res<Assets<SpeciesAsset>>,

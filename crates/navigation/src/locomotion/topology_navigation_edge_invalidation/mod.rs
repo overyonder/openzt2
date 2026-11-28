@@ -15,6 +15,7 @@ use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::Terra
 
 /// Projects references to crossed fences into the sparse edge overlay and dirties only
 /// routes whose remaining polyline intersects a changed topology rectangle.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn synchronize_navigation_edge_blocking_and_invalidate_routes_after_topology_changes(
     mut topology_changes: MessageReader<TopologyChanged>,
     active_navigation_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,

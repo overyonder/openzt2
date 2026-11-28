@@ -39,6 +39,7 @@ impl Plugin for ModManagerPlugin {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn asset_archive_reload_is_not_in_progress(
     reload_state: Res<AssetArchiveReloadState>,
 ) -> bool {

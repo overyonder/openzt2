@@ -11,6 +11,7 @@ use openzt2_interface_state::shell::shell_selection_types::ShellScreen;
 
 use super::shell_navigation_request_types::ShowOptions;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn replace_current_shell_screen_with_requested_options_screen(
     mut commands: Commands,
     mut options_screen_requests: MessageReader<ShowOptions>,

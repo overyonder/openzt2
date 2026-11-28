@@ -44,6 +44,7 @@ pub(super) fn ensure_construction_cursor(
     ));
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn update_construction_cursor(
     ray: Res<WorldPointerRay>,
     ui_pointer_capture: Res<UiPointerCapture>,

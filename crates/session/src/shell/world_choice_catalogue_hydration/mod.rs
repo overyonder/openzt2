@@ -12,6 +12,7 @@ use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
 use openzt2_interface_state::shell::shell_selection_types::WorldChoice;
 use openzt2_interface_state::shell::shell_selection_types::WorldChoiceView;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_launchable_world_choices_from_active_scenario_catalogue(
     mut commands: Commands,
     selection: Res<ShellSelection>,

@@ -162,6 +162,7 @@ const fn need_index(kind: GuestNeedKind) -> usize {
     kind as usize
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn observe_guest_need_triggers(
     assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,

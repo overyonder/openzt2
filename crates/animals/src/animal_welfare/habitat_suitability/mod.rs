@@ -22,6 +22,7 @@ use super::types::{
 
 // Both queries read membership; only the assessment query writes suitability.
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn assess_habitat_suitability(
     mut commands: Commands,
     assets: Res<Assets<SpeciesAsset>>,

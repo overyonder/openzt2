@@ -54,6 +54,7 @@ struct PendingObjectAttachment {
 #[derive(Component)]
 struct DeliveredAttachmentDetach;
 
+#[expect(clippy::needless_pass_by_value)]
 fn release_detached_object_locomotion_modifiers(
     mut commands: Commands,
     occupancy: Res<InteractionContainerOccupancy>,
@@ -139,6 +140,7 @@ pub(super) fn register_object_attachment_execution(app: &mut App) {
             .run_if(in_state(GamePhase::InGame)));
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn start_or_finish_object_attachment(
     mut commands: Commands,
     assets: AttachmentAssets,
@@ -489,6 +491,7 @@ fn start_or_finish_object_attachment(
 
 /// Applies an authored detach rule to a held item, such as the trash left
 /// once a guest has eaten.
+#[expect(clippy::needless_pass_by_value)]
 fn detach_held_objects_for_current_actions(
     mut commands: Commands,
     assets: AttachmentAssets,

@@ -120,6 +120,7 @@ pub(super) fn calculate_tour_rating_from_authored_score_ranges(
         .unwrap_or(score)
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
     grid: Res<SpatialGrid>,
     spatial_query: SpatialQuery,

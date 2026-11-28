@@ -3,6 +3,7 @@ use openzt2_world_state::simulation_time::native_visual_random_stream::NativeVis
 use openzt2_zoo_state::environment::environment_state_types::AuthoredWindShaderPresentationState;
 use openzt2_zoo_state::environment::environment_state_types::Wind;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_authored_wind_shader_presentation_state(
     time: Res<Time>,
     mut random: ResMut<NativeVisualRandomStream>,

@@ -9,6 +9,7 @@ use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
 
 use super::world_selection_presentation_types::SelectedWorldCatalogueFilter;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn create_or_reuse_selected_mode_map_selection_screen(
     mut commands: Commands,
     shell_selection: Res<ShellSelection>,

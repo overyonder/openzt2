@@ -23,6 +23,7 @@ pub(super) fn clip_authored_graph_generated_geometry(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn regenerate_visible_authored_graph_presentations_from_canonical_histories(
     mut commands: Commands,
     finance: Res<MonthlyFinanceHistory>,

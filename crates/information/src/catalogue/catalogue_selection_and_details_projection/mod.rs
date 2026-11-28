@@ -51,6 +51,7 @@ use super::super::{
     },
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn dismiss_purchase_information_on_inspection_request(
     mut tool_requests: MessageReader<SelectConstructionTool>,
     selected_entity: Res<SelectedEntity>,
@@ -71,6 +72,7 @@ pub(crate) fn dismiss_purchase_information_on_inspection_request(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_purchase_information_document_visibility_from_selected_subject(
     selected: Res<SelectedCatalogueEntry>,
     documents: Res<Assets<UiDocumentAsset>>,
@@ -95,6 +97,7 @@ pub(crate) fn project_purchase_information_document_visibility_from_selected_sub
 /// Selects the last catalogue choice produced during this update and opens its
 /// authored purchase-information document under the active HUD owner.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn select_catalogue_entry_and_open_purchase_information_document(
     mut purchase_choices: MessageReader<PurchaseChoice>,
     mut adoption_placement_requests: MessageReader<BeginAnimalAdoptionPlacement>,
@@ -170,6 +173,7 @@ fn selected_entity_uses_building_information_slot(
     })
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_selected_catalogue_entry_to_purchase_information_document(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

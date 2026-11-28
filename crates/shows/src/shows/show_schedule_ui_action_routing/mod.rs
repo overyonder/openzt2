@@ -52,6 +52,7 @@ pub(super) struct AuthoredShowScheduleActionRoutingInputs<'w, 's> {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_authored_show_schedule_actions_into_rows_and_editor_selection(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,

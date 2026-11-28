@@ -32,6 +32,7 @@ pub(crate) struct BehaviorViewEventEmitted {
 #[derive(Resource, Default)]
 pub(super) struct ViewEventSequence(u64);
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn emit_authored_view_events(
     mut sequence: ResMut<ViewEventSequence>,
     assets: Res<Assets<BehaviorDocumentAsset>>,

@@ -24,6 +24,7 @@ const MOUSE_LOOK_PIXELS_FOR_FULL_SCALE: f32 = 32.0;
 
 // Device input, focus and bindings are sampled in the same input pass.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn translate_keyboard_and_mouse_state_to_game_actions_and_control_axes(
     keyboard_keys: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,

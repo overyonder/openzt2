@@ -12,6 +12,7 @@ use super::immersive_mode_state_types::{ActiveImmersiveMode, FirstPersonTraining
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiImmersiveModeActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_authored_immersive_mode_entry_actions_from_activated_ui_nodes(
     mut ui_node_activations: MessageReader<UiNodeActivated>,
     ui_document_assets: Res<Assets<UiDocumentAsset>>,

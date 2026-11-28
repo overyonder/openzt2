@@ -20,6 +20,7 @@ use crate::world_spawn::prefab_world_instance_spawning::ReleasePrefabRenderable;
 #[derive(Component)]
 pub(super) struct HiddenPrefabModelWorldAssetInstanceReleasePending;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn instantiate_visible_gltf_model_scenes(
     mut commands: Commands,
     asset_server: Res<AssetServer>,

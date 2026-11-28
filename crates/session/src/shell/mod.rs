@@ -221,6 +221,7 @@ impl Plugin for ShellPlugin {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn shell_is_active(phase: Res<State<GamePhase>>) -> bool {
     matches!(
         phase.get(),

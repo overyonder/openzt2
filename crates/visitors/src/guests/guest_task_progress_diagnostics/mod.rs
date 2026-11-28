@@ -34,6 +34,7 @@ use super::guest_task_need_facts::GuestTaskNeedFacts;
 /// hunger whenever any of them changes, so a guest that never returns to task
 /// selection shows what it is still waiting for.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn report_guest_task_progress_changes(
     clock: Res<ZooClock>,
     documents: Res<Assets<BehaviorDocumentAsset>>,

@@ -15,6 +15,7 @@ use super::{
     animal_spawn_resolution::resolve_animal_spawn_request_to_identifiers_and_components,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn spawn_animals_requested_by_gameplay_operations(
     mut commands: Commands,
     mut requests: MessageReader<SpawnAnimalRequest>,

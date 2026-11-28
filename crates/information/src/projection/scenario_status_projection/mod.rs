@@ -25,6 +25,7 @@ use openzt2_zoo_state::scenario::scenario_session_types::SelectedScenarioDocumen
 
 // Scenario bindings need both objective state and localized presentation data.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_active_scenario_status_to_authored_information_bindings(
     selected_scenario_document: Option<Res<SelectedScenarioDocument>>,
     scenario_documents: Res<Assets<WorldScenarioDocumentAsset>>,

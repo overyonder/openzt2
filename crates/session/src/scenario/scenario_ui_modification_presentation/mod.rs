@@ -16,6 +16,7 @@ const CHALLENGE_MODE_SCENARIO: &str = "challengegoals";
 
 /// Applies the Challenge mode scenario's `uimods` to interface nodes as they
 /// are projected.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_mode_scenario_ui_modifications_to_projected_nodes(
     worlds: Query<&SelectedWorldIdentity>,
     scenarios: Res<WorldScenarios>,

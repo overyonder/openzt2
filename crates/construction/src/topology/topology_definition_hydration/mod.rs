@@ -16,6 +16,7 @@ use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge
 
 /// Restores transforms and definition properties for saved topology, retrying
 /// while definitions are loading.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_save_loaded_topology_definition_facts(
     mut commands: Commands,
     grid: Res<TopologyGrid>,

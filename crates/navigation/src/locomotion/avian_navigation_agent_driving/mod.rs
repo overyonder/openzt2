@@ -19,6 +19,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::Steering;
 
 /// Applies steering through Avian velocity; physics handles movement and contacts.
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
     mut commands: Commands,
     animation_samples: LocomotionAnimationSamples,

@@ -20,6 +20,7 @@ use super::{
 const MAXIMUM_FRAME_CATCH_UP: std::time::Duration =
     std::time::Duration::from_millis(250);
 
+#[expect(clippy::needless_pass_by_value)]
 pub fn initialize_simulation_time_from_selected_world(
     mut commands: Commands,
     selected_worlds: Query<(

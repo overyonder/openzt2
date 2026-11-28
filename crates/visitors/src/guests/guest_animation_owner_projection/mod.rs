@@ -28,6 +28,7 @@ pub(super) struct GuestBodyAnimationSetPending {
 /// guest's own body model resolves without animation, request the manifest its
 /// definition names. Models of held items stop at their own definition and are
 /// left alone.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_authored_animation_sets_for_resolved_guest_models(
     mut commands: Commands,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -74,6 +75,7 @@ pub(super) fn request_authored_animation_sets_for_resolved_guest_models(
 
 /// Attaches a loaded guest manifest, starting in the preferred clip of the
 /// guest's authored stationary node (`Stand_Idle` for `Stand`).
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn attach_loaded_animation_sets_to_guest_models(
     mut commands: Commands,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,

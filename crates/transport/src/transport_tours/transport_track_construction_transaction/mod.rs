@@ -40,6 +40,7 @@ fn selected_transport_track_definition(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn prepare_transport_track_construction_edit(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,
@@ -160,6 +161,7 @@ fn transport_track_application_creates_entity(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_prepared_transport_track_construction_edits(
     mut commands: Commands,
     mut requests: MessageReader<ApplyPreparedTransportTrackConstructionEditRequest>,

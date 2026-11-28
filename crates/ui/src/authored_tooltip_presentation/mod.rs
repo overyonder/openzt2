@@ -43,6 +43,7 @@ pub(super) struct UiTooltipState {
     visible_seconds: f32,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_authored_tooltip_presentations(
     mut commands: Commands,
     time: Res<Time>,

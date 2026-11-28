@@ -13,6 +13,7 @@ use super::super::camera_runtime_state_types::OverheadRig;
 use super::super::camera_runtime_state_types::ZooCamera;
 use super::camera_ground_fit_surface_sampling::sample_highest_terrain_or_water_fitting_surface_height_in_three_by_three_metre_neighborhood;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn initialize_ground_fitted_free_camera_from_overhead_focus(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,

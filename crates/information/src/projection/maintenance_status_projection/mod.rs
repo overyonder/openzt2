@@ -14,6 +14,7 @@ use openzt2_zoo_state::maintenance::maintenance_types::ZooCleanlinessPermille;
 use openzt2_interface_state::information::entity_selection_types::InfoPanel;
 
 /// Updates maintenance information for the selected entity.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_live_maintenance_status_to_visible_information_panels(
     cleanliness: Res<ZooCleanlinessPermille>,
     panels: Query<(Entity, Ref<InfoPanel>, &InheritedVisibility)>,

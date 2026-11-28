@@ -24,6 +24,7 @@ use super::{
     fossil_sonar_scoring::select_highest_scoring_fossil_sonar_candidate,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_active_fossil_search_sonar_tracking(
     mut commands: Commands,
     occupancy: Res<
@@ -91,6 +92,7 @@ pub(super) fn activate_all_fossil_site_markers_when_requested(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn discover_weighted_fossil_piece_at_requested_site(
     mut requests: MessageReader<DiscoverFossilAtSiteRequest>,
     mode: Query<(Entity, &ActiveImmersiveMode)>,

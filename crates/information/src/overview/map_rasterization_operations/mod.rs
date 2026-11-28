@@ -34,6 +34,7 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeI
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn rebuild_changed_overview_map_canvas_images_from_world_state(
     mut terrain_change_messages: MessageReader<TerrainChanged>,
     mut topology_change_messages: MessageReader<TopologyChanged>,

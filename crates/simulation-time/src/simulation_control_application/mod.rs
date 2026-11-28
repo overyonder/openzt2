@@ -8,6 +8,7 @@ use super::simulation_control_types::{
     SimulationControlChanged, SimulationPauseRequest,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn apply_requested_simulation_control_changes(
     mut speed_requests: MessageReader<SetSimulationSpeed>,
     mut pause_requests: MessageReader<SimulationPauseRequest>,
@@ -62,6 +63,7 @@ pub(crate) fn apply_requested_simulation_control_changes(
 
 /// Reconcile the surviving authored holds together, after UI routing/commands
 /// have applied transfers and document teardown.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn reconcile_authored_ui_temporary_pause_holds(
     temporary_holds: Query<(Entity, &AuthoredUiTemporarySimulationPause)>,
     parents: Query<&ChildOf>,

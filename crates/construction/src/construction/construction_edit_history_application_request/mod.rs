@@ -21,6 +21,7 @@ use openzt2_zoo_state::construction::construction_transaction_types::EditCommitP
 use openzt2_zoo_state::construction::construction_transaction_types::EditTransaction;
 use openzt2_zoo_state::construction::construction_transaction_types::TransactionState;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_requested_construction_edit_history_application(
     mut commands: Commands,
     mut requested_history_applications: MessageReader<ApplyConstructionTransaction>,

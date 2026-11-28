@@ -25,6 +25,7 @@ use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 /// Validate all starting-zoo values before applying them to spawned entities.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_all_authored_world_spawn_values_once(
     mut commands: Commands,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,

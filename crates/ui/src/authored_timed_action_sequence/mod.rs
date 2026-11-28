@@ -37,6 +37,7 @@ impl UiAuthoredTimedActionSequencePlayback {
 
 /// Advances authored timed sequences on Bevy's real-time clock and activates
 /// their statically typed action proxies in source order.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_authored_timed_action_sequences_and_activate_due_proxies(
     time: Res<Time<Real>>,
     documents: Res<Assets<UiDocumentAsset>>,

@@ -15,6 +15,7 @@ use openzt2_interface_state::information::entity_selection_types::Inspectable;
 
 use super::information_view_types::{InformationViewClass, InformationViewClassResolved};
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_information_view_classes_from_canonical_world_definitions(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,

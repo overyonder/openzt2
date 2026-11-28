@@ -21,6 +21,7 @@ fn path_belongs_to_audio_document_family(path: &Path) -> bool {
         || path == "ai/ambientsmgr.xml"
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn refresh_audio_assets_from_archive_overlay(
     archives: Res<AssetArchives>,
     server: Res<AssetServer>,
@@ -54,6 +55,7 @@ pub(super) fn refresh_audio_assets_from_archive_overlay(
     index.revision = Some(revision);
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn index_loaded_audio_assets(
     mut events: MessageReader<AssetEvent<AudioAsset>>,
     server: Res<AssetServer>,

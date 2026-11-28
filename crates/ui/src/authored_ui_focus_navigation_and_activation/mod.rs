@@ -24,6 +24,7 @@ use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivat
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct UiSubmitTarget;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn navigate_authored_ui_focus_from_actions(
     mut actions: MessageReader<ActionRequest>,
     focusables: Query<(Entity, &UiFocusable, &InheritedVisibility, &UiDocumentOwner)>,
@@ -135,6 +136,7 @@ pub(super) fn choose_wrapped_authored_ui_focus_candidate<T: Ord + Copy>(
     nearest.or(wrap).map(|(_, entity)| entity)
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn activate_focused_authored_ui_node_from_confirm_or_cancel(
     mut actions: MessageReader<ActionRequest>,
     scopes: Query<(Entity, &UiFocusScope)>,
@@ -284,6 +286,7 @@ pub(super) fn activate_focused_authored_ui_node_from_confirm_or_cancel(
 #[derive(Component)]
 pub(super) struct AuthoredHoverPresentation;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn present_controller_authored_ui_focus(
     active_input: Res<ActiveInputDevice>,
     context: ActiveAuthoredUiContext,

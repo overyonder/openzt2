@@ -161,6 +161,7 @@ fn receive_water_docking_events(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn execute_water_docking(
     mut commands: Commands,
     clock: Res<ZooClock>,
