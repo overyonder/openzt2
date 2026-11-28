@@ -23,6 +23,7 @@ pub(crate) struct PendingStaffPlacement {
     staff_role: openzt2_game_data::AssetId,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn validate_staff_placement_preview_against_world_and_zoo_cash(
     zoo_cash: Res<ZooCash>,
     unlimited_zoo_cash: Option<Res<UnlimitedZooCash>>,
@@ -71,6 +72,7 @@ pub(crate) fn validate_staff_placement_preview_against_world_and_zoo_cash(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn begin_staff_placement_from_staff_purchase_choice(
     mut commands: Commands,
     mut purchase_choices: MessageReader<PurchaseChoice>,
@@ -99,6 +101,7 @@ pub(crate) fn begin_staff_placement_from_staff_purchase_choice(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn request_staff_hiring_from_confirmed_placement(
     mut commands: Commands,
     primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
@@ -142,6 +145,7 @@ pub(crate) fn request_staff_hiring_from_confirmed_placement(
     selected_construction_tools.write(SelectConstructionTool(ConstructionTool::Inspect));
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn clear_staff_placement_after_leaving_placement_tool(
     mut commands: Commands,
     construction_tool: Res<ConstructionTool>,

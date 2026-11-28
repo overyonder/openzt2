@@ -32,6 +32,7 @@ use openzt2_game_data::{
     AssetId,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn start_authored_behavior_transactions(
     mut commands: Commands,
     assets: Res<Assets<BehaviorDocumentAsset>>,
@@ -83,6 +84,7 @@ pub(super) fn start_authored_behavior_transactions(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn execute_authored_behavior_transaction_steps(
     mut commands: Commands,
     definitions: Res<WorldDefinitions>,
@@ -351,6 +353,7 @@ fn finish_transaction_step(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn finish_settled_behavior_transactions(
     mut commands: Commands,
     clock: Res<ZooClock>,

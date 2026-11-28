@@ -38,6 +38,7 @@ pub(super) struct PendingStaffHirePrefab(Handle<ScenePrefabAsset>);
 #[derive(Component)]
 pub(super) struct PaidStaffHire;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn request_staff_hiring(
     mut commands: Commands,
     mut requests: MessageReader<HireStaffRequest>,
@@ -119,6 +120,7 @@ pub(crate) fn mark_paid_staff_hires_for_prefab_spawning(
 pub(super) struct PaidStaffHireIdentity(PersistentId);
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn spawn_paid_staff_hires_from_ready_prefabs(
     mut commands: Commands,
     pending: Query<
@@ -186,7 +188,7 @@ pub(crate) fn spawn_paid_staff_hires_from_ready_prefabs(
         let staff = spawn_loaded_scene_prefab_as_world_instance(
             &mut commands,
             prefab,
-            prefab_handle.0.clone(),
+            &prefab_handle.0,
             member.root,
             AssetId(role.object.0),
             id,

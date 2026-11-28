@@ -161,6 +161,7 @@ fn reconcile_rows(
 /// Binds only newly spawned or definition-changed entities. Pending asset
 /// resolution leaves the entity marked pending and retries without inventing
 /// an empty controller set.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn bind_staff_request_rows_on_definition_change(
     active_world_definitions: Res<WorldDefinitions>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -205,6 +206,7 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
 /// Reconciles once when the canonical definition revision changes. Removed
 /// rows cancel their exact existing jobs before their primitive state is
 /// discarded; retained rows preserve only their previous samples.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn reconcile_staff_request_rows_on_definition_revision(
     active_world_definitions: Res<WorldDefinitions>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -254,6 +256,7 @@ pub(super) fn reconcile_staff_request_rows_on_definition_revision(
 
 /// Evaluates authored container and animal care controllers against their
 /// live owners. Unsupported attributes remain unsampled.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn evaluate_staff_request_rows(
     active_world_definitions: Res<WorldDefinitions>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

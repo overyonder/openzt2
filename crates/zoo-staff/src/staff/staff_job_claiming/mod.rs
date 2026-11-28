@@ -35,6 +35,7 @@ use super::{
     worker_duty_assignment::maintenance_worker_duties_accept_staff_job,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

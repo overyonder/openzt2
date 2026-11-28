@@ -31,6 +31,7 @@ pub(super) fn viewing_owned_by_current_view_action(
             .is_some_and(|action| matches!(action, BehaviorAction::ViewAnimals(_)))
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn revoke_unowned_guest_observations(
     mut commands: Commands,
     guests: Query<

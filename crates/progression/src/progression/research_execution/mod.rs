@@ -31,6 +31,7 @@ use super::{
     unlock_types::UnlockedCatalogueDefinitionSet,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn validate_start_research_requests_and_request_payments(
     mut requests: MessageReader<StartResearchProjectRequest>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -113,6 +114,7 @@ pub(super) fn validate_start_research_requests_and_request_payments(
         });
     }
 }
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn start_paid_research_projects(
     mut completed: MessageReader<TransactionCompleted>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -216,6 +218,7 @@ pub(super) fn advance_research_availability_unlock_countdowns(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn complete_research_projects_and_apply_authored_unlocks(
     mut ready: MessageReader<ResearchProjectCompletionReady>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -266,6 +269,7 @@ pub(super) fn complete_research_projects_and_apply_authored_unlocks(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn refresh_authored_research_availability(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

@@ -10,12 +10,12 @@ pub(super) fn bind_authored_water_surface_textures(
     terrain_asset: &TerrainAsset,
     presentation: &TerrainBiomeWaterPresentation,
 ) -> bool {
-    let bump_map_was_bound = pass
-        .replace_texture_asset_for_effect_semantic("BumpMap", targets.combined_bump_map.clone());
+    let bump_map_was_bound =
+        pass.replace_texture_asset_for_effect_semantic("BumpMap", &targets.combined_bump_map);
     let refraction_was_bound =
-        pass.replace_texture_asset_for_effect_semantic("EnvRefract", targets.refraction.clone());
+        pass.replace_texture_asset_for_effect_semantic("EnvRefract", &targets.refraction);
     let reflection_was_bound =
-        pass.replace_texture_asset_for_effect_semantic("EnvReflect", targets.reflection.clone());
+        pass.replace_texture_asset_for_effect_semantic("EnvReflect", &targets.reflection);
     // A declared texture need not be sampled by the selected technique.
     // The shipped FlatSpec passes use bump and environment maps only.
     let scum_map = presentation
@@ -25,9 +25,8 @@ pub(super) fn bind_authored_water_surface_textures(
         .as_ref()
         .and_then(|scum| scum.image.as_deref())
         .and_then(|image| terrain_asset.texture_image(image));
-    let scum_was_bound = scum_map.is_some_and(|texture| {
-        pass.replace_texture_asset_for_effect_semantic("ScumMap", texture.clone())
-    });
+    let scum_was_bound = scum_map
+        .is_some_and(|texture| pass.replace_texture_asset_for_effect_semantic("ScumMap", texture));
     (bump_map_was_bound && (refraction_was_bound || reflection_was_bound)) || scum_was_bound
 }
 

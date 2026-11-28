@@ -89,6 +89,7 @@ fn transport_circuit_endpoint_is_available_for_track_connection(
 /// Applies construction topology intents directly to the canonical edge
 /// component. A successful edit closes the circuit until normal circuit
 /// validation explicitly reopens it.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_transport_station_and_track_topology_mutation_requests(
     mut station_attachments: MessageReader<AttachTransportStationRequest>,
     mut station_detachments: MessageReader<DetachTransportStationRequest>,

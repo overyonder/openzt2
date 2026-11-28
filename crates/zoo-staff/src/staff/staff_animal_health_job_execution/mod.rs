@@ -22,6 +22,7 @@ pub(super) struct AwaitingAnimalHealthEffect {
     observed_active_treatment: bool,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn request_animal_health_effects_after_authored_staff_behavior_finishes(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

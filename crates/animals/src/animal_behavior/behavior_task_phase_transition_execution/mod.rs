@@ -36,6 +36,7 @@ pub(super) fn begin_behavior_target_candidate_selection_updates(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final_outcome(
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

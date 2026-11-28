@@ -24,6 +24,7 @@ use super::{
 /// Initializes staff loaded from world prefabs or restored from a save.
 /// Definitions can identify either a staff role or its object. A restored
 /// employee arrives with its saved [`Employment`], which is kept.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn identify_spawned_staff_from_world_definition(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

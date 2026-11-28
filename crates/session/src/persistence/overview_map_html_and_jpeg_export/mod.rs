@@ -117,6 +117,7 @@ pub(super) fn begin_overview_map_html_and_jpeg_exports(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn begin_writing_captured_overview_map_presentation(
     captured: On<ScreenshotCaptured>,
     export_requests: Query<&OverviewMapRenderedPresentationCapture>,

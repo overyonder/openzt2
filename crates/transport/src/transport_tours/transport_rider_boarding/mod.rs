@@ -27,6 +27,7 @@ use openzt2_zoo_state::transport_tours::transport_rider_types::WaitingForTranspo
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn accept_affordable_transport_boarding_requests_at_reachable_stations(
     mut boarding_requests: MessageReader<BoardTransportRequest>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

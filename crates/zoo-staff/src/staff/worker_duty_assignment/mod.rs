@@ -24,6 +24,7 @@ use super::{
 /// The four duty components remain the authoritative live assignment facts.
 /// This projection runs once for a newly identified or hired staff entity and
 /// does not overwrite later player changes.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn enable_every_maintenance_worker_duty_for_new_staff_by_default(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -67,6 +68,7 @@ pub(super) const fn maintenance_worker_duties_accept_staff_job(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_staff_worker_duty_assignments(
     mut commands: Commands,
     mut assignment_requests: MessageReader<SetStaffWorkerDutyAssignment>,

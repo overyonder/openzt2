@@ -22,6 +22,7 @@ use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPla
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementMutation;
 
 /// Validates and records one requested placed-object removal transaction.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn prepare_placed_object_removal_edit(
     mut commands: Commands,
     mut requests: MessageReader<PrepareDeletion>,

@@ -14,6 +14,7 @@ use openzt2_zoo_state::construction::construction_transaction_types::EditCommitP
 
 use crate::construction::construction_edit_history_operations;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_construction_undo_availability(
     history: Res<ConstructionEditHistory>,
     pending_transactions: Query<&EditCommitProgress>,

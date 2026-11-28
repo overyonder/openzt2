@@ -21,6 +21,7 @@ use openzt2_interface_state::information::catalogue_types::TypeListFilter;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPopulateCatalogueTypeListActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn populate_activated_authored_catalogue_type_list_row_counts(
     mut ui_node_activations: MessageReader<UiNodeActivated>,
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
@@ -95,6 +96,7 @@ pub(crate) fn populate_activated_authored_catalogue_type_list_row_counts(
 
 /// Requests exactly the reusable row entities required by every visible
 /// authored type list whose policy, filter, definitions, or world changed.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn request_visible_catalogue_type_list_row_counts(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,

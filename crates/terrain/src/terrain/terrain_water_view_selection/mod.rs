@@ -11,6 +11,7 @@ use openzt2_zoo_state::terrain::terrain_water_view_state::{
     TerrainWaterRegionFade, TerrainWaterRegionVisibility,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_camera_terrain_water_membership(
     phase: Res<State<GamePhase>>,
     cameras: Query<(Entity, &Camera), With<ZooCamera>>,
@@ -42,6 +43,7 @@ pub(super) fn update_camera_terrain_water_membership(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_terrain_water_view_selection(
     phase: Res<State<GamePhase>>,
     cameras: Query<(Entity, &Camera, &Projection), With<ZooCamera>>,

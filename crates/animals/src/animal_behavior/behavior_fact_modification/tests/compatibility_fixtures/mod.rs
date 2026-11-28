@@ -96,7 +96,7 @@ pub(super) fn install_definitions(
         .add(SpeciesAsset::from_test_document(document.clone()));
     app.world_mut()
         .resource_mut::<SpeciesAssets>()
-        .index_test_document(handle.clone(), &document);
+        .index_test_document(&handle, &document);
     app.world_mut().entity_mut(actor).insert((
         SpeciesHandle {
             species: species_id,

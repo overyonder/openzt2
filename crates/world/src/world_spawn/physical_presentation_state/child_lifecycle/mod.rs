@@ -36,6 +36,7 @@ impl PhysicalChildPlayback {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn advance_authored_child_lifetimes(
     mut commands: Commands,
     clock: Res<ZooClock>,

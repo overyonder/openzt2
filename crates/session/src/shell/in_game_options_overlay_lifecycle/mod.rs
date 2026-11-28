@@ -25,6 +25,7 @@ impl InGameOptionsOverlay {
 /// Restores the previous pause state after the options modal finishes hiding,
 /// and removes the menu so the next opening starts from its authored state.
 /// The menu belongs with the game view, so what it opened stays open.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn close_hidden_in_game_options_overlays_and_restore_simulation_pause_state(
     mut commands: Commands,
     overlays: Query<(Entity, &InGameOptionsOverlay)>,

@@ -102,7 +102,7 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
     let spawned = spawn_loaded_scene_prefab_as_world_instance(
         commands,
         prefab,
-        edit.prefab.clone(),
+        &edit.prefab,
         root,
         edit.definition,
         edit.entity,

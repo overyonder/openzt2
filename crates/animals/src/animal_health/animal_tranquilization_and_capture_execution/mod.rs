@@ -24,6 +24,7 @@ use super::{
 #[cfg(test)]
 mod tests;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn validate_tranquilizer_requests_and_apply_timed_tranquilization(
     mut commands: Commands,
     mut tranquilizer_requests: MessageReader<TranquilizeRequest>,

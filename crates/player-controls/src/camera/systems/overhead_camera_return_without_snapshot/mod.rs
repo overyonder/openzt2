@@ -27,6 +27,7 @@ use super::camera_mode_transitions::requested_duration_is_valid;
 use crate::camera::camera_execution_types::CameraReturnState;
 use crate::camera::camera_execution_types::RemoveReturnStateOnComplete;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn restore_authored_overhead_camera_without_snapshot(
     mut requests: MessageReader<RestoreCameraMode>,
     mut commands: Commands,

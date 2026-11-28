@@ -15,6 +15,7 @@ use openzt2_world_state::world_spawn::{
 };
 use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_selection_of_clicked_world_object_or_inspectable_ancestor(
     primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
     tool: Option<

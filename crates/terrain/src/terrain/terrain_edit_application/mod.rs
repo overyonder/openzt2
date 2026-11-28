@@ -29,6 +29,7 @@ use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_t
 #[derive(Component)]
 pub(super) struct LiveAppliedTerrainEdit;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
     mut commands: Commands,
     mut requests: MessageReader<CommitTerrainEdit>,

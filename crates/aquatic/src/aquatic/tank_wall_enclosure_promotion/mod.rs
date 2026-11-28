@@ -112,6 +112,7 @@ fn read_tank_wall_boundary(
 /// one already promoted with new-tank defaults. Habitats that cannot be read
 /// yet are retried on later ticks.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn promote_or_restore_habitats_enclosed_by_tank_walls(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

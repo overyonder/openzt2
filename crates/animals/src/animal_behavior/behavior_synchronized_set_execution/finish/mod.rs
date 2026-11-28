@@ -43,6 +43,7 @@ pub(super) struct SynchronizedBehaviorOutcomes<'w, 's> {
     >,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn finish_or_cancel_synchronized_behavior_sets(
     mut commands: Commands,
     clock: Res<ZooClock>,

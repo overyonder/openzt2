@@ -104,6 +104,7 @@ pub(super) fn set_authored_scenario_goal_panel_row_counts(
 
 /// Connects each authored row to its canonical objective and status visual.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn connect_authored_scenario_goal_rows_to_live_objectives(
     mut commands: Commands,
     scenarios: Res<WorldScenarios>,
@@ -183,6 +184,7 @@ pub(super) fn connect_authored_scenario_goal_rows_to_live_objectives(
 }
 
 /// Applies objective category and status filters without copying objective data.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_scenario_goal_panel_filters_to_projected_rows(
     scenarios: Res<WorldScenarios>,
     scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,

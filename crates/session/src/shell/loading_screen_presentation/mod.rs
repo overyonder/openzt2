@@ -42,6 +42,7 @@ pub(super) fn close_authored_loading_screen(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_world_loading_progress(
     definitions: Res<WorldDefinitions>,
     hydration: Query<&WorldHydration>,

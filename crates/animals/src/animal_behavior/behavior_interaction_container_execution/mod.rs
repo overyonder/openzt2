@@ -21,6 +21,7 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use super::behavior_random_stream_state::BehaviorRandomStream;
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_sets(
     mut commands: Commands,
     behavior_documents: Res<LoadedBehaviorDocumentCollection>,
@@ -192,7 +193,7 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
                 animal_types.borrow_for(actor),
             );
         let Some((document, declaration)) = behavior_declarations
-            .find_behavior_set_location(requested_behavior_set, subject_type_identifiers)
+            .find_behavior_set_location(requested_behavior_set, &subject_type_identifiers)
         else {
             debug!(?actor, set = ?requested_behavior_set, "behavior set has no declaration for this subject");
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);

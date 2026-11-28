@@ -19,6 +19,7 @@ use crate::camera::camera_execution_types::CameraBounds;
 use crate::camera::camera_execution_types::CameraTuning;
 
 /// Updates projection and movement settings when a mode selects a different camera definition.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn apply_authored_camera_definition_to_runtime_components(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -60,6 +61,7 @@ pub(crate) fn apply_authored_camera_definition_to_runtime_components(
 
 /// Moves the far plane of the live zoo cameras when the view distance option
 /// changes, leaving the rest of the authored projection untouched.
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::camera) fn apply_view_distance_graphics_setting_to_zoo_camera_far_planes(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

@@ -49,6 +49,7 @@ pub(super) struct AnimalLocomotionRuntime<'w, 's> {
     caffeine_modes: Query<'w, 's, &'static CaffeineMode>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_animal_animation_motion_to_navigation(
     mut commands: Commands,
     species_assets: Res<Assets<SpeciesAsset>>,

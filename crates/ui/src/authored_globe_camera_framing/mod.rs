@@ -68,6 +68,7 @@ pub(crate) fn update_globe_camera_viewports(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn frame_globe_cameras(
     models: Res<Assets<Gltf>>,
     gltf_meshes: Res<Assets<bevy::gltf::GltfMesh>>,

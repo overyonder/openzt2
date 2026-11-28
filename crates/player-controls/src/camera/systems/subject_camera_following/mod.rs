@@ -12,6 +12,7 @@ use crate::camera::camera_execution_types::CameraTuning;
 
 /// Follows the subject after the entry transition. First-person mode is handled
 /// by immersive modes, which also applies eye height and collision settings.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn update_subject_camera_pose(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

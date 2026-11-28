@@ -34,6 +34,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::world_load_request_acceptance::BeginWorldLoad;
 use openzt2_world_state::world_spawn::world_load_request_acceptance::WorldLoadOperationOwner;
 
+#[expect(clippy::needless_pass_by_value)]
 pub fn accept_queued_world_load_after_required_assets_resolve(
     mut commands: Commands,
     mut requests: MessageReader<BeginWorldLoad>,

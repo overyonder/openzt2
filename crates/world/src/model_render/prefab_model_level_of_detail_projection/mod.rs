@@ -13,6 +13,7 @@ pub(super) struct LodSelection {
     cameras: Vec<(Entity, Vec3, Dir3, RenderLayers)>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_prefab_model_level_of_detail_visibility(
     cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&RenderLayers>), With<Camera3d>>,
     graphics: Res<GraphicsSettings>,

@@ -31,6 +31,7 @@ use openzt2_interface_state::shell::shell_selection_types::WorldChoiceView;
 use super::campaign_selection_list_presentation::replace_text_in_list_row_and_descendants;
 
 /// Populates the map toggle-set, which is empty in the UI document.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_launchable_world_choices_into_authored_list_rows(
     mut commands: Commands,
     active_catalogue: Res<WorldScenarios>,

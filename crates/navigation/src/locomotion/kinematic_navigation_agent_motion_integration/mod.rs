@@ -23,6 +23,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::Steering;
 use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn integrate_non_physics_planned_navigation_motion(
     mut commands: Commands,
     animation_samples: LocomotionAnimationSamples,

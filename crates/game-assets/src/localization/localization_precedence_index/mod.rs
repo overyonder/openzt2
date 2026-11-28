@@ -88,6 +88,7 @@ impl LocalizationPrecedenceIndex {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn load_english_localization_assets_after_archive_revision(
     archives: Res<crate::asset_source::AssetArchives>,
     asset_server: Res<AssetServer>,
@@ -111,6 +112,7 @@ pub(super) fn load_english_localization_assets_after_archive_revision(
     localization_precedence_index.indexed_archive_revision = Some(archive_revision);
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn index_loaded_localization_entries_after_asset_events(
     mut localization_asset_events: MessageReader<AssetEvent<LocalizationAsset>>,
     mut failures: MessageReader<AssetLoadFailedEvent<LocalizationAsset>>,

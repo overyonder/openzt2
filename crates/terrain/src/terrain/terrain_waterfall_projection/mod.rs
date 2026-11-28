@@ -113,6 +113,7 @@ pub(super) fn spawn_authored_waterfall_groups(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_authored_terrain_waterfall_decal_detail_texture_coordinates(
     time: Res<Time>,
     projected_waterfall_decals: Query<&AuthoredTerrainWaterfallDecalEffectPass>,

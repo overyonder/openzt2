@@ -32,6 +32,7 @@ type AnimalActivityStateRemovedAfterDeath = (
     Docking,
 );
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn finalize_disease_deaths_after_vitality_reaches_zero(
     mut commands: Commands,
     clock: Res<ZooClock>,

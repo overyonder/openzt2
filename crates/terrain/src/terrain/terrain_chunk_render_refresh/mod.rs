@@ -16,6 +16,7 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 /// changed since its last rebuild. The surface image reads heights and water
 /// as well as ground paint, so it is recomposed only where those samples reach.
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn refresh_changed_terrain_chunk_meshes_and_surface_images(
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,

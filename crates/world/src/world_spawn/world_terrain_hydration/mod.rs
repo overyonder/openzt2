@@ -24,6 +24,7 @@ use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHoriz
 /// Hydrate the selected terrain asset into chunk entities and derive the
 /// world's XZ bounds from the authored chunk bounds. Loading cannot finish
 /// until this succeeds, so the camera never receives guessed extents.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_selected_terrain_chunks_world_bounds_and_topology_grid(
     mut commands: Commands,
     terrains: Res<Assets<TerrainAsset>>,

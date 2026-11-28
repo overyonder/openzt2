@@ -89,6 +89,7 @@ impl UiAuthoredHotkeyKeyboardActivationBinding {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn activate_projected_authored_hotkeys_from_keyboard_input(
     keys: Res<ButtonInput<KeyCode>>,
     mut keyboard: MessageReader<KeyboardInput>,

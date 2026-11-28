@@ -60,6 +60,7 @@ impl LuaScriptArchivePathIndex {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn refresh_lua_script_archive_path_index_after_archive_revision(
     asset_server: Res<AssetServer>,
     mut lua_script_archive_path_index: ResMut<LuaScriptArchivePathIndex>,

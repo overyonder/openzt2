@@ -16,6 +16,7 @@ use super::animal_care_control_types::{
     AnimalCareTarget, DiseaseTreatmentControl, TranquilizerControl,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_animal_health_tool_actions_from_activated_ui_nodes(
     mut commands: Commands,
     mut ui_node_activations: MessageReader<UiNodeActivated>,

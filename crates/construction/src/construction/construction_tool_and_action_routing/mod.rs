@@ -15,6 +15,7 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::SelectConstructionTool;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn construction_tool_active(tool: Res<ConstructionTool>) -> bool {
     *tool != ConstructionTool::Inspect
 }
@@ -54,6 +55,7 @@ pub(super) fn select_construction_tool(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_construction_actions(
     mut actions: MessageReader<ActionRequest>,
     modal_input: Res<
@@ -109,6 +111,7 @@ pub(super) fn route_construction_actions(
 /// pointer press. Topology owns fence/path click sequences and elevated-path drags. UI
 /// controls retain the press when Bevy marks any control as pressed, so
 /// choosing a catalogue row or toolbar action cannot also place an object.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_pointer_construction_action(
     primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
     ui_capture: Res<UiPointerCapture>,

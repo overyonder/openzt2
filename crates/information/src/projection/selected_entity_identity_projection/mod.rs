@@ -34,6 +34,7 @@ pub(crate) fn project_live_zoo_name_to_authored_editable_fields(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_authored_definition_name_to_selected_entity_panel(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -156,6 +157,7 @@ pub(crate) fn project_live_name_to_selected_entity_panel(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_selected_entity_name_to_authored_editable_fields(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,

@@ -51,6 +51,7 @@ fn ordered_prepared_object_placement_mutation_indices(
 }
 
 /// Routes each accepted edit to its mutation-specific application procedure.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_prepared_object_placement_edits(
     mut commands: Commands,
     mut requests: MessageReader<ApplyPreparedObjectPlacementEditRequest>,

@@ -63,6 +63,7 @@ fn configured_particle_effects<'a>(
     (suspension, bubbles)
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::terrain) fn synchronize_region_underwater_particle_effects(
     mut commands: Commands,
     phase: Res<State<GamePhase>>,
@@ -209,6 +210,7 @@ pub(in crate::terrain) fn synchronize_region_underwater_particle_effects(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::terrain) fn update_underwater_particle_visibility(
     view: Res<openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterViewState>,
     terrains: Res<Assets<TerrainAsset>>,
@@ -243,6 +245,7 @@ pub(in crate::terrain) fn update_underwater_particle_visibility(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::terrain) fn emit_region_underwater_particles(
     time: Res<Time<Virtual>>,
     phase: Res<State<GamePhase>>,

@@ -49,7 +49,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 pub fn spawn_loaded_scene_prefab_as_world_instance(
     commands: &mut Commands,
     prefab: &ScenePrefabAsset,
-    prefab_handle: Handle<ScenePrefabAsset>,
+    prefab_handle: &Handle<ScenePrefabAsset>,
     world_root: Entity,
     definition: AssetId,
     persistent_id: PersistentId,
@@ -82,7 +82,7 @@ pub fn hydrate_loaded_scene_prefab_into_world_instance_root(
     commands: &mut Commands,
     root: Entity,
     prefab: &ScenePrefabAsset,
-    prefab_handle: Handle<ScenePrefabAsset>,
+    prefab_handle: &Handle<ScenePrefabAsset>,
     world_root: Entity,
     definition: AssetId,
     persistent_id: PersistentId,
@@ -305,6 +305,7 @@ fn attach_prefab_row_renderables(
 /// Starts rebuilding the renderables of world instances whose prefab
 /// reloaded, such as a model replaced from an editor. Gameplay components,
 /// colliders and the instance's entities stay as they are.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_rebuilding_world_instance_renderables_after_prefab_reload(
     mut commands: Commands,
     mut replaced: MessageReader<PrefabModelReplaced>,
@@ -349,6 +350,7 @@ pub(super) fn begin_rebuilding_world_instance_renderables_after_prefab_reload(
 
 /// Once the renderer has released the old renderables, removes them and
 /// attaches the reloaded prefab's renderables to the same row entities.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn finish_rebuilding_world_instance_renderables(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,

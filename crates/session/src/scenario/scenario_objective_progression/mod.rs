@@ -34,6 +34,7 @@ pub(super) fn activate_scenario_objectives_with_satisfied_prerequisites(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn fail_expired_objectives_and_remove_expired_challenge_offers(
     mut commands: Commands,
     clock: Res<ZooClock>,

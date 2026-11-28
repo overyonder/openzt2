@@ -27,6 +27,7 @@ use super::{
     zoo_rating_calculations::{select_zoo_rating_input, zoo_rating_satisfies_authored_comparison},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_award_condition_duration_storage(
     roots: Query<
         Entity,
@@ -77,6 +78,7 @@ pub(super) fn initialize_award_condition_duration_storage(
         .insert(ProgressionAwardConditionStorageInitialized);
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn evaluate_all_progression_award_conditions_and_queue_grants(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -152,6 +154,7 @@ pub(super) fn evaluate_all_progression_award_conditions_and_queue_grants(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn grant_earned_progression_awards(
     mut candidates: MessageReader<ProgressionAwardGrantCandidate>,
     clock: Res<ZooClock>,

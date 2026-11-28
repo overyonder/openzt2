@@ -19,6 +19,7 @@ pub(super) struct RetainedTerrainWireframeGizmo {
 /// and allocates tens of thousands of temporary collider shapes each frame. A
 /// retained GizmoAsset uploads the same unique edges only when the terrain mesh
 /// changes. Avian diagnostics remain responsible for ordinary colliders.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn synchronize_retained_terrain_wireframe_gizmo_assets(
     mut commands: Commands,
     views: Res<DeveloperDiagnosticsViewState>,
@@ -72,6 +73,7 @@ pub(super) fn synchronize_retained_terrain_wireframe_gizmo_assets(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn synchronize_retained_terrain_wireframe_gizmo_visibility(
     mut commands: Commands,
     views: Res<DeveloperDiagnosticsViewState>,

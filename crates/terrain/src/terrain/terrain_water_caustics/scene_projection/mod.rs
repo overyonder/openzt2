@@ -290,6 +290,7 @@ fn local_bound(
     Some(result)
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::terrain) fn project_scene_caustic_targets(
     mut commands: Commands,
     roots: Query<(
@@ -418,6 +419,7 @@ pub(in crate::terrain) fn project_scene_caustic_targets(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::terrain) fn project_scene_caustic_passes(
     mut commands: Commands,
     primitives: Query<(
@@ -668,6 +670,7 @@ pub(in crate::terrain) fn project_scene_caustic_passes(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::terrain) fn update_scene_caustic_bindings(
     sources: Query<&MeshMaterial3d<EffectPassMaterial>, Without<TerrainWaterCausticScenePass>>,
     targets: Query<&TerrainWaterCausticSceneTarget>,

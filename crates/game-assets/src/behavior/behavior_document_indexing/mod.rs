@@ -10,6 +10,7 @@ use super::behavior_asset_types::{
 };
 use crate::asset_source::AssetArchives;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn refresh_behavior_documents_after_archive_revision_change(
     behavior_source_archives: Res<AssetArchives>,
     asset_server: Res<AssetServer>,
@@ -37,6 +38,7 @@ fn is_behavior_document_asset_path(asset_path: &Path) -> bool {
     })
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn rebuild_behavior_declaration_indexes_after_asset_change(
     asset_server: Res<AssetServer>,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,

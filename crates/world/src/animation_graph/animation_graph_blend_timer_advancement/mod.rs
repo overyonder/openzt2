@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn advance_animation_graph_blend_timers(
     fixed_time: Res<Time<Fixed>>,
     mut animation_graph_playback_states: Query<&mut AnimationGraphPlaybackState>,

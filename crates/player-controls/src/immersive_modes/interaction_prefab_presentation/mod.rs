@@ -10,6 +10,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use super::immersive_mode_policy_types::{InteractionPrefab, InteractionPrefabVisual};
 
 /// Keeps the current visual until its replacement prefab and models are loaded.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn create_world_prefab_visual_when_immersive_mode_prefab_is_ready(
     prefab_policies: Query<(Entity, &InteractionPrefab)>,
     scene_prefab_assets: Res<Assets<ScenePrefabAsset>>,
@@ -42,7 +43,7 @@ pub(super) fn create_world_prefab_visual_when_immersive_mode_prefab_is_ready(
         let prefab_root_entity = spawn_loaded_scene_prefab_as_world_instance(
             &mut commands,
             scene_prefab_asset,
-            interaction_prefab.handle.clone(),
+            &interaction_prefab.handle,
             world_root_entity,
             interaction_prefab.definition,
             PersistentId(u64::MAX - controller_entity.to_bits()),

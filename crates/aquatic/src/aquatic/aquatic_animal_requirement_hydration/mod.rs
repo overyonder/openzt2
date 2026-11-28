@@ -9,6 +9,7 @@ use super::aquatic_simulation_types::{
     AquaticAnimal, AquaticSuitability, AquaticWaterRequirement, LandWaterRequirement,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_live_animals_from_authored_aquatic_requirements(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

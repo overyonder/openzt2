@@ -53,6 +53,7 @@ impl UiLocalizedCountdownPresentation {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_localized_countdown_presentations_and_activate_completion_targets(
     time: Res<Time<Real>>,
     active_localization: Res<LocalizationPrecedenceIndex>,

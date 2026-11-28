@@ -10,12 +10,14 @@ use super::developer_diagnostics_view_types::{
     DeveloperDiagnosticsHotkeyLegend, DeveloperDiagnosticsViewState, DeveloperDiagnosticsVisual,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn developer_world_inspectors_are_visible(
     views: Res<DeveloperDiagnosticsViewState>,
 ) -> bool {
     views.world_inspectors_are_visible()
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn toggle_developer_diagnostics_views_from_hotkeys(
     keys: Res<ButtonInput<KeyCode>>,
     mut views: ResMut<DeveloperDiagnosticsViewState>,
@@ -40,6 +42,7 @@ pub(super) fn toggle_developer_diagnostics_views_from_hotkeys(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn synchronize_developer_diagnostics_view_visibility(
     views: Res<DeveloperDiagnosticsViewState>,
     mut picking_mode: ResMut<DebugPickingMode>,
@@ -80,6 +83,7 @@ pub(super) fn spawn_developer_diagnostics_visuals(mut commands: Commands) {
     ));
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn spawn_developer_diagnostics_hotkey_legend(
     mut commands: Commands,
     views: Res<DeveloperDiagnosticsViewState>,
@@ -109,6 +113,7 @@ pub(super) fn spawn_developer_diagnostics_hotkey_legend(
     ));
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_developer_diagnostics_hotkey_legend(
     views: Res<DeveloperDiagnosticsViewState>,
     mut legend: Query<&mut Text, With<DeveloperDiagnosticsHotkeyLegend>>,

@@ -35,6 +35,7 @@ struct OnlineMessageFeed {
 /// Starts one bounded HTTP request for an enabled, newly projected main-menu
 /// surface. Network and JSON work stay on Bevy's I/O pool and cannot stall the
 /// render or UI schedules.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn start_online_message_request_for_newly_projected_surfaces(
     mut commands: Commands,
     online_message_policy: Res<OnlineMessagePolicy>,
@@ -65,6 +66,7 @@ pub(super) fn start_online_message_request_for_newly_projected_surfaces(
 /// Polls the asynchronous request without blocking. A failed or malformed
 /// endpoint yields one built-in greeting, so the authored rail remains useful
 /// offline and never exposes transport failures to the player.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn poll_online_message_requests_and_create_authored_rows(
     mut commands: Commands,
     mut online_message_fetch_tasks: Query<(Entity, &mut OnlineMessageFetchTask, &ChildOf)>,
@@ -150,6 +152,7 @@ pub(super) fn bind_displayed_online_message_to_authored_row_text(
 }
 
 /// Projects the accepted user preference onto the authored main-menu rail.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_online_message_policy_and_content_availability_to_surface(
     online_message_policy: Res<OnlineMessagePolicy>,
     mut online_message_surfaces: Query<(

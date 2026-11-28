@@ -17,6 +17,7 @@ pub(super) struct TranquilizerChargeBarLayout {
 }
 
 /// Updates the authored `tranqm.xml` slots from the player's tool and reticle.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_tranquilizer_heads_up_display_to_authored_ui_nodes(
     mut commands: Commands,
     huds: Query<(&TranquilizerTool, &TranquilizerHud)>,

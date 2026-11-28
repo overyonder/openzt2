@@ -21,6 +21,7 @@ fn dirt_as_water_quality_permille(amount: f32, volume: f32) -> u16 {
     (amount / volume * 1000.0).round().clamp(0.0, 1000.0) as u16
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_water_filters_from_object_definitions(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -67,6 +68,7 @@ pub(super) fn add_animal_dirt_to_home_tank_water(
 
 /// At each cleanup a filter with room left moves dirt from the water it faces
 /// into itself. A full filter does nothing until a worker cleans it.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn clean_tank_water_through_filters(
     time: Res<Time>,
     grid: Res<TopologyGrid>,

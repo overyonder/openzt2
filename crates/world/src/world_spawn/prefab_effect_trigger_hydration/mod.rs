@@ -45,6 +45,7 @@ pub(super) fn spawn_prefab_effect_triggers(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_prefab_effect_triggers(
     mut commands: Commands,
     triggers: Query<(Entity, &PrefabEffectTrigger, &WorldMember), Without<PrefabEffectHydrated>>,

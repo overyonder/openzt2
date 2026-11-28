@@ -98,6 +98,7 @@ fn transaction_accounts_are_same(left_account: Account, right_account: Account) 
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn settle_requested_account_transactions(
     mut commands: Commands,
     mut transaction_requests: MessageReader<TransactionRequest>,

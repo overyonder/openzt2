@@ -63,6 +63,7 @@ pub(super) fn request_habitat_region_rebuilds_after_topology_changes(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
     mut commands: Commands,
     mut habitat_rebuild_requests: MessageReader<RebuildHabitatRegionsWithinTopologyBounds>,

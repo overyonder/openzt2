@@ -552,7 +552,7 @@ pub(super) fn globe_record(
             [color.red, color.green, color.blue, color.alpha]
         }),
         dot_highlight_cursor: cursor_texture_dependency(
-            value.dot_highlight_cursor.clone(),
+            value.dot_highlight_cursor.as_deref(),
             output,
             input,
         )?,

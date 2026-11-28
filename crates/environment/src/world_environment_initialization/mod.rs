@@ -37,6 +37,7 @@ use super::{
 #[derive(Component)]
 pub(super) struct WorldEnvironmentInitialized;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
     mut commands: Commands,
     active_scenarios: Res<WorldScenarios>,

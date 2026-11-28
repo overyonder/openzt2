@@ -32,6 +32,7 @@ fn authored_request_urgency(
         .and_then(|row| authored_staff_request_urgency(row.request.priority))
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_staff_emptying_for_full_waste_containers(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
@@ -74,6 +75,7 @@ pub(super) fn request_staff_emptying_for_full_waste_containers(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_staff_sweeping_for_spawned_litter(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
@@ -99,6 +101,7 @@ pub(super) fn request_staff_sweeping_for_spawned_litter(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_staff_cleaning_for_spawned_habitat_waste(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
@@ -129,6 +132,7 @@ pub(super) fn request_staff_cleaning_for_spawned_habitat_waste(
 
 /// A cancelled request whose condition still holds is raised again at the
 /// authored priority of the controller that raised it.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn requeue_cancelled_maintenance_staff_work_when_still_required(
     mut cancelled_staff_jobs: MessageReader<StaffJobCancelled>,
     definitions: Query<&DefinitionId>,

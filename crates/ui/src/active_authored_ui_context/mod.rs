@@ -142,6 +142,7 @@ impl ActiveAuthoredUiContext<'_, '_> {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub fn capture_authored_modal_for_input_frame(
     context: ActiveAuthoredUiContext,
     mut capture: ResMut<AuthoredModalInputCapture>,

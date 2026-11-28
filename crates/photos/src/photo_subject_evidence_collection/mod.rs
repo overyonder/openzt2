@@ -101,6 +101,7 @@ pub(super) struct PhotographableSemanticFactQueries<'w, 's> {
     >,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_captures(
     spatial_query: SpatialQuery,
     mut commands: Commands,

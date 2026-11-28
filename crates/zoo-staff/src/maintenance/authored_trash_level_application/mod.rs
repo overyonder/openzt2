@@ -4,6 +4,7 @@ use openzt2_zoo_state::maintenance::maintenance_types::{
     AdjustFacilityContainedWaste, FacilityContainedWaste, IncrementalZooCleanlinessTotals,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_authored_trash_level_changes(
     mut commands: Commands,
     assets: Res<Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>,

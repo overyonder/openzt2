@@ -36,6 +36,7 @@ pub(super) struct AuthoredZooAdmissionPriceBands(pub [Money; 4]);
 #[derive(Component)]
 pub(super) struct WorldZooAdmissionPolicyInitialized;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_zoo_admissions_state_into_authored_toggle_selection(
     admissions_open: Res<ZooAdmissionsOpen>,
     documents: Res<Assets<UiDocumentAsset>>,
@@ -83,6 +84,7 @@ pub(super) fn project_zoo_admissions_state_into_authored_toggle_selection(
 }
 
 /// Projects the canonical admission price into the shipped zoo-status money field.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_zoo_admission_price_into_authored_ui_text(
     admission_price: Res<AdmissionPrice>,
     mut fields: Query<(Ref<UiTextBinding>, &mut Text)>,
@@ -99,6 +101,7 @@ pub(super) fn project_zoo_admission_price_into_authored_ui_text(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_zoo_admissions_status_into_authored_ui_text(
     admissions_open: Res<ZooAdmissionsOpen>,
     documents: Res<Assets<UiDocumentAsset>>,
@@ -234,6 +237,7 @@ fn authored_zoo_admissions_status_localization_key(
     })
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_zoo_admission_price_bands_from_loaded_world_definition(
     roots: Query<
         Entity,
@@ -263,6 +267,7 @@ pub(super) fn initialize_zoo_admission_price_bands_from_loaded_world_definition(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_zoo_admission_policy_changes_from_authored_ui_actions(
     mut activations: MessageReader<UiNodeActivated>,
     documents: Res<Assets<UiDocumentAsset>>,

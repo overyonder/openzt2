@@ -41,6 +41,7 @@ fn select_tank_wall_rail(
 
 /// Rebuilds the rail of each tank wall whose top or segment model changed.
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn present_changed_tank_wall_rails(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

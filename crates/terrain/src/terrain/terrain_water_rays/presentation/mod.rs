@@ -22,6 +22,7 @@ use openzt2_zoo_state::{
 };
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::terrain) fn update_terrain_water_ray_presentation(
     mut commands: Commands,
     time: Res<Time>,

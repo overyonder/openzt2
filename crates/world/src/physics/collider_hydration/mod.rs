@@ -144,6 +144,7 @@ pub(super) struct PendingModelCollider {
     primitive: usize,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn replace_loaded_model_collider_requests_with_avian_triangle_meshes(
     mut commands: Commands,
     pending: Query<(Entity, &PendingModelCollider, Has<RigidBody>)>,

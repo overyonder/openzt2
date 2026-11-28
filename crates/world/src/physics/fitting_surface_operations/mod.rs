@@ -31,6 +31,7 @@ pub(super) fn fitting_surface_accepts_sampled_normal(
 /// remains the sole owner of collision and integration; this is a changed-only
 /// placement policy applied before its transform preparation.
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn fit_eligible_static_objects_to_changed_terrain_surfaces(
     terrain_index: Option<Res<TerrainIndex>>,
     terrain_assets: Option<Res<Assets<TerrainAsset>>>,

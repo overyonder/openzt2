@@ -14,6 +14,7 @@ use openzt2_interface_state::input::input_types::ActionRequest;
 use openzt2_interface_state::input::input_types::ActionSource;
 use openzt2_interface_state::input::input_types::GameAction;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_controller_authored_actions(
     mut requests: MessageReader<ActionRequest>,
     documents: Res<Assets<UiDocumentAsset>>,

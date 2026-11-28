@@ -67,6 +67,7 @@ impl PathCurbsHydrated {
 /// four immediate neighbors. The topology edit message already owns that
 /// changed region, so curb projection remains reactive without scanning and
 /// rebuilding every path every frame.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn invalidate_path_curb_presentations_after_topology_or_terrain_changes(
     mut commands: Commands,
     mut changed: MessageReader<TopologyChanged>,
@@ -145,6 +146,7 @@ pub(crate) fn invalidate_path_curb_presentations_after_topology_or_terrain_chang
 /// canonical fence-prefab selector to choose cardinal, diagonal, 90-degree,
 /// and 135-degree authored families from each ordered endpoint pair.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

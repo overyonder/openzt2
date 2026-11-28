@@ -53,6 +53,7 @@ impl AnimalNavigationPolicy<'_> {
 
 /// An asset reload or variant replacement invalidates routes planned with the
 /// previous collision limits. The destination planner replaces them on its next pass.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn invalidate_animal_routes_after_policy_changes(
     policy: AnimalNavigationPolicy,
     mut animals: Query<(

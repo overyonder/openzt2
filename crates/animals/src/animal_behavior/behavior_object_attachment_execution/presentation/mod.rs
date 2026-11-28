@@ -1,5 +1,6 @@
 use super::*;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_contained_object_transforms(
     occupancy: Res<InteractionContainerOccupancy>,
     objects: Query<(Entity, &ContainedObject)>,

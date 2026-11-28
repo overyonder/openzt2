@@ -22,6 +22,7 @@ const NATIVE_MINIMUM_WATER_IMPACT_STRENGTH: f32 = 0.100_000_001_49;
 
 /// Emits a wave when a moving body crosses the water surface.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_authored_body_water_surface_crossings_into_impact_waves(
     mut commands: Commands,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,

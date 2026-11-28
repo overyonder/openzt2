@@ -122,6 +122,7 @@ pub(super) fn restore_environment_phase_items_before_queueing(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn separate_prepared_environment_layers(
     instances: Res<ExtractedInstances<EnvironmentPrimitiveLayer, bevy::render::RenderApp>>,
     mut phases: ResMut<ViewSortedRenderPhases<Transparent3d>>,
@@ -166,6 +167,7 @@ pub(super) fn separate_prepared_environment_layers(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn render_environment_layers_before_world(
     world: &World,
     view: ViewQuery<(

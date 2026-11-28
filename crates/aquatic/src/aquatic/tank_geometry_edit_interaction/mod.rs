@@ -35,6 +35,7 @@ use super::{
 /// changes the live tank. Each frame of a held gesture moves the edited height
 /// at the authored speed, clamped to the original's limits.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_tank_geometry_gesture(
     mut commands: Commands,
     (tool, policy, time): (

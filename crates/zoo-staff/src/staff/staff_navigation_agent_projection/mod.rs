@@ -9,6 +9,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::Route;
 
 use super::staff_employment_types::{Staff, StaffRole};
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_authored_staff_locomotion_onto_staff_entities(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

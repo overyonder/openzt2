@@ -35,6 +35,7 @@ use super::{
 };
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn spawn_eligible_ambient_animals_from_authored_environment_spawners(
     mut commands: Commands,
     clock: Res<ZooClock>,
@@ -155,6 +156,7 @@ pub(super) fn spawn_eligible_ambient_animals_from_authored_environment_spawners(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn despawn_ambient_animals_after_authored_lifetime_expires(
     mut commands: Commands,
     clock: Res<ZooClock>,

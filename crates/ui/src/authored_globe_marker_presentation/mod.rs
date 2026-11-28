@@ -17,6 +17,7 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_globe_markers(
     mut commands: Commands,
     models: Res<Assets<Gltf>>,

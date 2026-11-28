@@ -44,6 +44,7 @@ pub(super) fn begin_requested_camera_screenshot_captures(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn publish_completed_camera_screenshot_image(
     captured: On<BevyScreenshotCaptured>,
     owners: Query<&ScreenshotCaptureOwner>,

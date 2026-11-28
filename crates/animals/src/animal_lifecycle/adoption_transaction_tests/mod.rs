@@ -215,7 +215,7 @@ fn setup(cash: i64) -> (App, Entity) {
         .add(SpeciesAsset::from_test_document(document.clone()));
     app.world_mut()
         .resource_mut::<SpeciesAssets>()
-        .index_test_document(handle, &document);
+        .index_test_document(&handle, &document);
     let definitions = WorldDefinitionDocument {
         objects: vec![object(species)],
         simulation_timing: Some(SimulationTimingDefinition {

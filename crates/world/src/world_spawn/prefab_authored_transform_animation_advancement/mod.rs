@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabAuthoredBillboardOrientationMode;
 use openzt2_world_state::world_spawn::prefab_authored_transform_animation_advancement::PrefabAuthoredTransformAnimation;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_authored_prefab_transform_animations_from_elapsed_time(
     time: Res<Time>,
     mut animations: Query<(

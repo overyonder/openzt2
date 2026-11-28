@@ -17,6 +17,7 @@ use super::immersive_mode_policy_types::AllowedInteractionActions;
 use super::immersive_mode_state_types::ActiveImmersiveMode;
 use super::immersive_mode_state_types::ImmersiveMode;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn aim_active_free_immersive_camera(
     time: Res<Time<Real>>,
     control_axes: Res<DeviceControlAxes>,

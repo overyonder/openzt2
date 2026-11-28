@@ -673,6 +673,7 @@ fn authored_ground_track_paint(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_committed_transport_track_piece_authored_prefabs(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -1073,6 +1074,7 @@ fn names_in_pairs(
 /// A station shows the marker of each end no road is connected to yet, where
 /// the original marks the place a road can start ("Click to place road").
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn show_construction_markers_at_unconnected_station_ends(
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

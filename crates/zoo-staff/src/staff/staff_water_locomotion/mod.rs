@@ -13,6 +13,7 @@ use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
 /// Enters swimming in water deeper than the authored entry depth and leaves
 /// it where water is shallower than the authored exit depth, then keeps a
 /// swimmer at the surface, or at its held depth, after motion has moved it.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_staff_water_locomotion(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

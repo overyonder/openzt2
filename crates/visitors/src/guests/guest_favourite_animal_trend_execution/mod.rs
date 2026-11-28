@@ -30,6 +30,7 @@ fn create_guest_favourite_animal_trend<'a>(
     GuestFavouriteAnimalTrend::new(choose_species(&species, random))
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_loaded_world_guest_favourite_animal_trends(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

@@ -16,6 +16,7 @@ pub(super) fn no_pending_edits(pending: Query<&EditCommitProgress>) -> bool {
         .all(|progress| progress.phase == EditCommitPhase::Complete)
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_undo_redo(
     mut actions: MessageReader<ActionRequest>,
     history: Res<ConstructionEditHistory>,

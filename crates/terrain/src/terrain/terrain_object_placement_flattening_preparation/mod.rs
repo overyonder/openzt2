@@ -29,6 +29,7 @@ use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
     clippy::too_many_arguments,
     reason = "the Bevy system reads each canonical construction and terrain owner directly"
 )]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn prepare_authored_object_placement_terrain_flattening(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,

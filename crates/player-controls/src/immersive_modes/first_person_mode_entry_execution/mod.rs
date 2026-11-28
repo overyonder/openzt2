@@ -25,6 +25,7 @@ use crate::immersive_modes::immersive_control_execution_types::GuestViewControl;
 use crate::immersive_modes::immersive_control_execution_types::GuestViewTileCount;
 use crate::immersive_modes::immersive_control_execution_types::PendingImmersiveEntry;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn enter_guest_view_for_pending_guest_subject(
     pending_entries: Query<(Entity, &PendingImmersiveEntry)>,
     guest_subjects: Query<(), With<Guest>>,
@@ -105,6 +106,7 @@ pub(super) fn enter_guest_view_for_pending_guest_subject(
     );
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn enter_first_person_mode_for_pending_navigable_subject(
     pending_entries: Query<(Entity, &PendingImmersiveEntry)>,
     navigable_subjects: Query<

@@ -25,6 +25,7 @@ use crate::camera::camera_execution_types::CameraIntent;
 use crate::camera::camera_execution_types::CameraTransition;
 use crate::camera::camera_execution_types::CameraTuning;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn advance_overhead_camera(
     time: Res<Time<Real>>,
     terrain_index: Res<TerrainIndex>,

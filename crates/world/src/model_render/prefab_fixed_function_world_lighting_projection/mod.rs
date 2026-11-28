@@ -127,6 +127,7 @@ pub(super) fn project_prefab_fixed_function_world_lighting_policies(
     changes.retry_missing(&mut missing);
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_fixed_function_world_light_buffer(
     graphics: Res<GraphicsSettings>,
     ambient_light: Res<GlobalAmbientLight>,

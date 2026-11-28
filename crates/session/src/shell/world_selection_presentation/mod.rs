@@ -27,6 +27,7 @@ use super::world_selection_presentation_types::{
 };
 
 /// Selects the toggle matching the current catalogue filter.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_selected_world_catalogue_filter_into_authored_location_toggle(
     filters: Query<&SelectedWorldCatalogueFilter>,
     documents: Res<Assets<UiDocumentAsset>>,
@@ -87,6 +88,7 @@ pub(super) fn project_selected_world_catalogue_filter_into_authored_location_tog
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn filter_world_choice_rows_by_selected_catalogue_filter(
     filters: Query<Ref<SelectedWorldCatalogueFilter>>,
     active_catalogue: Res<WorldScenarios>,

@@ -50,6 +50,7 @@ fn source_from_world(direction: Vec4) -> Vec4 {
     Vec4::new(direction.x, -direction.z, direction.y, direction.w)
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn write_effect_environment_registers(
     ambient_light: Res<GlobalAmbientLight>,
     directional_lights: Query<(

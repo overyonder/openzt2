@@ -29,6 +29,7 @@ pub(super) fn initialize_authored_animation_event_cursors_for_new_playback_contr
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn execute_crossed_authored_animation_events(
     animation_set_assets: Res<Assets<AnimationSetAsset>>,
     mut changed_animation_playback_controllers: Query<

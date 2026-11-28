@@ -31,6 +31,7 @@ use super::{
     animal_adoption_pricing::resolve_nonnegative_animal_adoption_cost,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_selected_species_adoption_placement_on_construction_cursor(
     mut commands: Commands,
     mut adoption_placement_requests: MessageReader<BeginAnimalAdoptionPlacement>,
@@ -120,6 +121,7 @@ pub(super) fn begin_animal_relocation_on_construction_cursor(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn validate_selected_species_adoption_placement_preview(
     zoo_cash: Res<ZooCash>,
     unlimited_zoo_cash: Option<Res<UnlimitedZooCash>>,
@@ -223,6 +225,7 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn confirm_selected_species_adoption_into_habitat(
     mut commands: Commands,
     primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
@@ -329,6 +332,7 @@ pub(super) fn confirm_selected_species_adoption_into_habitat(
     construction_tool_requests.write(SelectConstructionTool(ConstructionTool::Inspect));
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn clear_animal_adoption_placement_after_construction_tool_change(
     mut commands: Commands,
     construction_tool: Res<ConstructionTool>,

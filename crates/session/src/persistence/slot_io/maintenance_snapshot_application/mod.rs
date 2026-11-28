@@ -104,7 +104,7 @@ pub(super) fn apply_loose_waste_records(
                 prefabs
                     .get(handle)
                     .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?,
-                handle.clone(),
+                handle,
                 world_root,
                 record.definition,
                 id,

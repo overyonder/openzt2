@@ -12,6 +12,7 @@ use openzt2_zoo_state::transport_tours::transport_track_construction_types::Tran
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn refresh_selected_transport_sale_quote(
     mut commands: Commands,
     selected: Res<openzt2_interface_state::information::entity_selection_types::SelectedEntity>,
@@ -41,6 +42,7 @@ pub(crate) fn refresh_selected_transport_sale_quote(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn prepare_transport_track_sale(
     mut commands: Commands,
     mut requests: MessageReader<PrepareDeletion>,

@@ -14,6 +14,7 @@ use openzt2_world_state::simulation_time::simulation_control_types::UiSimulation
 
 /// Synchronizes the pause toggle before input so its image and next `on`/`off`
 /// event reflect changes made by keyboard.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_simulation_pause_state_into_authored_pause_toggle_selection(
     simulation_control: Res<SimulationControl>,
     ui_documents: Res<Assets<UiDocumentAsset>>,
@@ -45,6 +46,7 @@ pub(super) fn project_simulation_pause_state_into_authored_pause_toggle_selectio
 }
 
 /// Shows or hides pause indicators.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_simulation_pause_state_into_authored_paused_node_visibility(
     simulation_control: Res<SimulationControl>,
     mut paused_visibility_nodes: Query<

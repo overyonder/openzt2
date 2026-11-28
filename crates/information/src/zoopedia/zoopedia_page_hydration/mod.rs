@@ -11,6 +11,7 @@ use super::{
     zoopedia_navigation_types::{ZoopediaHistory, ZoopediaPage},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn hydrate_zoopedia_pages_from_authored_root_entry(
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

@@ -107,7 +107,7 @@ fn enter_selected_behavior_set(
     };
     let Some((document, declaration)) = view.find_behavior_set_location(
         program,
-        super::behavior_subject_type_resolution::behavior_subject_type_identifiers(
+        &super::behavior_subject_type_resolution::behavior_subject_type_identifiers(
             subject.0,
             subject.1,
             subject.2,
@@ -138,6 +138,7 @@ fn enter_selected_behavior_set(
 
 /// Plays the set authored for the subject's locomotion medium, falling back
 /// to its ground set.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn play_locomotion_medium_behavior_sets(
     mut commands: Commands,
     lookup: BehaviorSetLookup,
@@ -207,6 +208,7 @@ pub(super) fn play_locomotion_medium_behavior_sets(
 /// A medium-following set ends with its frame. While it plays, a change of
 /// locomotion medium abandons the playing set's actions and runs the switch
 /// again, which selects the set for the new medium.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn switch_medium_following_sets_after_medium_changes(
     mut commands: Commands,
     clock: Res<ZooClock>,
@@ -248,6 +250,7 @@ pub(super) fn switch_medium_following_sets_after_medium_changes(
 
 /// Plays the set authored for the graph node the actor's animation is in,
 /// or the `default` row for any other node.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn play_animation_node_behavior_sets(
     mut commands: Commands,
     lookup: BehaviorSetLookup,

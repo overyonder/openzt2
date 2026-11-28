@@ -13,6 +13,7 @@ use super::{
     staff_job_types::{CurrentJob, StaffJob},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn acknowledge_staff_job_completion_fact_actions_owned_by_terminal_domain_systems(
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     simulation_clock: Res<ZooClock>,

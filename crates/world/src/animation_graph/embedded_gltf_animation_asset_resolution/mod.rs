@@ -11,6 +11,7 @@ use openzt2_world_state::animation_graph::model_animation_asset_binding_types::E
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::ModelAnimationAttachmentResolved;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn resolve_loaded_gltf_animations_into_animation_set_assets(
     mut commands: Commands,
     loaded_gltf_assets: Res<Assets<Gltf>>,

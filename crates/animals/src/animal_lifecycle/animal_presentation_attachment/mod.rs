@@ -28,6 +28,7 @@ pub(super) struct AnimalPresentationPrefabDemand(Handle<ScenePrefabAsset>);
 
 /// Reuse the authored prefab projection used by placement previews. A raw model
 /// omits binder transforms and material overrides, including the fur effect.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn attach_selected_species_variant_models_to_animal_entities(
     mut commands: Commands,
     species_assets: Res<Assets<SpeciesAsset>>,
@@ -125,6 +126,7 @@ pub(super) fn attach_selected_species_variant_models_to_animal_entities(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_authored_initial_animal_animation_repetition_policy_after_attachment(
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,

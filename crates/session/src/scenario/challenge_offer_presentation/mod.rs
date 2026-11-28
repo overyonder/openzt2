@@ -54,6 +54,7 @@ pub(super) fn apply_authored_challenge_panel_requests(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_authored_challenge_panel_text(
     offers: Query<(
         Option<&ScenarioChallengePanelText>,

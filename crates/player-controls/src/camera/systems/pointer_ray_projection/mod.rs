@@ -5,6 +5,7 @@ use openzt2_interface_state::input::input_types::PrimaryPointerInputState;
 use super::super::camera_runtime_state_types::ZooCamera;
 use super::super::world_pointer_ray_types::WorldPointerRay;
 
+#[expect(clippy::needless_pass_by_value)]
 pub fn project_pointer_ray(
     pointer: Res<PrimaryPointerInputState>,
     cameras: Query<(&Camera, &GlobalTransform), With<ZooCamera>>,

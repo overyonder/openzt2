@@ -29,6 +29,7 @@ use super::{
 };
 use crate::terrain::terrain_change_tracking_types::TerrainDirty;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::terrain) fn advance_terrain_caustic_animation(
     mut commands: Commands,
     time: Res<Time>,
@@ -91,6 +92,7 @@ pub(in crate::terrain) fn advance_terrain_caustic_animation(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::terrain) fn project_changed_terrain_caustic_ground_passes(
     mut commands: Commands,
     assets: Res<Assets<TerrainAsset>>,
@@ -220,7 +222,7 @@ pub(in crate::terrain) fn project_changed_terrain_caustic_ground_passes(
                 &mut commands,
                 chunk_entity,
                 owner,
-                meshes.add(mesh),
+                &meshes.add(mesh),
                 &passes,
                 &render_views,
                 &mut materials,
@@ -233,6 +235,7 @@ pub(in crate::terrain) fn project_changed_terrain_caustic_ground_passes(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::terrain) fn update_terrain_caustic_view_bindings(
     assets: Res<Assets<TerrainAsset>>,
     regions: TerrainWaterRegionQuery,
@@ -299,6 +302,7 @@ pub(in crate::terrain) fn update_terrain_caustic_view_bindings(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::terrain) fn despawn_caustic_passes_without_owner_or_view(
     mut commands: Commands,
     regions: TerrainWaterRegionQuery,

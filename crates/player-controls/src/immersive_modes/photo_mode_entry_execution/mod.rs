@@ -15,6 +15,7 @@ use super::immersive_mode_message_types::ModeEntryFailure;
 use super::immersive_mode_state_types::ImmersiveMode;
 use crate::immersive_modes::immersive_control_execution_types::PendingImmersiveEntry;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn enter_photo_mode_when_readback_is_available_and_idle(
     pending_entries: Query<(Entity, &PendingImmersiveEntry)>,
     photo_readback: Option<Res<PhotoReadback>>,

@@ -32,6 +32,7 @@ use types::{
     BehaviorTargetPlacementSiteMarker, BehaviorTargetPlacementStage, PendingBehaviorTargetPlacement,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn prepare_and_finish_behavior_target_placements(
     mut commands: Commands,
     documents: Res<Assets<BehaviorDocumentAsset>>,
@@ -129,7 +130,7 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
                     };
                     let Some((document, declaration)) = view.find_behavior_set_location(
                         action.placement_behavior_set,
-                        super::behavior_subject_type_resolution::behavior_subject_type_identifiers(
+                        &super::behavior_subject_type_resolution::behavior_subject_type_identifiers(
                             species,
                             staff,
                             guest,

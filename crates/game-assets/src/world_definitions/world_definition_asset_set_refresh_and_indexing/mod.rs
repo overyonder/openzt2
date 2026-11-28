@@ -104,6 +104,7 @@ fn world_definition_source_path(path: &Path, binder_directories: &BTreeSet<PathB
     )
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn refresh_world_definition_asset_set_after_archive_revision(
     archives: Res<AssetArchives>,
     server: Res<AssetServer>,
@@ -205,15 +206,16 @@ pub(super) fn refresh_world_definition_asset_set_after_archive_revision(
     definitions.completed_loads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     definitions.loading_task = Some(
         request_world_definition_handles_without_per_asset_frame_waits(
-            server.clone(),
+            &server,
             paths,
-            std::sync::Arc::clone(&definitions.completed_loads),
+            &definitions.completed_loads,
         ),
     );
     definitions.revision = Some(revision);
     definitions.dirty = true;
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_kind(
     server: Res<AssetServer>,
     assets: Res<Assets<WorldDefinitionAsset>>,

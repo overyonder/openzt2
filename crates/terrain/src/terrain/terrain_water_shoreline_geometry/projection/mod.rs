@@ -24,6 +24,7 @@ pub(crate) struct PreparedTerrainShorelineMeshGroups {
 #[derive(Component)]
 pub(crate) struct TerrainShorelineGeometryProjected;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_changed_terrain_shoreline_geometry(
     mut commands: Commands,
     assets: Res<Assets<TerrainAsset>>,

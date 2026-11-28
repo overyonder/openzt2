@@ -57,6 +57,7 @@ pub(super) struct GuestSubjectTaskIndex {
     by_subject_types: HashMap<Vec<AssetId>, Vec<(Handle<BehaviorDocumentAsset>, usize)>>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn select_idle_guest_tasks(
     (documents, assets, mut subject_tasks): (
         Res<LoadedBehaviorDocumentCollection>,

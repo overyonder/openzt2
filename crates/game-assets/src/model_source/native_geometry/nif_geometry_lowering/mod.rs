@@ -145,7 +145,7 @@ pub(in crate::model_source) fn lower_netimmerse_geometry_block(
     let native_material =
         lower_netimmerse_native_material(document, block, geometry, &mut resolve_texture)?;
     let (vertices, indices) = if flat_shaded {
-        flat_shade(vertices, &indices)
+        flat_shade(&vertices, &indices)
     } else {
         (vertices, indices)
     };
@@ -171,7 +171,7 @@ pub(in crate::model_source) fn lower_netimmerse_geometry_block(
     })
 }
 
-fn flat_shade(vertices: Vec<VertexSource>, indices: &[u32]) -> (Vec<VertexSource>, Vec<u32>) {
+fn flat_shade(vertices: &[VertexSource], indices: &[u32]) -> (Vec<VertexSource>, Vec<u32>) {
     let mut output = Vec::with_capacity(indices.len());
     for triangle in indices.chunks_exact(3) {
         let [a, b, c] = [

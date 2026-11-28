@@ -43,6 +43,7 @@ pub(super) fn register_target_morph_execution(application: &mut App) {
 
 // Only a fence's `s_Broken` morph is applied; the shipped tasks
 // morph nothing else, and any other target keeps its type.
+#[expect(clippy::needless_pass_by_value)]
 fn morph_current_behavior_targets(
     mut commands: Commands,
     clock: Res<ZooClock>,

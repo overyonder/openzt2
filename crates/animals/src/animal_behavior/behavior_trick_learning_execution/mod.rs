@@ -10,6 +10,7 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::shows::performer_training::PerformerTraining;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_current_authored_trick_learning(
     mut commands: Commands,
     documents: Res<Assets<BehaviorDocumentAsset>>,

@@ -65,6 +65,7 @@ mod tests {
 
 /// Projects one canonical view-filter policy to both live world visibility and
 /// authored toggle selection.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_information_view_filters_to_world_entities_and_authored_controls(
     mut commands: Commands,
     filters: Res<InformationViewFilters>,

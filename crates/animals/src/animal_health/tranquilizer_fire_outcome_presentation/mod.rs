@@ -8,6 +8,7 @@ use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
 
 use super::types::{TranquilizerFireOutcome, TranquilizerFired};
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn present_tranquilizer_fire_audio_and_particle_effects(
     mut fired_messages: MessageReader<TranquilizerFired>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

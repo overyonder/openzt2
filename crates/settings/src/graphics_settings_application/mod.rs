@@ -23,6 +23,7 @@ pub(super) fn validate_and_accept_requested_graphics_settings(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_accepted_shadow_detail_to_environment_lights(
     settings: Res<GraphicsSettings>,
     mut shadow_map: ResMut<DirectionalLightShadowMap>,
@@ -44,6 +45,7 @@ pub(super) fn apply_accepted_shadow_detail_to_environment_lights(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_accepted_multisample_count_to_zoo_cameras(
     mut commands: Commands,
     settings: Res<GraphicsSettings>,
@@ -57,6 +59,7 @@ pub(super) fn apply_accepted_multisample_count_to_zoo_cameras(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn graphics_settings_changed_or_render_target_was_added(
     settings: Res<GraphicsSettings>,
     cameras: Query<(), Added<ZooCamera>>,
@@ -65,6 +68,7 @@ pub(super) fn graphics_settings_changed_or_render_target_was_added(
     settings.is_changed() || !cameras.is_empty() || !lights.is_empty()
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_accepted_ui_text_shadow_setting(
     mut commands: Commands,
     settings: Res<GraphicsSettings>,

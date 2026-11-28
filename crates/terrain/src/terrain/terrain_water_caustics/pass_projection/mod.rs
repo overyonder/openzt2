@@ -12,7 +12,7 @@ pub(super) fn spawn_camera_specific_caustic_ground_passes(
     commands: &mut Commands,
     chunk_entity: Entity,
     water_owner: Entity,
-    mesh: Handle<Mesh>,
+    mesh: &Handle<Mesh>,
     templates: &[EffectPassMaterial],
     render_views: &[(Entity, usize)],
     materials: &mut Assets<EffectPassMaterial>,

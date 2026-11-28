@@ -22,6 +22,7 @@ use super::{
     },
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_bevy_renderer_entities_for_new_world_environment(
     mut commands: Commands,
     environments: Query<

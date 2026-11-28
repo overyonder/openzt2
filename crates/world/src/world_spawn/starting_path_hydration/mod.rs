@@ -21,6 +21,7 @@ use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 /// Place the starting paths on the terrain grid.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_all_starting_paths_into_topology_once(
     mut commands: Commands,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,

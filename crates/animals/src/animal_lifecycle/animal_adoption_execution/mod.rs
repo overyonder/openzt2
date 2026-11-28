@@ -36,6 +36,7 @@ pub(super) struct CompletedAnimalAdoptionPayment;
 #[derive(Component)]
 pub(super) struct AnimalAdoptionRefund;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
     mut commands: Commands,
     mut adoption_requests: MessageReader<AdoptAnimal>,

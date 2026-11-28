@@ -106,6 +106,7 @@ fn queue_terminal_result_when_all_objectives_are_terminal(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_terminal_scenario_results_and_remove_completed_challenges(
     mut commands: Commands,
     mut sessions: Query<

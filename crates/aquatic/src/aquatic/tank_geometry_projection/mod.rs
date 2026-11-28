@@ -15,6 +15,7 @@ use openzt2_game_assets::world_definitions::{
 };
 
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
     mut habitat_changes: MessageReader<HabitatChanged>,
     mut terrain_changes: MessageReader<TerrainChanged>,

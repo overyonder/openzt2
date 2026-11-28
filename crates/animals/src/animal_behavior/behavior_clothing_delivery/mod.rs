@@ -17,6 +17,7 @@ use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_n
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn finish_clothing_delivery(
     mut commands: Commands,
     clock: Res<ZooClock>,

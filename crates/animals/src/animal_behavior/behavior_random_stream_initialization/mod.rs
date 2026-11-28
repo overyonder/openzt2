@@ -9,6 +9,7 @@ use openzt2_zoo_state::staff::staff_employment_types::Staff;
 
 use super::behavior_random_stream_state::BehaviorRandomStream;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn attach_behavior_random_stream_to_animals_and_staff(
     zoo_seed: Res<ZooSeed>,
     actors_without_behavior_random_stream: Query<

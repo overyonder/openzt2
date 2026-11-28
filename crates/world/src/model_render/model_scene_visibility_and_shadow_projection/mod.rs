@@ -14,6 +14,7 @@ mod tests;
 #[derive(Component)]
 pub(super) struct ModelSceneVisibilityAndShadowPolicyProjected;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn invalidate_model_scene_visibility_and_shadow_policy_on_world_instance_ready(
     ready: On<WorldInstanceReady>,
     mut commands: Commands,

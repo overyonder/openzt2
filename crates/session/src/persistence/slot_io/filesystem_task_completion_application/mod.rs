@@ -27,6 +27,7 @@ use super::{
     world_snapshot_section_encoding::decode_and_validate_world_snapshot_section,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in super::super) fn apply_completed_persistence_slot_filesystem_tasks(
     mut commands: Commands,
     mut persistence_slot_filesystem_tasks: Query<(

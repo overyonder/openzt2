@@ -9,6 +9,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::world_unloading::queue_owned_hierarchy_roots_for_retirement;
 use openzt2_world_state::world_spawn::world_unloading::UnloadWorld;
 
+#[expect(clippy::needless_pass_by_value)]
 pub fn unload_requested_worlds_and_their_members(
     mut commands: Commands,
     mut requests: MessageReader<UnloadWorld>,

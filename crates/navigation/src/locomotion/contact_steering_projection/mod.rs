@@ -6,6 +6,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 
 #[allow(clippy::type_complexity)]
 /// Derives steering constraints from touching contacts with finite normals.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_avian_contacts_into_navigation_steering(
     time: Res<Time<Fixed>>,
     collisions: Collisions,

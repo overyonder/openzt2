@@ -11,6 +11,7 @@ struct SelectionAttempts {
     accepted_updates: Vec<u64>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn record_guest_selection_attempts(
     clock: Res<ZooClock>,
     mut actors: Query<
@@ -28,6 +29,7 @@ fn record_guest_selection_attempts(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn record_staff_selection_attempts(
     clock: Res<ZooClock>,
     mut actors: Query<

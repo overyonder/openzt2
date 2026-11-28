@@ -9,6 +9,7 @@ use openzt2_zoo_state::progression::fame_types::Fame;
 use openzt2_zoo_state::progression::profile_challenge_types::TotalEndangeredAnimalBirthCount;
 use openzt2_zoo_state::progression::rating_types::ZooRating;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_live_zoo_status_to_authored_information_bindings(
     cash: Option<Res<ZooCash>>,
     fame: Option<Res<Fame>>,

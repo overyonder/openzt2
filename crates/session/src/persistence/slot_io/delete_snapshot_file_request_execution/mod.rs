@@ -22,6 +22,7 @@ use super::{
     },
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in super::super) fn begin_deleting_requested_save_slot_snapshot_file(
     mut commands: Commands,
     mut delete_requests: MessageReader<DeleteWorldSnapshotFromSlot>,

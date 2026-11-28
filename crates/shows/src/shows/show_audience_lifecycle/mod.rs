@@ -18,6 +18,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::Destination;
     clippy::type_complexity,
     reason = "cleanup also visits guests that lost required owner components"
 )]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn synchronize_authored_show_attendance(
     mut commands: Commands,
     assets: Res<Assets<BehaviorDocumentAsset>>,

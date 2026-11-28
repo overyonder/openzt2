@@ -18,6 +18,7 @@ use openzt2_interface_state::shell::shell_selection_types::ProfileChoice;
 use openzt2_interface_state::shell::shell_selection_types::ShellScreen;
 
 /// Resizes the profile list after the index loads or the list appears.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_authored_profile_selection_list_row_count(
     mut ready: MessageReader<ProfileIndexReady>,
     index: Res<ProfileIndex>,
@@ -39,6 +40,7 @@ pub(super) fn request_authored_profile_selection_list_row_count(
 
 /// Gives each row its profile identity and label. Child controls receive the
 /// index used by their rename and delete actions.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_profile_index_entries_into_authored_rows(
     mut commands: Commands,
     index: Res<ProfileIndex>,
@@ -120,6 +122,7 @@ fn project_profile_index_entry_into_authored_row_subtree(
 }
 
 /// Fills the selected profile's name when the main-menu text node appears.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_selected_profile_name_into_new_main_menu_nodes(
     index: Res<ProfileIndex>,
     mut nodes: Query<(&UiTextBinding, &UiDocumentOwner, &mut Text), Added<UiTextBinding>>,
@@ -140,6 +143,7 @@ pub(super) fn project_selected_profile_name_into_new_main_menu_nodes(
 
 /// Refreshes the same authored node only when persistence reports a completed
 /// load or selection. There is no per-frame profile catalogue scan.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn refresh_selected_profile_name_after_profile_index_changes(
     mut ready: MessageReader<ProfileIndexReady>,
     mut selected: MessageReader<ProfileSelected>,

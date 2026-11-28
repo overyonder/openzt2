@@ -1,7 +1,7 @@
 use mlua::Value;
 
-pub fn convert_integral_lua_number_to_i64(lua_value: Value) -> Option<i64> {
-    match lua_value {
+pub fn convert_integral_lua_number_to_i64(lua_value: &Value) -> Option<i64> {
+    match *lua_value {
         Value::Integer(lua_integer) => Some(lua_integer),
         Value::Number(lua_number)
             if lua_number.is_finite()

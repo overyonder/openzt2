@@ -47,6 +47,7 @@ pub(super) struct KeeperLandApproach<'w, 's> {
     candidates: Local<'s, Vec<Vec3>>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn start_current_supported_behavior_move_actions(
     mut commands: Commands,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
@@ -255,6 +256,7 @@ enum BehaviorMoveDestinationResolutionFailure {
 /// plain destination (no dock target) and the exact originating action/request.
 /// Locomotion owns arrival tolerance; GlobalTransform can still precede its
 /// latest fixed-step Transform update when this message is consumed.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn finish_behavior_move_actions_after_matching_arrival(
     mut commands: Commands,
     mut arrivals: MessageReader<Arrived>,

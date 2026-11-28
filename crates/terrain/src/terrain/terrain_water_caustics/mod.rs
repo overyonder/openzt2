@@ -38,10 +38,9 @@ pub(super) fn bind_caustic_textures(
     ) else {
         return false;
     };
-    let bottom_bound =
-        pass.replace_texture_asset_for_effect_semantic("CausticMap0", bottom.clone());
-    let top_bound = pass.replace_texture_asset_for_effect_semantic("CausticMap1", top.clone());
-    let height_bound = pass.replace_texture_asset_for_effect_semantic("HeightLUT", height.clone());
+    let bottom_bound = pass.replace_texture_asset_for_effect_semantic("CausticMap0", bottom);
+    let top_bound = pass.replace_texture_asset_for_effect_semantic("CausticMap1", top);
+    let height_bound = pass.replace_texture_asset_for_effect_semantic("HeightLUT", height);
     bottom_bound
         && top_bound
         && (height_bound || pass.has_vertex_float_effect_semantic("HeightRamp"))

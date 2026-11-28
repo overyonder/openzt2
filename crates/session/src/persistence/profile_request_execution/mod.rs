@@ -37,6 +37,7 @@ use super::{
 #[cfg(test)]
 mod tests;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_loading_profile_index(
     mut commands: Commands,
     mut profile_index_load_requests: MessageReader<LoadProfileIndex>,
@@ -94,6 +95,7 @@ pub(super) fn begin_loading_profile_index(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_creating_requested_profiles(
     mut commands: Commands,
     mut profile_creation_requests: MessageReader<CreateProfile>,
@@ -270,6 +272,7 @@ impl ActiveProfileSettings<'_> {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_selecting_requested_profiles(
     mut commands: Commands,
     mut profile_selection_requests: MessageReader<SelectProfile>,
@@ -376,6 +379,7 @@ pub(super) fn begin_selecting_requested_profiles(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_deleting_requested_profiles(
     mut commands: Commands,
     mut profile_deletion_requests: MessageReader<DeleteProfile>,
@@ -478,6 +482,7 @@ pub(super) fn begin_deleting_requested_profiles(
 }
 
 /// Saves the latest settings once the previous profile operation has finished.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_persisting_changed_active_profile_options(
     mut commands: Commands,
     profile_options: Res<ProfileOptions>,

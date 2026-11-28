@@ -32,6 +32,7 @@ pub(super) struct OverheadInformationDismissalTargets<'w> {
 /// Consumes only gameplay-shell outcomes. Menu navigation remains in
 /// `route_authored_shell_ui_actions_to_navigation_requests`; persistence
 /// remains owned by persistence.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_authored_in_game_shell_ui_actions(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,

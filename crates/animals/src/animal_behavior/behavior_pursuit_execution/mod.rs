@@ -125,6 +125,7 @@ fn record_pursuit_navigation_results(
 /// relocation, or while the target's own running task outscores the
 /// pursuer's.
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 fn fail_pursuits_of_unavailable_targets(
     mut commands: Commands,
     clock: Res<ZooClock>,
@@ -172,6 +173,7 @@ fn fail_pursuits_of_unavailable_targets(
     clippy::too_many_arguments,
     clippy::too_many_lines
 )]
+#[expect(clippy::needless_pass_by_value)]
 fn advance_current_pursuit_actions(
     mut commands: Commands,
     clock: Res<ZooClock>,
@@ -340,6 +342,7 @@ fn advance_current_pursuit_actions(
 /// Reads locomotion's answer to this step's direct requests, so a direct leg
 /// that starts inside the hit radius completes in the same step.
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 fn settle_pursuits_after_navigation_acceptance(
     mut commands: Commands,
     clock: Res<ZooClock>,

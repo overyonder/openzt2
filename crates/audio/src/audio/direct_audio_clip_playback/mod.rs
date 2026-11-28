@@ -11,6 +11,7 @@ use super::{
     audio_player_spawning::{spawn_audio_player_or_deferred_playback, AudioCueSelection},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn execute_direct_audio_clip_playback_requests(
     mut commands: Commands,
     mut requests: MessageReader<PlayAudioClip>,

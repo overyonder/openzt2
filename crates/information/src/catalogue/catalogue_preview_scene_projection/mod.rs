@@ -83,6 +83,7 @@ pub(crate) struct CataloguePreviewAnimationAttachmentConsidered;
 /// by the authored buy-details panel. The scene is presentation-only: the
 /// selected definition remains the sole catalogue state and no gameplay
 /// entity, physics body, or copied object record is created.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
@@ -332,6 +333,7 @@ pub(crate) fn synchronize_catalogue_preview_camera_activity_with_authored_image_
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn hydrate_catalogue_preview_scene_prefab_render_trees(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,
@@ -352,6 +354,7 @@ pub(crate) fn hydrate_catalogue_preview_scene_prefab_render_trees(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn attach_loaded_species_animation_to_catalogue_preview_renderables(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -390,6 +393,7 @@ pub(crate) fn attach_loaded_species_animation_to_catalogue_preview_renderables(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn apply_authored_catalogue_preview_initial_animation_repetition_policy_after_attachment(
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,

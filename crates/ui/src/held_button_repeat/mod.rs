@@ -13,6 +13,7 @@ pub(super) struct UiButtonHold {
     interval_seconds: f32,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn repeat_held_buttons(
     time: Res<Time>,
     mut buttons: Query<(

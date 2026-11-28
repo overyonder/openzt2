@@ -27,6 +27,7 @@ use super::autonomous_task_selection::candidate_facts::AnimalCandidateFacts;
 use super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes;
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn expose_animals_to_authored_diseases(
     mut commands: Commands,
     clock: Res<ZooClock>,
@@ -215,6 +216,7 @@ impl DiseaseExposureWorld<'_, '_, '_> {
 
 /// A cured animal drops the disease's pending tokens, its authored
 /// `clearTokens`, so it doesn't fall ill or spread the disease again at once.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn clear_authored_disease_tokens_when_cured(
     cured: On<Remove<Disease>>,
     mut commands: Commands,

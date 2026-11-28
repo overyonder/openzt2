@@ -72,6 +72,7 @@ pub(super) fn sample_task_delay_ticks(delay_seconds: [f32; 2], unit: f32, fixed_
 }
 
 /// Starts each delayed task's cooldown when its execution ends, either way.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn start_animal_task_cooldowns_after_delayed_tasks_end(
     clock: Res<ZooClock>,
     mut finished: MessageReader<BehaviorTaskFinished>,

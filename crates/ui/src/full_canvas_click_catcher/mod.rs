@@ -26,6 +26,7 @@ impl UiFullCanvasClickCatcher {
 /// Hides an authored full-canvas click catcher when it is pressed or when its
 /// authored visible lifetime elapses. The same activation remains available
 /// to the catcher's typed action consumers.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hide_activated_or_elapsed_full_canvas_click_catchers(
     time: Res<Time<Real>>,
     mut activations: MessageReader<UiNodeActivated>,

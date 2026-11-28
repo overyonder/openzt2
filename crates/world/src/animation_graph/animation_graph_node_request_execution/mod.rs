@@ -13,6 +13,7 @@ use openzt2_world_state::animation_graph::animation_graph_transition_operations:
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::ModelAnimationAssetLibrary;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn execute_animation_graph_node_playback_requests(
     animation_set_assets: Res<Assets<AnimationSetAsset>>,
     mut animation_graph_node_playback_requests: MessageReader<AnimationGraphNodePlaybackRequest>,

@@ -6,6 +6,7 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::NaturalWaterRe
 
 use super::audio_environment_types::AudioStage;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_changed_water_regions_and_tanks_into_audio_stages(
     mut commands: Commands,
     audio_assets: Res<Assets<AudioAsset>>,

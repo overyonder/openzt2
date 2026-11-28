@@ -22,6 +22,7 @@ use super::super::projection::text_replacement_operations::replace_projected_ui_
 
 // Progression bindings combine calendar, fame, awards and rating values.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_progression_status_to_authored_information_bindings(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,

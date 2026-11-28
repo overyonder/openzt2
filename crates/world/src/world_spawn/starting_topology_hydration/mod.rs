@@ -28,6 +28,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 /// Installs source-resolved starting fence endpoints and edges into the same
 /// ECS topology used by construction. Legacy fence entities and their
 /// position/rotation encoding do not reach the runtime.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
     mut commands: Commands,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,

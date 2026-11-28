@@ -12,6 +12,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::staff_employment_types::{Employment, PendingWagePayment, Staff};
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn request_staff_wage_payments_on_first_day_of_month(
     mut commands: Commands,
     mut days: MessageReader<ZooDayAdvanced>,

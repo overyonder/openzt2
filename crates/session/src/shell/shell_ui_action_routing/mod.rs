@@ -36,6 +36,7 @@ pub(super) struct ShellUiActionMessageWriters<'w> {
     exit_application: MessageWriter<'w, ExitApplication>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_authored_shell_ui_actions_to_navigation_requests(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,

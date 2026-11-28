@@ -7,6 +7,7 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 use super::show_stage_types::{ShowStage, ShowStageHydrated, ShowStageOpenState};
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn identify_and_hydrate_spawned_show_stage_world_objects(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

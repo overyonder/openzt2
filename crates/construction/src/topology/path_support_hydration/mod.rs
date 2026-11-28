@@ -52,6 +52,7 @@ const FIT_LOWEST_SAMPLE_DIRECTIONS: [Vec2; 9] = [
 ];
 
 /// Adds a support beneath each elevated tile, anchored at the terrain height.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_authored_path_supports_at_sampled_terrain_height(
     mut commands: Commands,
     paths: Query<(Entity, &PathTile, &WorldMember), Without<PathSupportHydrated>>,
@@ -196,6 +197,7 @@ pub(super) fn remove_path_supports_after_their_owning_path_is_removed(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn invalidate_path_supports_after_topology_or_terrain_changes(
     mut commands: Commands,
     mut topology_changes: MessageReader<

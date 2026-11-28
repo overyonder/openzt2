@@ -143,6 +143,7 @@ fn ancestors(
     .take(document.nodes.len())
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_scenario_ui_commands(
     mut requests: MessageReader<ScenarioUiCommand>,
     mut pending: ResMut<PendingScenarioUi>,

@@ -189,6 +189,7 @@ impl ObjectPlacementHeadroomQueries<'_, '_> {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_authoritative_facts_onto_object_placement_previews(
     cash: Res<ZooCash>,
     unlimited_cash: Option<Res<UnlimitedZooCash>>,

@@ -119,6 +119,7 @@ fn archive_name<'a>(
         .unwrap_or_default()
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn report_asset_failures(
     mut events: MessageReader<UntypedAssetLoadFailedEvent>,
     archives: Res<AssetArchives>,
@@ -134,6 +135,7 @@ fn report_asset_failures(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn report_loaded<T: Asset>(
     mut events: MessageReader<AssetEvent<T>>,
     server: Res<AssetServer>,
@@ -155,6 +157,7 @@ fn report_loaded<T: Asset>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 fn exercise_freeform(
     mut audit: ResMut<Audit>,
     phase: Res<State<GamePhase>>,

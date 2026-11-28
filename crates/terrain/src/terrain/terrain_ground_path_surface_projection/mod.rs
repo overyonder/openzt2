@@ -81,6 +81,7 @@ struct GroundPathSurfaceOverlay {
 }
 
 /// Keeps path masks and surface textures loaded while terrain images use them.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn retain_ground_path_surface_image_dependencies(
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -112,6 +113,7 @@ pub(super) fn retain_ground_path_surface_image_dependencies(
 /// path surface. Asset reloads invalidate all chunks because an existing mask
 /// or path texture may have changed without topology changing.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn mark_terrain_chunks_requiring_ground_path_surface_recomposition(
     mut commands: Commands,
     mut topology_changed: MessageReader<TopologyChanged>,
@@ -276,6 +278,7 @@ pub(super) fn mark_terrain_chunks_under_changed_painted_textures(
 /// Rebuilds a terrain chunk's base image and applies the
 /// ground-path surface-patch records directly to that owned image.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
     mut commands: Commands,
     mut reported_surface_readiness: Local<Option<(usize, usize, usize)>>,

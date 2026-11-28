@@ -32,6 +32,7 @@ use openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectTerra
 /// committed a height edit. The full footprint is validated before the
 /// transform is changed, so a failed support update cannot partially move an
 /// object or alter occupancy.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn reconcile_static_placed_object_support_after_terrain_changes(
     mut changes: MessageReader<TerrainNavigationChanged>,
     terrain_index: Res<TerrainIndex>,

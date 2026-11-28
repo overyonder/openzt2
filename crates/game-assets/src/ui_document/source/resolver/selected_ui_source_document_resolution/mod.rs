@@ -262,9 +262,9 @@ pub(in crate::ui_document::source) fn resolve_selected_ui_source_documents_to_ro
         &templates,
         &row_template_names,
         &image_selections,
-        interaction_cursors,
-        placement_preview,
-        resolved_dependencies,
+        interaction_cursors.as_ref(),
+        placement_preview.as_ref(),
+        &resolved_dependencies,
         resolution_profile,
     )
 }

@@ -25,6 +25,7 @@ use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivat
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn interact_with_globe(
     active_input: Res<ActiveInputDevice>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -134,6 +135,7 @@ fn ray_box_distance(
 }
 
 /// Turns the selected map location toward the camera over the authored move time.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn target_selected_globe_marker(
     mut commands: Commands,
     selection: Res<ShellSelection>,
@@ -204,6 +206,7 @@ pub(crate) fn target_selected_globe_marker(
     ));
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn turn_globe_to_selection(
     mut commands: Commands,
     time: Res<Time>,
@@ -222,6 +225,7 @@ pub(crate) fn turn_globe_to_selection(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn rotate_globe(
     mut commands: Commands,
     primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,

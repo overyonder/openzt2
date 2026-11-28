@@ -8,6 +8,7 @@ use super::{
     zoo_calendar_calculation::calculate_zoo_calendar_for_absolute_day,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn advance_authoritative_zoo_clock_and_calendar(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

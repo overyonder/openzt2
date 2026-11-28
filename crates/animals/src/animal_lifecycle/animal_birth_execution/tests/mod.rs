@@ -96,7 +96,7 @@ fn install_species(app: &mut App, document: &SpeciesDocument) {
         .add(SpeciesAsset::from_test_document(document.clone()));
     app.world_mut()
         .resource_mut::<SpeciesAssets>()
-        .index_test_document(handle, document);
+        .index_test_document(&handle, document);
 }
 
 #[test]

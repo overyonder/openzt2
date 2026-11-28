@@ -15,6 +15,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::Route;
 use openzt2_zoo_state::locomotion::locomotion_types::RouteScratch;
 use openzt2_zoo_state::locomotion::locomotion_types::TestReachability;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn test_requested_navigation_destination_reachability(
     mut reachability_test_requests: MessageReader<TestReachability>,
     mut reachability_test_results: MessageWriter<ReachabilityTested>,

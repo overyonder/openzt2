@@ -30,6 +30,7 @@ use crate::camera::camera_execution_types::CameraIntent;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiCameraActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_camera_ui_actions(
     (mut activations, mut direct_actions): (
         MessageReader<UiNodeActivated>,

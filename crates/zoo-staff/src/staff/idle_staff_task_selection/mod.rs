@@ -60,6 +60,7 @@ pub(crate) struct IdleStaffTask {
     execution_id: u64,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn start_authored_idle_staff_tasks(
     mut commands: Commands,
     documents: Res<LoadedBehaviorDocumentCollection>,
@@ -359,6 +360,7 @@ use openzt2_zoo_state::staff::staff_tank_gate_types::StaffExitTankGate;
 
 /// Chooses an outside endpoint across an actual tank gate. The navigation
 /// owner approaches and traverses that gate before completing this request.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn execute_staff_exit_tank_gate_actions(
     mut commands: Commands,
     clock: Res<ZooClock>,
@@ -493,6 +495,7 @@ pub(crate) fn execute_staff_exit_tank_gate_actions(
 // Only staff without a job or task react; a frightened keeper on a
 // job finishes it first.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn start_staff_token_tasks(
     mut commands: Commands,
     documents: Res<LoadedBehaviorDocumentCollection>,

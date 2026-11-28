@@ -126,6 +126,7 @@ pub(super) struct BehaviorTargetPlacementCreation<'w, 's> {
     payments: MessageWriter<'w, TransactionRequest>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_behavior_target_placements(
     mut commands: Commands,
     definitions: Res<WorldDefinitions>,
@@ -231,6 +232,7 @@ pub(super) fn apply_behavior_target_placements(
     clippy::too_many_arguments,
     reason = "settlement borrows the placement owner's live state"
 )]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn settle_behavior_target_placement_payments(
     mut commands: Commands,
     definitions: Res<WorldDefinitions>,

@@ -22,6 +22,7 @@ use super::photo_album_types::{
 /// The native album component starts a move while dragging an exposure and
 /// dispatches the hovered selection's action on release. Reuse those same
 /// authored controls so their enable/disable and overlay actions also execute.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_photo_exposure_pointer_drag_to_authored_album_controls(
     primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
     active_input: Res<ActiveInputDevice>,

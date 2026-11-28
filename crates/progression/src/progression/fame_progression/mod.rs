@@ -49,6 +49,7 @@ pub(super) fn apply_scenario_maximum_fame_requests(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_fame_and_apply_authored_fame_unlocks(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

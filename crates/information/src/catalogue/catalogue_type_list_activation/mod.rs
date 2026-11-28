@@ -26,6 +26,7 @@ use openzt2_interface_state::information::catalogue_types::TypeListFilter;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiTypeListPolicy;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
     mut commands: Commands,
     mut ui_node_activations: MessageReader<UiNodeActivated>,
@@ -322,6 +323,7 @@ mod tests {
 /// otherwise use the first included and available entry in authored purchase
 /// order. Same-update row presses suppress this fallback so explicit selection
 /// wins. The native inherited toggle-set selection belongs to each list.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn choose_catalogue_entry_from_activated_type_list(
     mut commands: Commands,
     mut ui_node_activations: MessageReader<UiNodeActivated>,

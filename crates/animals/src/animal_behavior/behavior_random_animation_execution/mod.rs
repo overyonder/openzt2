@@ -18,6 +18,7 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationCl
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestRng;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn start_next_random_behavior_animation(
     mut commands: Commands,
     documents: Res<Assets<BehaviorDocumentAsset>>,

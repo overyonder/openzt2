@@ -12,6 +12,7 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRe
 pub(super) mod wake_mesh_emission;
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn present_authored_water_surface_spray_samples(
     mut samples: MessageReader<WaterSurfaceSpraySample>,
     surfaces: TerrainWaterRegionQuery,

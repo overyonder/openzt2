@@ -15,6 +15,7 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::{TerrainWaterM
 use super::authored_water_surface_impact_projection::sample_accepted_water_surface;
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_animation_surface_effects_into_water_disturbances(
     mut requests: MessageReader<AnimationObjectCommand>,
     transforms: Query<&GlobalTransform>,

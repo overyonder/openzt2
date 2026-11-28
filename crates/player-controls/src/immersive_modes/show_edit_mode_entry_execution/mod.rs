@@ -18,6 +18,7 @@ use super::immersive_mode_state_types::ImmersiveMode;
 use crate::immersive_modes::immersive_control_execution_types::PendingImmersiveEntry;
 use crate::immersive_modes::immersive_control_execution_types::ShowEditControl;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn enter_show_edit_for_pending_stage_with_information_panel(
     pending_entries: Query<(Entity, &PendingImmersiveEntry)>,
     show_stages: Query<(&ShowStage, &ScheduledShowPerformancePlan)>,

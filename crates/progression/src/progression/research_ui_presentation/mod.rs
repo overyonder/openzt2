@@ -25,6 +25,7 @@ use super::catalogue_entry_availability::{
 use super::research_types::{PendingResearchProjectPayment, ResearchProject};
 use super::unlock_types::UnlockedCatalogueDefinitionSet;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_selected_catalogue_research_panels(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -106,6 +107,7 @@ pub(super) fn project_selected_catalogue_research_panels(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_selected_catalogue_research_progress(
     selected: Res<SelectedCatalogueEntry>,
     definitions: Res<Assets<WorldDefinitionAsset>>,

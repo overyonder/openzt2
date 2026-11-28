@@ -15,6 +15,7 @@ use openzt2_zoo_state::terrain::terrain_collision_rebuilding_types::TerrainColli
 use openzt2_zoo_state::terrain::terrain_collision_rebuilding_types::TerrainCollisionRevision;
 use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_terrain_sample_height_centimetres;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn rebuild_pending_terrain_chunk_collisions_within_tick_budget(
     mut commands: Commands,
     budget: Res<TerrainCollisionBudget>,

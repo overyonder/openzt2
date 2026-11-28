@@ -70,6 +70,7 @@ pub(super) fn apply_wait_cursor_requests(
 
 /// Projects the depth-resolved authored cursor directly onto Bevy's primary
 /// window. The image handle remains owned by the loaded UI document.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn present_cursor(
     phase: Res<State<openzt2_game_assets::application_lifecycle::GamePhase>>,
     wait: Res<WaitCursor>,

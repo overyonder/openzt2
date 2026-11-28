@@ -30,6 +30,7 @@ fn scenario_catalogue_path(path: &Path) -> bool {
         || matches!(path.as_str(), "maps/index.xml" | "maps/scenario/index.xml")
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn refresh_world_scenario_asset_set_after_archive_revision(
     archives: Res<AssetArchives>,
     server: Res<AssetServer>,
@@ -51,6 +52,7 @@ pub(super) fn refresh_world_scenario_asset_set_after_archive_revision(
     scenarios.dirty = true;
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub fn index_loaded_world_scenario_assets_by_identifier(
     server: Res<AssetServer>,
     assets: Res<Assets<WorldScenarioDocumentAsset>>,

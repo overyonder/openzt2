@@ -15,6 +15,7 @@ use openzt2_zoo_state::guests::guest_simulation_types::{Guest, GuestArchetype, G
 use super::{donation_opportunity_types::DonationOpportunity};
 use openzt2_zoo_state::donations::donation_payment_types::DonationPaymentRequested;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_animal_donation_opportunities(
     mut commands: Commands,
     species_assets: Res<Assets<SpeciesAsset>>,
@@ -62,6 +63,7 @@ pub(super) fn hydrate_animal_donation_opportunities(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn observe_donation_opportunities_after_applied_viewing_reactions(
     mut commands: Commands,
     mut reactions: MessageReader<GuestReactionApplied>,

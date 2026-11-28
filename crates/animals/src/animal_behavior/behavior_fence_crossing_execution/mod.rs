@@ -46,6 +46,7 @@ pub(crate) fn mirror_across_fence(point: Vec3, first: Vec3, second: Vec3) -> Vec
     Vec3::new(mirrored.x, point.y, mirrored.y)
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn carry_animals_across_their_crossed_fences(
     mut commands: Commands,
     mut finished: MessageReader<BehaviorTaskFinished>,

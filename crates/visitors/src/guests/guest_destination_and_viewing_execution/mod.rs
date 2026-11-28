@@ -69,6 +69,7 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn choose_guest_destination(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -574,6 +575,7 @@ pub(crate) fn cancel_failed_guest_destinations(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn begin_viewing(
     mut service_request_sequence: ResMut<ServiceRequestSequence>,
     mut arrived: MessageReader<Arrived>,
@@ -672,6 +674,7 @@ pub(crate) fn begin_viewing(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn advance_viewing(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -744,6 +747,7 @@ pub(crate) fn advance_viewing(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn react_to_visible_litter(
     grid: Res<SpatialGrid>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -784,6 +788,7 @@ pub(crate) fn react_to_visible_litter(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_viewing_opportunities(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

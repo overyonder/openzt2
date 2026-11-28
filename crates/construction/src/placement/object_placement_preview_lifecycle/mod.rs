@@ -45,6 +45,7 @@ use openzt2_zoo_state::placement::placement_preview_types::PlacementRotationRequ
 use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject;
 use openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectRelocationSource;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn create_active_object_placement_preview(
     mut commands: Commands,
     tool: Res<ConstructionTool>,
@@ -162,6 +163,7 @@ pub(super) fn create_active_object_placement_preview(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_object_placement_preview_prefab_render_tree(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,
@@ -270,6 +272,7 @@ fn species_variant_for_placement_preview_model<'a>(
     })
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_authored_initial_animal_placement_preview_animation_repetition_policy(
     species_assets: Option<Res<Assets<SpeciesAsset>>>,
     species_index: Option<Res<SpeciesAssets>>,
@@ -318,6 +321,7 @@ pub(super) fn apply_authored_initial_animal_placement_preview_animation_repetiti
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn synchronize_object_placement_preview_with_construction_cursor(
     cursors: Query<Ref<ConstructionCursor>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -394,6 +398,7 @@ pub(super) fn synchronize_object_placement_preview_with_construction_cursor(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn animate_object_placement_preview_presentation_toward_authoritative_transform(
     time: Res<Time>,
     mut previews: Query<

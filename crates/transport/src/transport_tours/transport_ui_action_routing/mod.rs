@@ -21,6 +21,7 @@ use openzt2_zoo_state::transport_tours::transport_vehicle_types::GenerateTranspo
 
 /// Applies the authored vehicle catalogue choice to the selected compatible
 /// circuit. The circuit component is the sole owner of that selection.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn select_authored_transport_vehicle_for_selected_compatible_circuit(
     mut purchase_choices: MessageReader<PurchaseChoice>,
     selected_entity: Res<SelectedEntity>,
@@ -72,6 +73,7 @@ pub(super) fn select_authored_transport_vehicle_for_selected_compatible_circuit(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_authored_transport_ui_actions_to_selected_circuit_and_path_deletion_operations(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,

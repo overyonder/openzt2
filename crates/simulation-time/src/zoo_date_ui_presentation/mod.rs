@@ -10,6 +10,7 @@ use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use super::simulation_clock_types::ZooCalendar;
 
 /// Updates the date field when the calendar changes, reusing its string allocation.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_authoritative_zoo_calendar_into_authored_zoo_date_text(
     zoo_calendar: Res<ZooCalendar>,
     active_localization_assets: Option<Res<LocalizationPrecedenceIndex>>,

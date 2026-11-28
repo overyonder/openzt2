@@ -16,6 +16,7 @@ use super::{
 };
 
 /// Displays donations for the selected show, or all live stages when no row is selected.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_selected_or_all_show_donation_summary_into_authored_controls(
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<(Entity, &UiDocumentRoot, Option<&ChildOf>)>,

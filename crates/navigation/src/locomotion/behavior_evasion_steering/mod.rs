@@ -17,6 +17,7 @@ use super::{
 /// Evasion supplies a fresh local direction, with obstacle avoidance taking
 /// precedence. Route following and motion integration consume its one-point
 /// route exactly as they consume direct pursuit.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_behavior_evasion_steering(
     graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
     surfaces: DrySurfaceEligibility,

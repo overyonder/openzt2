@@ -22,6 +22,7 @@ pub(in crate::persistence) struct OriginalSavedGameCatalogueTask {
     >,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::persistence) fn begin_original_saved_game_catalogue_loading(
     mut commands: Commands,
     mut requests: MessageReader<LoadSaveSlotCatalogue>,
@@ -54,6 +55,7 @@ pub(in crate::persistence) fn begin_original_saved_game_catalogue_loading(
     });
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in crate::persistence) fn complete_original_saved_game_catalogue_loading(
     mut commands: Commands,
     mut tasks: Query<(Entity, &mut OriginalSavedGameCatalogueTask)>,

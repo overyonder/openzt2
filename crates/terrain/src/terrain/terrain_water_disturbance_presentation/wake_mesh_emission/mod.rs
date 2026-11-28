@@ -30,6 +30,7 @@ pub(in crate::terrain) struct WaterWakeEmission {
 #[derive(Component)]
 pub(in crate::terrain) struct WaterWakeMeshParticle;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn update_water_wake_wave_uniforms(
     regions: TerrainWaterRegionQuery,
     terrain_assets: Res<Assets<TerrainAsset>>,
@@ -55,6 +56,7 @@ pub(crate) fn update_water_wake_wave_uniforms(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn advance_water_wake_mesh_lifetimes(
     mut commands: Commands,
     time: Res<Time>,

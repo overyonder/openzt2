@@ -24,6 +24,7 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 /// `BFSkewComponent axis="0"`, so the owner stays at the first endpoint while
 /// two nested Bevy transforms shear local X toward the second endpoint.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub fn fit_fence_presentations_to_terrain_endpoint_heights(
     mut terrain_changed: MessageReader<TerrainChanged>,
     terrain_index: Res<TerrainIndex>,

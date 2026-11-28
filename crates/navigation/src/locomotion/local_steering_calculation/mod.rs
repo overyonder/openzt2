@@ -11,6 +11,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
 use openzt2_zoo_state::locomotion::locomotion_types::Steering;
 use openzt2_zoo_state::locomotion::locomotion_types::MAX_STEERING_NEIGHBORS;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn calculate_route_following_and_separation_steering(
     spatial_grid: Res<SpatialGrid>,
     mut route_following_navigation_agents: Query<

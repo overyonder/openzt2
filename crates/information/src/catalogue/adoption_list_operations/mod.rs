@@ -140,6 +140,7 @@ pub(crate) fn select_first_available_species_after_adoption_catalogue_and_offer_
 }
 
 /// Sizes each authored adoption surface for its live and future fame-gated slots.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn request_authored_adoption_list_row_count(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
@@ -195,6 +196,7 @@ fn maximum_authored_animal_adoption_offer_slot_count(
 
 /// Projects adoption buttons directly from canonical adoption catalogue rows.
 /// Species payload availability does not decide presentation availability.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

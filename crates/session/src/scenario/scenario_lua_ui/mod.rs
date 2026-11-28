@@ -824,6 +824,7 @@ fn install_node_methods<'scope, 'env: 'scope>(
 
 /// Drives `updateTutorialRing` in the VM of the tutorial that started the ring.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 fn run_tutorial_ring_timer(
     mut timer: ResMut<TutorialRingTimer>,
     time: Res<Time<Real>>,

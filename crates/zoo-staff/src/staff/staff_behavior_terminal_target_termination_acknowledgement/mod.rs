@@ -14,6 +14,7 @@ use super::{
     staff_job_types::{CurrentJob, StaffJob},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn acknowledge_staff_target_termination_owned_by_terminal_maintenance_systems(
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     simulation_clock: Res<ZooClock>,

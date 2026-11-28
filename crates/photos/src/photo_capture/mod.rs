@@ -42,6 +42,7 @@ pub(super) struct PhotoModePresentationHiddenDuringCapture {
     pub(super) previous_visibility: Visibility,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_requested_album_photo_captures(
     mut requests: MessageReader<CapturePhotoRequest>,
     clock: Res<ZooClock>,
@@ -149,6 +150,7 @@ pub(super) fn begin_requested_album_photo_captures(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn create_album_photo_from_completed_screenshot_capture(
     captured: On<BevyScreenshotCaptured>,
     owners: Query<&PhotoCaptureOwner>,

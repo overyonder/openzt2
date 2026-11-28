@@ -23,6 +23,7 @@ use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStati
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::GenerateTransportVehicleForCircuitRequest;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::PendingTransportVehiclePurchase;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_payment_for_generated_transport_vehicles(
     mut vehicle_generation_requests: MessageReader<GenerateTransportVehicleForCircuitRequest>,
     circuits: Query<(&WorldMember, &CircuitVehicleDefinition), With<TransportCircuit>>,
@@ -118,6 +119,7 @@ pub(super) struct PendingTransportVehiclePrefab(
 ///
 /// A purchase remains live while its prefab or models load, so payment cannot
 /// produce a definition-only placeholder without its authored presentation.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn spawn_paid_transport_vehicle_prefab_instances(
     pending_purchases: Query<(Entity, &PendingTransportVehiclePurchase, &WorldMember)>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -163,7 +165,7 @@ pub(super) fn spawn_paid_transport_vehicle_prefab_instances(
         let vehicle_entity = spawn_loaded_scene_prefab_as_world_instance(
             &mut commands,
             prefab,
-            prefab_handle,
+            &prefab_handle,
             world_member.root,
             object_definition,
             persistent_id,

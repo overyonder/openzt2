@@ -96,6 +96,7 @@ pub(super) struct BiomeAutomaticObjectPlacementPreparationParameters<'w, 's> {
     scratch: ResMut<'w, ObjectPlacementCellCollectionScratch>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_brush_previews(
     mut commands: Commands,
     seed: Res<ZooSeed>,

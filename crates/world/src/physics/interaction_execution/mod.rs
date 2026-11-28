@@ -74,6 +74,7 @@ pub(super) fn apply_requested_impulses_to_dynamic_avian_bodies(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn publish_gameplay_contact_facts_from_avian_collision_events(
     mut starts: MessageReader<CollisionStart>,
     mut ends: MessageReader<CollisionEnd>,

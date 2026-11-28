@@ -20,6 +20,7 @@ use openzt2_interface_state::shell::shell_selection_types::WorldChoiceView;
 
 use super::world_selection_presentation_types::CampaignChoice;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_authored_campaign_and_scenario_list_row_counts(
     catalogue_source: Res<WorldScenarios>,
     catalogues: Res<Assets<WorldScenarioDocumentAsset>>,
@@ -58,6 +59,7 @@ pub(super) fn request_authored_campaign_and_scenario_list_row_counts(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
     mut commands: Commands,
     catalogue_source: Res<WorldScenarios>,

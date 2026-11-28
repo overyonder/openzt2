@@ -25,6 +25,7 @@ use openzt2_zoo_state::habitat::habitat_types::RefreshTerrainDerivedHabitatSumma
 /// Requests refreshes for terrain-derived habitat summaries after edited
 /// samples change. One-cell padding covers bilinear samples on either side of
 /// the edited sample rectangle.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_habitat_summary_refreshes_after_terrain_changes(
     mut terrain_changes: MessageReader<TerrainChanged>,
     terrain_chunks: Query<&TerrainChunk>,
@@ -52,6 +53,7 @@ pub(super) fn request_habitat_summary_refreshes_after_terrain_changes(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn refresh_terrain_derived_habitat_summaries(
     mut commands: Commands,
     mut refresh_requests: MessageReader<RefreshTerrainDerivedHabitatSummariesWithinTopologyBounds>,

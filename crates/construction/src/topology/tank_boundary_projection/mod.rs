@@ -29,6 +29,7 @@ enum TankBoundaryFailure {
 /// cannot leave a partially reassigned tank. The system copies neither cells
 /// nor endpoints: consumers join `TankBoundaryOf -> FenceEdge -> TopologyNode`.
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn synchronize_tank_boundary_relationships_after_habitat_region_changes(
     mut commands: Commands,
     changed_tanks: Query<

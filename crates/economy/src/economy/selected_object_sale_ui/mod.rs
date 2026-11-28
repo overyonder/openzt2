@@ -18,6 +18,7 @@ use openzt2_interface_state::information::entity_selection_types::SelectedEntity
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_selected_object_sale_confirmation(
     selected: Res<SelectedEntity>,
     objects: Query<(Option<&DefinitionId>, Option<&Name>, Ref<CurrentSellQuote>)>,

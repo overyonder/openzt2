@@ -24,6 +24,7 @@ use super::{
     scenario_lua_virtual_machine::execute_loaded_scenario_lua_script_binding,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
     scenarios: Res<WorldScenarios>,
     selected: Option<Res<SelectedScenarioDocument>>,
@@ -267,6 +268,7 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
     scenarios: Res<WorldScenarios>,
     selected: Option<Res<SelectedScenarioDocument>>,

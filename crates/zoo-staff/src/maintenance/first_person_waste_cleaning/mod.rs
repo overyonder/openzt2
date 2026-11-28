@@ -12,6 +12,7 @@ const REACH_METRES: f32 = 4.0;
 
 /// `ZT_USE_OBJECT`: on foot, the player sweeps the nearest litter or empties the
 /// nearest trash can, as a maintenance worker would.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn clean_nearest_waste_from_first_person_use_action(
     mut commands: Commands,
     mut actions: MessageReader<ActionRequest>,

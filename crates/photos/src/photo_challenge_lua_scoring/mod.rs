@@ -108,7 +108,7 @@ impl PhotoChallengeLuaScoringVirtualMachine {
                 .get(lua_scoring_function_name)?;
             let lua_score =
                 lua_scoring_function.call::<Value>(self.lua_virtual_machine.create_table()?)?;
-            convert_lua_photo_score_to_game_score(lua_score)
+            convert_lua_photo_score_to_game_score(&lua_score)
         });
         self.loaded_lua_script_asset_identifiers = loaded_lua_script_asset_identifiers.into_inner();
         execution_result
@@ -175,7 +175,7 @@ fn find_matching_captured_photo_evidence<'a>(
         })
 }
 
-fn convert_lua_photo_score_to_game_score(lua_score: Value) -> mlua::Result<i32> {
+fn convert_lua_photo_score_to_game_score(lua_score: &Value) -> mlua::Result<i32> {
     let original_game_score = convert_integral_lua_number_to_i64(lua_score)
         .and_then(|lua_integer| i32::try_from(lua_integer).ok())
         .ok_or_else(|| mlua::Error::runtime("photo scorer must return an integer"))?;

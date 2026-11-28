@@ -1,6 +1,7 @@
 use bevy::{ecs::resource::IsResource, prelude::*};
 use openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn trace_changed_modal_render_state(
     capture: Res<AuthoredModalInputCapture>,
     entities: Query<EntityRef, Without<IsResource>>,

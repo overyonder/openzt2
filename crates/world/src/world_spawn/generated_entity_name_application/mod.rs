@@ -37,6 +37,7 @@ pub(super) fn initialize_world_entity_name_counters(
 #[cfg(test)]
 mod tests;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn register_and_name_spawned_world_entities(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

@@ -18,6 +18,7 @@ const MAXIMUM_GUEST_VIEW_NAVIGATION_MARKER_COUNT: usize = 4;
 /// navigation topology when the picked target or sparse closure overlay
 /// changes. Only the selected entity and asset handle are retained.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
     pointer_ray: Res<WorldPointerRay>,
     spatial_query: SpatialQuery,

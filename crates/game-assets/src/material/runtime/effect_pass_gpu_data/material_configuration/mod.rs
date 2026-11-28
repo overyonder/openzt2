@@ -472,7 +472,7 @@ impl EffectPassMaterial {
     pub fn replace_texture_asset_for_effect_semantic(
         &mut self,
         semantic_name: &str,
-        texture_asset: Handle<Image>,
+        texture_asset: &Handle<Image>,
     ) -> bool {
         let texture_stages = self
             .dynamic_texture_semantics

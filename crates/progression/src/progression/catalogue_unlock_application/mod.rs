@@ -17,6 +17,7 @@ use super::{
     },
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_catalogue_definition_unlock_requests(
     mut requests: MessageReader<ApplyCatalogueDefinitionUnlockRequest>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -64,6 +65,7 @@ pub(super) fn apply_catalogue_definition_unlock_requests(
 /// completed scenario consequence into an
 /// `ApplyCatalogueDefinitionUnlockRequest`, preserving that package's
 /// operation correlation without retaining a scenario mirror in progression.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_authored_catalogue_unlock_requirements_from_progression_facts(
     fame: Res<Fame>,
     profile_variables: Option<

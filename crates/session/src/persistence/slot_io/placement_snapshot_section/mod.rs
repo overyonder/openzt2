@@ -316,7 +316,7 @@ pub(super) fn apply_placement_records(
         let entity = spawn_loaded_scene_prefab_as_world_instance(
             commands,
             prefab,
-            handle.clone(),
+            handle,
             root,
             record.definition,
             PersistentId(record.persistent_identifier),

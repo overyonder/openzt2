@@ -17,6 +17,7 @@ const DONATION_ACCEPTOR_DOCK_ATTACHMENT_NAME: &str = "adultdock";
 
 /// Projects the source-owned acceptor flag and prefab-owned dock attachment
 /// onto each ordinary spawned world-object entity.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_authored_donation_acceptors_and_docking_points(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -91,6 +92,7 @@ fn entity_is_descendant_of(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_new_donation_acceptors_with_operating_age_and_profit(
     mut commands: Commands,
     clock: If<Res<ZooClock>>,

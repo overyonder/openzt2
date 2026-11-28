@@ -20,7 +20,7 @@ pub(super) fn project_localized_zoopedia_title_to_authored_text_node(
     }
     if let Some(localized_title_key) = input.localized_title_key {
         apply_localized_text_presentation_to_authored_ui_node(
-            LocalizedZoopediaTextPresentationProjectionInput {
+            &mut LocalizedZoopediaTextPresentationProjectionInput {
                 localization: input.localization,
                 localized_content_key: localized_title_key,
                 authored_text_font: input.authored_text_font,

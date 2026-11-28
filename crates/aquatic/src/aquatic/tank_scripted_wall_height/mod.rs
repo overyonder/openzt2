@@ -27,6 +27,7 @@ use super::{
 /// by the same rule the raise and lower wall tools use and committed as an
 /// ordinary construction edit.
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_scripted_tank_wall_heights(
     mut commands: Commands,
     mut requests: MessageReader<SetTankWallHeights>,

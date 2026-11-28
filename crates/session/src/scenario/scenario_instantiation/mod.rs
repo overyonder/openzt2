@@ -27,6 +27,7 @@ use openzt2_zoo_state::scenario::scenario_session_types::SelectedScenarioDocumen
 
 use super::challenge_offer_types::ScenarioChallengeSelectionRandomNumberGenerator;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn instantiate_selected_scenario_and_authored_objectives(
     mut commands: Commands,
     assets: Res<Assets<WorldScenarioDocumentAsset>>,
@@ -76,6 +77,7 @@ pub(super) fn instantiate_selected_scenario_and_authored_objectives(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_scenario_challenge_random_number_generator(
     mut commands: Commands,
     seed: Res<ZooSeed>,

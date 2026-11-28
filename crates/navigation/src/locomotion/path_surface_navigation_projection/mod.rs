@@ -23,6 +23,7 @@ use openzt2_zoo_state::{
 };
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_path_surfaces_into_navigation_graph(
     mut commands: Commands,
     mut graph: Option<ResMut<ActiveTerrainDerivedNavigationGraph>>,

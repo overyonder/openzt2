@@ -29,6 +29,7 @@ pub(super) struct NotificationBodyRequested;
 #[derive(Component)]
 pub(super) struct PresentedNotification;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn request_notifications(
     mut commands: Commands,
     mut requests: MessageReader<ShowNotification>,
@@ -73,6 +74,7 @@ pub(super) fn request_notifications(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn acknowledge_notifications(
     mut commands: Commands,
     roots: Query<(Entity, &ChildOf), With<UiDocumentRoot>>,

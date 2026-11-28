@@ -15,6 +15,7 @@ use super::input_types::GameAction;
 use super::input_types::GameActionInputBindings;
 use super::input_types::PrimaryPointerInputState;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_controller_pointer(
     time: Res<Time<Real>>,
     gamepads: Query<(Entity, &Gamepad)>,

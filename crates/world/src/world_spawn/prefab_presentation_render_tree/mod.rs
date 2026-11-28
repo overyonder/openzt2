@@ -182,6 +182,7 @@ pub fn spawn_prefab_render_tree(
 #[derive(Component)]
 pub(super) struct PrefabPresentationRenderRoot(Entity);
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_prefab_presentations(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,
@@ -210,6 +211,7 @@ pub(super) fn hydrate_prefab_presentations(
 
 /// Rebuilds presentations whose model was replaced or restored while the
 /// game runs, such as one sent from Blender, once it has reloaded.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn rebuild_prefab_presentations_after_prefab_reload(
     mut commands: Commands,
     mut replaced: MessageReader<PrefabModelReplaced>,

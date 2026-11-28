@@ -11,6 +11,7 @@ use bevy::ui_render::ui_texture_slice_pipeline::ExtractedUiTextureSlices;
 /// Authored aspect layers are their owner's background, not foreground children.
 /// Bevy's stack visits parents before children regardless of negative ZIndex.
 /// Retain Bevy's per-item image/border offsets within the owner's stack slot.
+#[expect(clippy::needless_pass_by_value)]
 pub fn place_authored_aspect_draws_in_owner_stack_slot(
     layers: Extract<Query<&ChildOf, With<UiVisualLayer>>>,
     nodes: Extract<

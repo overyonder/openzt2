@@ -10,6 +10,7 @@ use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObjec
 
 use super::types::{Dead, Escaped, Rampaging, Tranquilized};
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn detect_animal_containment_breaches_and_mark_newly_escaped_animals(
     mut commands: Commands,
     clock: Res<ZooClock>,

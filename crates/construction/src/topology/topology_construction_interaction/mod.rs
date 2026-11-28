@@ -199,6 +199,7 @@ pub(super) fn apply_path_placement_requests_to_construction_previews(
 /// Owns the authored fence and ground-path click-anchor/click-commit transition.
 /// The topology messages remain the only preview mutation input;
 /// the construction transaction performs final validation.
+#[expect(clippy::needless_pass_by_value)]
 pub fn drive_selected_topology_placement_pointer_sequence(
     mut commands: Commands,
     primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
@@ -368,6 +369,7 @@ pub struct RectangularEnclosureGatePrompt {
 /// Records the gate-capable walls of a closed rectangular run and forgets them
 /// once a gate is placed or another tool replaces the prompted gate.
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn track_rectangular_enclosure_gate_prompt(
     mut committed: MessageReader<ConstructionCommitted>,
     tool: Res<ConstructionTool>,
@@ -481,6 +483,7 @@ fn nearest_fence_edge<'a>(
 
 /// Keeps the committed endpoint as the next ground-path anchor. Pointer updates
 /// pause during transaction application, so `to` remains the submitted endpoint.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn restart_path_preview_from_committed_endpoint(
     mut committed: MessageReader<ConstructionCommitted>,
     tool: Res<ConstructionTool>,
@@ -527,6 +530,7 @@ pub(super) fn restart_path_preview_from_committed_endpoint(
 /// the construction transaction. The existing preview entity remains the one
 /// interaction-state owner; committed topology is owned independently by the
 /// fence entities created from the transaction snapshots.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn restart_fence_preview_from_committed_endpoint(
     mut commands: Commands,
     mut committed: MessageReader<ConstructionCommitted>,
@@ -592,6 +596,7 @@ pub(super) fn restart_fence_preview_from_committed_endpoint(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn evaluate_topology_construction_preview_validity(
     grid: Res<TopologyGrid>,
     index: Res<TopologyIndex>,
@@ -649,6 +654,7 @@ pub(super) fn evaluate_topology_construction_preview_validity(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn rotate_closed_fence_placement_heading(
     mut actions: MessageReader<openzt2_interface_state::input::input_types::ActionRequest>,
     tool: Res<ConstructionTool>,

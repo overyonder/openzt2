@@ -62,6 +62,7 @@ pub(crate) fn request_selected_animal_need_list_row_counts(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,

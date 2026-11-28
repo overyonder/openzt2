@@ -45,6 +45,7 @@ fn selected_transport_track_definition(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_action(
     mut commands: Commands,
     primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
@@ -187,6 +188,7 @@ fn spawn_transport_track_construction_preview(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_transport_track_construction_preview_from_pointer_and_station_endpoints(
     tool: Res<ConstructionTool>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -392,6 +394,7 @@ const COLOR_ANIMATION_CYCLE_SECONDS: f32 = 0.5;
 /// With the delete tool it colours the road leg under the cursor red.
 // The colours and cycle are copied from modes.xml, not lowered from it.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn highlight_transport_track_connection_stations(
     mut commands: Commands,
     time: Res<Time<Real>>,

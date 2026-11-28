@@ -52,6 +52,7 @@ pub(super) fn synchronize_supported_display_resolutions_from_primary_monitor(
 /// Requests one authored `ResolutionEntry` row per renderer mode. Asset loading
 /// has linked the options list to that source document, so the game supplies
 /// only the live monitor facts.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn set_authored_display_resolution_list_row_count(
     supported: Res<SupportedDisplayResolutions>,
     lists: Query<(Entity, Ref<UiListPolicy>)>,
@@ -72,6 +73,7 @@ pub(super) fn set_authored_display_resolution_list_row_count(
 /// Hydrates authored resolution rows with their monitor identity and label.
 /// Typography, layout, visuals, and hit policy remain those of
 /// `UI/layout/resolution.xml`.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_supported_display_resolutions_into_authored_rows(
     mut commands: Commands,
     supported: Res<SupportedDisplayResolutions>,
@@ -132,6 +134,7 @@ pub(super) fn copy_activated_display_resolution_into_settings_draft(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_drafted_display_resolution_selection_into_authored_rows(
     draft: Res<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>,
     choices: Query<(Entity, Ref<DisplayResolutionChoice>)>,
@@ -156,6 +159,7 @@ pub(super) fn project_drafted_display_resolution_selection_into_authored_rows(
 
 /// Shows the drafted mode in the options screen's `Video Setting` field, as
 /// the source options mode does above its resolution list.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_drafted_display_resolution_into_authored_text(
     draft: Res<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>,
     mut texts: Query<(Ref<UiTextBinding>, &mut Text)>,

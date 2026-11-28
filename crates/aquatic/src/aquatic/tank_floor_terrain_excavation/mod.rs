@@ -42,6 +42,7 @@ pub(super) fn inside_walls_beyond(point: Vec2, walls: &[[Vec2; 2]], margin: f32)
 /// restoring a tank changes nothing. A removed tank is filled back to the mean
 /// ground under its walls.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn excavate_changed_tank_floors(
     mut commands: Commands,
     grid: Res<TopologyGrid>,

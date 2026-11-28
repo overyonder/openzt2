@@ -22,6 +22,7 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn start_current_supported_behavior_docking_actions(
     mut commands: Commands,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
@@ -560,6 +561,7 @@ pub(super) fn find_named_descendant_global_transform<'a>(
         })
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn finish_behavior_docking_actions_after_matching_arrival(
     mut commands: Commands,
     mut arrivals: MessageReader<Arrived>,
@@ -613,6 +615,7 @@ pub(super) fn finish_behavior_docking_actions_after_matching_arrival(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn fail_behavior_docking_actions_after_navigation_failure(
     mut commands: Commands,
     mut failures: MessageReader<NavigationFailed>,

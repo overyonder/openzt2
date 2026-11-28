@@ -15,6 +15,7 @@ use openzt2_zoo_state::economy::facility_economy_types::ServiceFacility;
 
 use openzt2_interface_state::information::entity_selection_types::InfoPanel;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_selected_facility_status_to_visible_information_panels(
     information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
     zoo_clock: Res<ZooClock>,

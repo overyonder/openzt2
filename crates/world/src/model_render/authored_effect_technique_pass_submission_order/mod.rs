@@ -10,6 +10,7 @@ use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMate
 use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
 use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTransparentRenderStage;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_authored_effect_opaque_base_pass_order(
     materials: Res<Assets<EffectPassMaterial>>,
     mut passes: Query<
@@ -32,6 +33,7 @@ pub(super) fn project_authored_effect_opaque_base_pass_order(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn sort_authored_effect_invocations_before_bevy_mesh_batch_preparation(
     orders: Res<
         ExtractedInstances<AuthoredEffectTechniquePassSubmissionOrder, bevy::render::RenderApp>,

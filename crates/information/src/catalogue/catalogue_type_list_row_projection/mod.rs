@@ -29,6 +29,7 @@ use openzt2_interface_state::information::catalogue_types::CatalogueRowEntry;
 use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntry;
 use openzt2_interface_state::information::catalogue_types::TypeListFilter;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

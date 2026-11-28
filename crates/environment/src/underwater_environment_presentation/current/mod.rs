@@ -9,6 +9,7 @@ use openzt2_zoo_state::{
     },
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn update_water_region_currents(
     mut commands: Commands,
     time: Res<Time<Virtual>>,

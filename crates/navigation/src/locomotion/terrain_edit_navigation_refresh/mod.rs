@@ -13,6 +13,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::Route;
 use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph;
 
 /// Refreshes restored terrain before saved actor routes are applied.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn refresh_navigation_graph_after_terrain_restoration(
     mut restored_terrain: MessageReader<TerrainNavigationRestored>,
     active_navigation_graph: Option<ResMut<ActiveTerrainDerivedNavigationGraph>>,

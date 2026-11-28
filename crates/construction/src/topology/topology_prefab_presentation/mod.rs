@@ -25,6 +25,7 @@ pub(super) struct FenceSegmentPosts {
     end_m: f32,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_topology_prefab_presentations(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,

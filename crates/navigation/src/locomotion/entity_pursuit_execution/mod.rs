@@ -22,6 +22,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::Route;
 use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
 
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn accept_entity_pursuit_requests(
     mut commands: Commands,
     mut pursuit_requests: MessageReader<PursueEntity>,

@@ -59,6 +59,7 @@ pub(super) struct WaterRegionMaterialProjectionQueries<'w, 's> {
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
     mut commands: Commands,
     mut audio_clip_requests: MessageWriter<PlayAudioClip>,

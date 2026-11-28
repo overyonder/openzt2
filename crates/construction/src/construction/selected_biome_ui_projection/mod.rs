@@ -8,6 +8,7 @@ use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy;
 use openzt2_zoo_state::construction::selected_biome_ui_projection::UiBiomePanel;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_biome_panel_visibility(
     policy: Res<ConstructionPlacementPolicy>,
     mut panels: Query<(Ref<UiBiomePanel>, &mut Visibility)>,
@@ -27,6 +28,7 @@ pub(super) fn project_biome_panel_visibility(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_selected_biome_name(
     policy: Res<ConstructionPlacementPolicy>,
     definitions: Res<Assets<WorldDefinitionAsset>>,

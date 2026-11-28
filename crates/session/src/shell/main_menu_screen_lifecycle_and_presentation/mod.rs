@@ -15,6 +15,7 @@ use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
 
 const MAIN_MENU_LOGO_TEXTURE_PATH: &str = "ui/shared/zoo2logo.dds";
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn create_main_menu_screen_and_request_profile_index(
     mut commands: Commands,
     assets: Res<AssetServer>,

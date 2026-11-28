@@ -14,6 +14,7 @@ use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::Behavio
 use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::PendingBehaviorTargetPlacement;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrefabSource;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_automatic_object_placement_footprints_from_loaded_scene_prefabs(
     mut definitions: ResMut<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

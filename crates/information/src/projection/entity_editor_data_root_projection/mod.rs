@@ -30,6 +30,7 @@ pub(crate) fn inspectable_removed(
 
 /// Projects reusable entity-editor rows directly from live inspectable ECS
 /// entities rather than retaining another editor hierarchy.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_inspectable_entities_to_visible_entity_editor_data_roots(
     editor_data_root_surfaces: Query<
         (Entity, &InheritedVisibility),

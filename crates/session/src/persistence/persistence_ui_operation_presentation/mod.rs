@@ -134,6 +134,7 @@ pub(super) fn continue_to_load_slot_catalogue_after_world_snapshot_save(
 
 /// A completed save closes the save dialog, as its Cancel does. A failed save
 /// leaves it open so the player can try again.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn close_save_dialogs_after_world_snapshot_save(
     mut saved_world_snapshot_messages: MessageReader<WorldSnapshotSavedToSlot>,
     documents: Res<Assets<UiDocumentAsset>>,

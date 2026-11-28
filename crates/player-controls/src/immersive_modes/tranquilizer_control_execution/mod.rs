@@ -23,6 +23,7 @@ use super::animal_care_control_types::{
     AnimalCareTarget, TranquilizerAudioFeedback, TranquilizerControl,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_tranquilizer_tool_from_active_world_definitions(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -57,6 +58,7 @@ pub(super) fn initialize_tranquilizer_tool_from_active_world_definitions(
 /// Uses Avian's ECS-native spatial query as the sole world picking authority.
 /// The selected animal is written directly onto the controller's tool.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn aim_charge_fire_or_cancel_active_tranquilizer_controls(
     time: Res<Time>,
     spatial_query: SpatialQuery,

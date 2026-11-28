@@ -27,6 +27,7 @@ use openzt2_zoo_state::animal_health::types::Vitality;
 
 /// The authored cure action clears disease at its execution point, after the
 /// approach and animation. It does not prescribe a vitality or need adjustment.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn apply_authored_disease_cures_for_live_staff_claims(
     mut commands: Commands,
     documents: Res<Assets<BehaviorDocumentAsset>>,

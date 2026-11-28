@@ -27,6 +27,7 @@ pub(super) struct NamedPhysicalPresentationsHydrated;
 pub(super) struct NamedPhysicalPresentation(Entity);
 
 /// Borrows each physical binder's policy without applying it to sibling binders.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_physical_presentation_caustic_policies(
     mut commands: Commands,
     active_definitions: Res<WorldDefinitions>,
@@ -85,6 +86,7 @@ pub(super) fn project_physical_presentation_caustic_policies(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_required_named_physical_presentations(
     mut commands: Commands,
     active_definitions: Res<WorldDefinitions>,

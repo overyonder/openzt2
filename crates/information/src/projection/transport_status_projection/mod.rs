@@ -19,6 +19,7 @@ use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicl
 
 use openzt2_interface_state::information::entity_selection_types::InfoPanel;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_selected_transport_status_to_visible_information_panels(
     information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
     transport_subjects: Query<(

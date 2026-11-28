@@ -24,6 +24,7 @@ use super::{
     clippy::too_many_arguments,
     reason = "the manager reads each canonical tank and definition owner directly"
 )]
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
     mut commands: Commands,
     mut ids: ResMut<openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator>,

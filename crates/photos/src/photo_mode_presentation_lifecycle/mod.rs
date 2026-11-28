@@ -111,6 +111,7 @@ pub(super) fn hide_authored_photo_mode_document_after_photo_mode_exit(
 /// Presents the canonical captured `Image` in the shipped Photo-mode preview.
 /// The controller retains only UI/photo entity references and the authored
 /// presentation counter; pixel and album ownership remain on the `Photo`.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn show_newly_captured_photo_in_authored_photo_mode_preview(
     mut captured_photos: MessageReader<PhotoCaptured>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

@@ -20,6 +20,7 @@ use openzt2_game_data::{
 
 /// Projects the loaded price of a dynamic catalogue row into its ordinary
 /// Bevy UI descendants. The row identity selects the canonical world definition.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_authored_catalogue_entry_prices_into_dynamic_ui_rows(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,

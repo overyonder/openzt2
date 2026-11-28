@@ -23,6 +23,7 @@ use openzt2_zoo_state::transport_tours::transport_vehicle_types::RoutePosition;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::StationDestination;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
     spatial_query: SpatialQuery,
     fixed_time: Res<Time<Fixed>>,

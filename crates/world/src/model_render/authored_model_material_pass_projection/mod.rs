@@ -17,6 +17,7 @@ use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabClothingT
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabMaterialOverrides;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPrimitiveMaterial;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_authored_model_material_passes(
     mut commands: Commands,
     roots: Query<
@@ -215,6 +216,7 @@ pub(super) fn project_authored_model_material_passes(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn invalidate_authored_model_material_pass_projection(
     mut events: MessageReader<AssetEvent<MaterialAsset>>,
     graphics_settings: Res<GraphicsSettings>,

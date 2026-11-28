@@ -209,7 +209,7 @@ impl ScenarioLuaVirtualMachine {
                     .unwrap_or(self.lua_virtual_machine.create_table()?);
                 arguments.set(key, argument.clone())?;
                 Ok(convert_lua_rule_result_to_objective_status(
-                    scenario_lua_function.call::<Value>(argument)?,
+                    &scenario_lua_function.call::<Value>(argument)?,
                 ))
             })();
             // Native calls act as they are made. An error raised later in the

@@ -65,6 +65,7 @@ use super::guest_simulation_types::RequestGuestArrivals;
 use super::guest_simulation_types::VisitTime;
 use openzt2_zoo_state::guests::guest_favourite_animal_trend_types::GuestFavouriteAnimalTrend;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_guest_arrivals(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -369,6 +370,7 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
 
 #[allow(clippy::type_complexity)]
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn initialize_spawned_guests(
     seed: Res<ZooSeed>,
     definitions: Res<Assets<WorldDefinitionAsset>>,

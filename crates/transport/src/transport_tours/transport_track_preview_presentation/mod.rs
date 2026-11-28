@@ -15,6 +15,7 @@ use openzt2_zoo_state::terrain::terrain_fitted_surface_mesh_construction::constr
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPreview;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPreviewAuthoredPrefab;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_transport_track_construction_preview_authored_prefabs(
     mut commands: Commands,
     asset_server: Res<AssetServer>,

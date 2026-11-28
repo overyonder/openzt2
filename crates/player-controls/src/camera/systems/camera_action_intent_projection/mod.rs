@@ -13,6 +13,7 @@ use super::super::math::queue_wheel_zoom;
 use super::super::math::WheelZoomQueue;
 use crate::camera::camera_execution_types::CameraIntent;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_camera_actions_into_camera_intent(
     mut actions: MessageReader<ActionRequest>,
     axes: Res<DeviceControlAxes>,

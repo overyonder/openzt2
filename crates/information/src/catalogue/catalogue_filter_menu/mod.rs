@@ -40,6 +40,7 @@ pub(crate) struct CatalogueFilterChoice {
 }
 
 /// Populate only when opening a menu; settled frames do not scan the catalogue.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn populate_catalogue_filter_menu(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,
@@ -249,6 +250,7 @@ pub(crate) fn populate_catalogue_filter_menu(
 }
 
 /// Keep the authored row's font/style, replacing only its native-supplied text.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn label_catalogue_filter_rows(
     choices: Query<(Entity, &CatalogueFilterChoice), Added<CatalogueFilterChoice>>,
     rows: Query<&UiListRow>,
@@ -278,6 +280,7 @@ pub(crate) fn label_catalogue_filter_rows(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn select_catalogue_filter_row(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,

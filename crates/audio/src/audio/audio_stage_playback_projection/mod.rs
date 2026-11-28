@@ -7,6 +7,7 @@ use super::{
     audio_playback_message_types::{PlayAudioCue, StopAudioCue},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_changed_audio_stages_into_playback_requests(
     audio_assets: Res<Assets<AudioAsset>>,
     audio_asset_index: Res<AudioAssets>,

@@ -68,6 +68,7 @@ fn species_needs<'a>(
     ])
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn initialize_animal_needs(
     mut commands: Commands,
     zoo_seed: Res<ZooSeed>,
@@ -196,6 +197,7 @@ pub(super) fn step_need_points(points: &mut NeedPoints, unmet: bool) {
 
 /// Every update an animal with an unmet need gains bad need points and loses
 /// good ones, and an animal whose needs are all met the other way round.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_need_points(
     time: Res<Time<Fixed>>,
     mut animals: Query<(Entity, &NeedTriggerState, &mut NeedPoints), (With<Animal>, Without<Dead>)>,
@@ -397,6 +399,7 @@ pub(super) fn decay_animal_needs(
 
 /// Animals from saves made before the reproduction need start it from its
 /// authored initial range.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn initialize_missing_reproduction_needs(
     mut commands: Commands,
     zoo_seed: Res<ZooSeed>,
@@ -431,6 +434,7 @@ pub(crate) fn initialize_missing_reproduction_needs(
 }
 
 /// `AdjustReproduction`, as the welfare needs' adjustment systems apply theirs.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn adjust_reproduction(
     mut messages: MessageReader<AdjustReproduction>,
     assets: Res<Assets<SpeciesAsset>>,
@@ -575,6 +579,7 @@ adjustment_system!(
     NeedKind::Bathroom
 );
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn set_animal_need(
     mut messages: MessageReader<SetAnimalNeed>,
     mut reproduction: MessageWriter<AdjustReproduction>,
@@ -671,6 +676,7 @@ pub(super) fn set_animal_need(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn derive_animal_welfare(
     assets: Res<Assets<SpeciesAsset>>,
     index: Res<SpeciesAssets>,

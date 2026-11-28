@@ -28,6 +28,7 @@ impl UiAuthoredDragGesturePolicy {
 /// Applies the three authored drag gestures directly to Bevy's layout or
 /// scroll component. Source lowering already erased the original message
 /// indirection; this is ordinary pointer-driven UI behavior.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_authored_drag_gestures_to_bevy_layout_or_scroll_position(
     motion: Res<AccumulatedMouseMotion>,
     mut gestures: Query<(

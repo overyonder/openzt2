@@ -44,6 +44,7 @@ pub(super) fn register_token_execution(application: &mut App) {
     );
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn discard_expired_and_consumed_tokens(
     mut commands: Commands,
     clock: Res<ZooClock>,
@@ -82,6 +83,7 @@ fn discard_expired_and_consumed_tokens(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn execute_current_self_token_deliveries(
     mut commands: Commands,
     clock: Res<ZooClock>,

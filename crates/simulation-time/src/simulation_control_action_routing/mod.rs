@@ -15,6 +15,7 @@ use openzt2_interface_state::ui::authored_ui_action_projection_components::UiSim
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
 /// Applies pause input to the simulation controls.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_pause_game_action_to_simulation_control_requests(
     mut requested_game_actions: MessageReader<ActionRequest>,
     simulation_control: Option<Res<SimulationControl>>,
@@ -30,6 +31,7 @@ pub(super) fn route_pause_game_action_to_simulation_control_requests(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_authored_ui_simulation_actions_to_simulation_control_requests(
     mut commands: Commands,
     mut activated_ui_nodes: MessageReader<UiNodeActivated>,

@@ -42,6 +42,7 @@ struct SavedRailCamera {
     keys: Vec<([f32; 3], [f32; 4])>,
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn hydrate_rail_cameras(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
@@ -159,6 +160,7 @@ pub(super) fn cleanup_rail_camera_scenes(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_rail_cameras(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,

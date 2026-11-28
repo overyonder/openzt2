@@ -22,6 +22,7 @@ use bevy_hanabi::prelude::{
 };
 use std::collections::HashSet;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn refresh_prepared_effect_assets_from_source_changes(
     mut commands: Commands,
     mut source_events: MessageReader<AssetEvent<ParticleEffectDocumentAsset>>,

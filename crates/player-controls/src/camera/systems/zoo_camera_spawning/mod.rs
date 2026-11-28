@@ -30,6 +30,7 @@ use crate::camera::camera_execution_types::CameraSpawnPending;
 use crate::camera::camera_execution_types::CameraSpawnPendingReason;
 
 /// Spawns the selected camera once world bounds and its definition have loaded.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn spawn_zoo_camera(
     mut commands: Commands,
     active_scenarios: Res<WorldScenarios>,

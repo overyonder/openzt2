@@ -13,6 +13,7 @@ use super::{
     types::{Dead, Disease, Treatment, TreatmentRequest, Vitality},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn validate_veterinary_treatment_requests_and_begin_treatment(
     mut commands: Commands,
     mut treatment_requests: MessageReader<TreatmentRequest>,
@@ -58,6 +59,7 @@ pub(super) fn validate_veterinary_treatment_requests_and_begin_treatment(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn advance_active_veterinary_treatments_and_apply_completed_results(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

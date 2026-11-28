@@ -51,6 +51,7 @@ fn calculate_topology_snapshot_deletion_refund(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn prepare_topology_deletion_transaction(
     mut commands: Commands,
     mut requests: MessageReader<PrepareDeletion>,

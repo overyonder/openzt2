@@ -30,6 +30,7 @@ pub(super) struct TankPresentationMaterials(Option<[Handle<StandardMaterial>; 2]
 
 /// Rebuilds water and wall panels; opaque panels use their authored materials.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn present_changed_tank_water_and_glass(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,

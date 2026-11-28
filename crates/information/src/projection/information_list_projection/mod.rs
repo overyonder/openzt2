@@ -32,6 +32,7 @@ use super::super::{
 };
 
 /// Populates visible rows after sorting the eligible world entities.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn project_live_world_entities_to_visible_information_list_rows(
     information_list_panels: Query<(Entity, &InformationEntityListPanel, &InheritedVisibility)>,
     reusable_information_list_rows: Query<(Entity, &UiListRow, Option<&InformationEntitySource>)>,

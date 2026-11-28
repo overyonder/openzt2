@@ -10,7 +10,7 @@ use crate::zoopedia::zoopedia_rich_content_types::{
 
 pub(super) fn spawn_localized_zoopedia_rich_content_record_entity(
     commands: &mut Commands,
-    input: LocalizedZoopediaRichContentRecordProjectionInput<'_>,
+    input: &LocalizedZoopediaRichContentRecordProjectionInput<'_>,
 ) -> Entity {
     match input.source_record.rich_content_kind {
         LocalizationRichContentKind::Cell => {
@@ -33,7 +33,7 @@ pub(super) fn spawn_localized_zoopedia_rich_content_record_entity(
 
 fn spawn_localized_zoopedia_rich_content_cell(
     commands: &mut Commands,
-    input: LocalizedZoopediaRichContentRecordProjectionInput<'_>,
+    input: &LocalizedZoopediaRichContentRecordProjectionInput<'_>,
 ) -> Entity {
     let cell_node = Node {
         box_sizing: BoxSizing::ContentBox,
@@ -88,7 +88,7 @@ fn spawn_localized_zoopedia_rich_content_cell(
 
 fn spawn_localized_zoopedia_rich_content_text(
     commands: &mut Commands,
-    input: LocalizedZoopediaRichContentRecordProjectionInput<'_>,
+    input: &LocalizedZoopediaRichContentRecordProjectionInput<'_>,
 ) -> Entity {
     if input.has_block_content {
         return commands
@@ -211,7 +211,7 @@ fn spawn_localized_zoopedia_rich_content_text(
 
 fn spawn_localized_zoopedia_rich_content_image(
     commands: &mut Commands,
-    input: LocalizedZoopediaRichContentRecordProjectionInput<'_>,
+    input: &LocalizedZoopediaRichContentRecordProjectionInput<'_>,
 ) -> Entity {
     let Some(image_handle) = input
         .source_record
@@ -265,7 +265,7 @@ fn spawn_localized_zoopedia_rich_content_image(
 
 fn spawn_localized_zoopedia_rich_content_line_break(
     commands: &mut Commands,
-    input: LocalizedZoopediaRichContentRecordProjectionInput<'_>,
+    input: &LocalizedZoopediaRichContentRecordProjectionInput<'_>,
 ) -> Entity {
     let source_line_height_pixels = if input.has_preceding_sibling {
         input.base_physical_font_size_pixels

@@ -17,6 +17,7 @@ use super::facility_economy_types::{
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiEconomyActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_selected_facility_economy_ui_actions(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,
@@ -93,6 +94,7 @@ pub(super) fn route_selected_facility_economy_ui_actions(
 
 /// Reflects the selected facility's authoritative maintenance schedule onto
 /// every authored option action. No copied schedule-row model is retained.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_selected_facility_maintenance_schedule_options(
     documents: Res<Assets<UiDocumentAsset>>,
     selected_entity: Res<SelectedEntity>,

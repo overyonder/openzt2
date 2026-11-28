@@ -28,6 +28,7 @@ use super::{
     photo_capture_types::{PhotoCaptureFailed, PhotoFailure},
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
     profile: Res<ProfileOptions>,
     mut allocator: ResMut<PersistentIdAllocator>,
@@ -105,6 +106,7 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_localized_default_photo_album_names(
     active_localization: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,

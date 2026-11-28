@@ -6,6 +6,7 @@ use openzt2_zoo_state::{
     terrain::dry_surface_eligibility::DrySurfaceEligibility,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_animal_water_contact(
     mut commands: Commands,
     species_assets: Res<Assets<SpeciesAsset>>,

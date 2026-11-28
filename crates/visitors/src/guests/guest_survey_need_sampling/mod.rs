@@ -50,6 +50,7 @@ pub(super) fn initialize_guest_survey_observations(
 }
 
 #[allow(clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn sample_current_guest_need_observations(
     time: Res<Time<Fixed>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,

@@ -39,6 +39,7 @@ pub(super) fn resolve_water_effect_region(
     })
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_animation_water_effect_planes(
     mut commands: Commands,
     transforms: TransformHelper,

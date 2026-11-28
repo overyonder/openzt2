@@ -6,6 +6,7 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 
 use super::staff_job_types::UnsuccessfulStaffJobCandidates;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn clear_unsuccessful_candidates_at_authored_manager_interval(
     clock: Res<ZooClock>,
     definitions: Res<Assets<WorldDefinitionAsset>>,

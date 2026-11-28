@@ -20,6 +20,7 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_terrain_sample;
 use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_terrain_sample_height_centimetres;
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
     mut commands: Commands,
     settings: Res<GraphicsSettings>,
@@ -252,6 +253,7 @@ fn convert_terrain_detail_placement_hash_to_unit_interval(value: u64) -> f32 {
     ((value >> 40) as u32) as f32 / (1_u32 << 24) as f32
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn materialize_terrain_biome_detail_render_trees_within_overhead_camera_range(
     mut commands: Commands,
     cameras: Query<

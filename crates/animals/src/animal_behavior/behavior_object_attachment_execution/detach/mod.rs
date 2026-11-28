@@ -157,6 +157,7 @@ pub(super) fn detach_object(
     true
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn release_objects_from_destroyed_holders(
     mut commands: Commands,
     definitions: Res<WorldDefinitions>,
@@ -200,6 +201,7 @@ pub(super) fn release_objects_from_destroyed_holders(
 /// Text-key traversal may cross attach and detach in one simulation step. The
 /// first key resolves the joint; this runs after deferred prefab admission, so
 /// the later key cannot disappear merely because its item did not exist yet.
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_delivered_detach_after_object_admission(
     mut commands: Commands,
     definitions: Res<WorldDefinitions>,

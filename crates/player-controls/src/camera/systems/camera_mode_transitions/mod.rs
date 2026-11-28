@@ -42,6 +42,7 @@ pub(crate) fn clear_camera_input_on_return(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn capture_camera_return_state(
     mut commands: Commands,
     mut requests: MessageReader<SetCameraMode>,
@@ -75,6 +76,7 @@ pub(crate) fn capture_camera_return_state(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn begin_camera_transition(
     mut commands: Commands,
     mut modes: MessageReader<SetCameraMode>,
@@ -239,6 +241,7 @@ pub(crate) fn restore_camera_return_state(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn advance_camera_transition(
     mut commands: Commands,
     time: Res<Time<Real>>,

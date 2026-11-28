@@ -24,6 +24,7 @@ use super::{
     },
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(in super::super) fn begin_loading_requested_world_snapshot_from_save_slot(
     mut commands: Commands,
     mut load_requests: MessageReader<LoadWorldSnapshotFromSlot>,

@@ -30,6 +30,7 @@ use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
 /// Tracks the brush preview and pointer stroke. Held dabs are applied live;
 /// releasing the pointer commits the accumulated edit as one undo transaction.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
     mut commands: Commands,
     tool: Res<ConstructionTool>,

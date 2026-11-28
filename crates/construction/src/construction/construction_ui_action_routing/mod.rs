@@ -67,6 +67,7 @@ pub(super) struct ConstructionUiIntents<'w, 's> {
     fence_previews: Query<'w, 's, (Entity, &'static mut FencePreview), With<ConstructionPreview>>,
     rotations: MessageWriter<'w, openzt2_interface_state::input::input_types::ActionRequest>,
 }
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn route_construction_ui_actions(
     mut activations: MessageReader<UiNodeActivated>,
     selected_tool: Res<ConstructionTool>,

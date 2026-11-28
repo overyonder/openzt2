@@ -16,6 +16,7 @@ use super::maintenance_types::{
     IncrementalZooCleanlinessTotals, LooseLitterWaste,
 };
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn initialize_authored_maintenance_facts_for_world_objects(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -52,6 +53,7 @@ pub(super) fn initialize_authored_maintenance_facts_for_world_objects(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub(super) fn apply_completed_service_maintenance_effects_to_facilities(
     mut commands: Commands,
     mut completed_services: MessageReader<ServiceCompleted>,
